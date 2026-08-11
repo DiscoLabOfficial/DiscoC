@@ -13,6 +13,8 @@
 #include "DataSegment.hpp"
 #include "ASTPrinter.hpp"
 #include "ObjectFile.hpp"
+#include "IR.hpp"
+#include "IRCodeGenerator.hpp"
 
 // Helper function to read a file's content into a string
 std::string readFile(const std::string& path) {
@@ -30,7 +32,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "Usage: discc [options] <file.dc> -o <outfile>" << std::endl;
         std::cerr << "Options:" << std::endl;
         std::cerr << "  --emit-asm    Output human-readable assembly (.s) instead of an object file (.o)." << std::endl;
-		std::cerr << "  --emit-ast    Print the Abstract Syntax Tree (AST) and exit." << std::endl;
+        std::cerr << "  --emit-ast    Print the Abstract Syntax Tree (AST) and exit." << std::endl;
+        std::cerr << "  --emit-ir     Print the verified intermediate representation and CFG." << std::endl;
         std::cerr << "  -Wno-cache-overflow   Suppress warnings for cached blocks exceeding 512 bytes." << std::endl;
         return 1;
     }
@@ -39,6 +42,7 @@ int main(int argc, char* argv[]) {
     std::string out_filepath;
     bool emit_asm = false;
 	bool emit_ast = false;
+	bool emit_ir = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -53,6 +57,8 @@ int main(int argc, char* argv[]) {
             emit_asm = true;
         } else if (arg == "--emit-ast") {
             emit_ast = true;
+        } else if (arg == "--emit-ir") {
+            emit_ir = true;
         } else if (arg == "-Wno-cache-overflow") {
             // This flag will be read later from the parser's config object.
         } else {
@@ -69,8 +75,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (emit_ast && !out_filepath.empty()) {
-        std::cerr << "Warning: -o option is ignored when using --emit-ast." << std::endl;
+    if ((emit_ast || emit_ir) && !out_filepath.empty()) {
+        std::cerr << "Warning: -o option is ignored when using an inspection output mode." << std::endl;
     }
 
     // Re-parse args to set config flags on a temporary parser object
@@ -86,7 +92,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Automatically determine output filename if not provided
-    if (out_filepath.empty() && !emit_ast) {
+    if (out_filepath.empty() && !emit_ast && !emit_ir) {
         // Find the last dot to replace the extension
         size_t last_dot = in_filepath.find_last_of(".");
         std::string base = (last_dot == std::string::npos) ? in_filepath : in_filepath.substr(0, last_dot);
@@ -129,6 +135,18 @@ int main(int argc, char* argv[]) {
         Analyzer analyzer(data_manager);
         analyzer.analyze(program_ast);
 
+        // Build and verify the target-independent IR/CFG before entering a
+        // target backend. Object emission consumes this verified IR; assembly
+        // export remains available as a textual inspection path.
+        IRLowerer ir_lowerer;
+        IRModule ir_module = ir_lowerer.lower(program_ast);
+        IRVerifier::verify(ir_module);
+
+        if (emit_ir) {
+            std::cout << dumpIR(ir_module);
+            return 0;
+        }
+
         // 5. Backend (Code Generation or Assembly Emission)
         if (emit_asm) {
             std::cout << "Emitting Assembly: " << in_filepath << " -> " << out_filepath << std::endl;
@@ -143,13 +161,13 @@ int main(int argc, char* argv[]) {
 
         } else {
             std::cout << "Compiling to Object: " << in_filepath << " -> " << out_filepath << std::endl;
-            CodeGenerator code_generator(
+            IRCodeGenerator code_generator(
                 analyzer.getAllLocalSymbols(),
                 analyzer.getFunctionSymbols(),
                 data_manager,
 				parser.getConfig()
             );
-            ObjectFile obj = code_generator.generate(program_ast);
+            ObjectFile obj = code_generator.generate(ir_module);
             obj.write(out_filepath);
         }
 

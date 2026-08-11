@@ -1,4 +1,129 @@
 #include "Optimizer.hpp"
+#include <cstdint>
+#include <limits>
+#include <string>
+
+namespace {
+
+bool expressionUsesName(const Expr& expr, const std::string& name) {
+    if (const auto* variable = dynamic_cast<const VariableExpr*>(&expr)) {
+        return variable->token.lexeme == name;
+    }
+    if (const auto* binary = dynamic_cast<const BinaryExpr*>(&expr)) {
+        return expressionUsesName(*binary->left, name) ||
+               expressionUsesName(*binary->right, name);
+    }
+    if (const auto* assignment = dynamic_cast<const AssignExpr*>(&expr)) {
+        return expressionUsesName(*assignment->name, name) ||
+               expressionUsesName(*assignment->value, name);
+    }
+    if (const auto* unary = dynamic_cast<const UnaryExpr*>(&expr)) {
+        return expressionUsesName(*unary->right, name);
+    }
+    if (const auto* address = dynamic_cast<const AddressOfExpr*>(&expr)) {
+        return expressionUsesName(*address->right, name);
+    }
+    if (const auto* dereference = dynamic_cast<const DereferenceExpr*>(&expr)) {
+        return expressionUsesName(*dereference->right, name);
+    }
+    if (const auto* subscript = dynamic_cast<const SubscriptExpr*>(&expr)) {
+        return expressionUsesName(*subscript->array, name) ||
+               expressionUsesName(*subscript->index, name);
+    }
+    if (const auto* member = dynamic_cast<const MemberAccessExpr*>(&expr)) {
+        return expressionUsesName(*member->object, name);
+    }
+    if (const auto* call = dynamic_cast<const CallExpr*>(&expr)) {
+        if (expressionUsesName(*call->callee, name)) {
+            return true;
+        }
+        for (const auto& argument : call->arguments) {
+            if (expressionUsesName(*argument, name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (const auto* cast = dynamic_cast<const CastExpr*>(&expr)) {
+        return expressionUsesName(*cast->expression, name);
+    }
+    return false;
+}
+
+bool statementUsesName(const Stmt& stmt, const std::string& name) {
+    if (const auto* block = dynamic_cast<const BlockStmt*>(&stmt)) {
+        for (const auto& child : block->statements) {
+            if (statementUsesName(*child, name)) return true;
+        }
+        return false;
+    }
+    if (const auto* conditional = dynamic_cast<const IfStmt*>(&stmt)) {
+        return expressionUsesName(*conditional->condition, name) ||
+               statementUsesName(*conditional->thenBranch, name) ||
+               (conditional->elseBranch && statementUsesName(*conditional->elseBranch, name));
+    }
+    if (const auto* loop = dynamic_cast<const WhileStmt*>(&stmt)) {
+        return expressionUsesName(*loop->condition, name) ||
+               statementUsesName(*loop->body, name);
+    }
+    if (const auto* hardware_loop = dynamic_cast<const HardwareLoopStmt*>(&stmt)) {
+        return expressionUsesName(*hardware_loop->count, name) ||
+               statementUsesName(*hardware_loop->body, name);
+    }
+    if (const auto* switch_stmt = dynamic_cast<const SwitchStmt*>(&stmt)) {
+        return expressionUsesName(*switch_stmt->condition, name) ||
+               statementUsesName(*switch_stmt->body, name);
+    }
+    if (const auto* case_stmt = dynamic_cast<const CaseStmt*>(&stmt)) {
+        return expressionUsesName(*case_stmt->value, name);
+    }
+    if (const auto* return_stmt = dynamic_cast<const ReturnStmt*>(&stmt)) {
+        return return_stmt->value && expressionUsesName(*return_stmt->value, name);
+    }
+    if (const auto* declaration = dynamic_cast<const VarDeclStmt*>(&stmt)) {
+        return declaration->initializer && expressionUsesName(*declaration->initializer, name);
+    }
+    if (const auto* expression = dynamic_cast<const ExpressionStmt*>(&stmt)) {
+        return expressionUsesName(*expression->expression, name);
+    }
+    if (const auto* plot = dynamic_cast<const PlotStmt*>(&stmt)) {
+        return expressionUsesName(*plot->x, name) || expressionUsesName(*plot->y, name);
+    }
+    if (const auto* color = dynamic_cast<const SetColorStmt*>(&stmt)) {
+        return expressionUsesName(*color->color_value, name);
+    }
+    if (const auto* mode = dynamic_cast<const CmodeStmt*>(&stmt)) {
+        return expressionUsesName(*mode->options_value, name);
+    }
+    return false;
+}
+
+bool containsBreak(const Stmt& stmt) {
+    if (dynamic_cast<const BreakStmt*>(&stmt)) return true;
+    if (const auto* block = dynamic_cast<const BlockStmt*>(&stmt)) {
+        for (const auto& child : block->statements) if (containsBreak(*child)) return true;
+    } else if (const auto* conditional = dynamic_cast<const IfStmt*>(&stmt)) {
+        return containsBreak(*conditional->thenBranch) ||
+               (conditional->elseBranch && containsBreak(*conditional->elseBranch));
+    } else if (const auto* loop = dynamic_cast<const WhileStmt*>(&stmt)) {
+        return containsBreak(*loop->body);
+    } else if (const auto* switch_stmt = dynamic_cast<const SwitchStmt*>(&stmt)) {
+        return containsBreak(*switch_stmt->body);
+    }
+    return false;
+}
+
+bool parseIntegerLiteral(const LiteralExpr& literal, long& value) {
+    try {
+        std::size_t parsed = 0;
+        value = std::stol(literal.token.lexeme, &parsed, 0);
+        return parsed == literal.token.lexeme.size();
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+} // namespace
 
 // The main entry point for the optimization pass.
 void Optimizer::optimize(std::vector<std::unique_ptr<Stmt>>& program) {
@@ -67,7 +192,9 @@ void Optimizer::visit(BlockStmt& block) {
             continue; // This should not be reachable with a valid for-loop
         }
 
-        if (!init_val) {
+        long init_count = 0;
+        if (!init_val || !parseIntegerLiteral(*init_val, init_count) ||
+            init_count < 1 || init_count > std::numeric_limits<std::uint16_t>::max()) {
             current_stmt->accept(*this);
             optimized_statements.push_back(std::move(current_stmt));
             continue;
@@ -85,8 +212,11 @@ void Optimizer::visit(BlockStmt& block) {
         auto* condition = dynamic_cast<BinaryExpr*>(loop->condition.get());
         auto* cond_left = condition ? dynamic_cast<VariableExpr*>(condition->left.get()) : nullptr;
         auto* cond_right = condition ? dynamic_cast<LiteralExpr*>(condition->right.get()) : nullptr;
-        if (!condition || !cond_left || !cond_right || cond_left->token.lexeme != loop_var_name ||
-            condition->token.type != TokenType::GREATER || std::stol(cond_right->token.lexeme) != 0) {
+        long condition_value = 0;
+        if (!condition || !cond_left || !cond_right ||
+            !parseIntegerLiteral(*cond_right, condition_value) ||
+            cond_left->token.lexeme != loop_var_name ||
+            condition->token.type != TokenType::GREATER || condition_value != 0) {
             current_stmt->accept(*this);
             optimized_statements.push_back(std::move(current_stmt));
             continue;
@@ -106,10 +236,36 @@ void Optimizer::visit(BlockStmt& block) {
         auto* sub_left = assign_val ? dynamic_cast<VariableExpr*>(assign_val->left.get()) : nullptr;
         auto* sub_right = assign_val ? dynamic_cast<LiteralExpr*>(assign_val->right.get()) : nullptr;
 
+        long decrement_value = 0;
         if (!assign_target || assign_target->token.lexeme != loop_var_name ||
             !assign_val || assign_val->token.type != TokenType::MINUS ||
             !sub_left || sub_left->token.lexeme != loop_var_name ||
-            !sub_right || std::stol(sub_right->token.lexeme) != 1) {
+            !sub_right || !parseIntegerLiteral(*sub_right, decrement_value) || decrement_value != 1) {
+            current_stmt->accept(*this);
+            optimized_statements.push_back(std::move(current_stmt));
+            continue;
+        }
+
+        // The transformation removes both the initializer's assignment and
+        // the decrement.  It is only valid when the induction variable is
+        // completely unobservable and no control-flow edge escapes the
+        // hardware loop.  This conservative check intentionally rejects
+        // aliases, calls, nested uses, and post-loop observations.
+        bool variable_used_in_body = false;
+        for (std::size_t body_index = 0; body_index + 1 < loop_body_block->statements.size(); ++body_index) {
+            if (statementUsesName(*loop_body_block->statements[body_index], loop_var_name)) {
+                variable_used_in_body = true;
+                break;
+            }
+        }
+        bool variable_used_after_loop = false;
+        for (std::size_t following = i + 1; following < block.statements.size(); ++following) {
+            if (statementUsesName(*block.statements[following], loop_var_name)) {
+                variable_used_after_loop = true;
+                break;
+            }
+        }
+        if (variable_used_in_body || variable_used_after_loop || containsBreak(*loop->body)) {
             current_stmt->accept(*this);
             optimized_statements.push_back(std::move(current_stmt));
             continue;

@@ -5,6 +5,7 @@ DiscoC is an evolving research project. The current focus is on stability and fe
 ## Completed Milestones
 - [x] **Frontend:** Recursive Descent Parser & Lexer supporting C-like syntax.
 - [x] **Middle-end:** Semantic Analyzer for type checking and scope resolution.
+- [x] **IR/CFG:** Verified typed intermediate representation with explicit basic blocks and control-flow edges.
 - [x] **Backend:** Code Generator emitting raw SuperFX binary opcodes (no external assembler required).
 - [x] **Linker:** Custom `discld` linker handling relocatable addresses and multi-file support.
 - [x] **Control Flow:** Implementation of `if`, `while`, `for`, and `switch/case`.

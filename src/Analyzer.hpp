@@ -70,6 +70,8 @@ private:
     void analyzeExpr(Expr& expr, const Type* context);
     void beginScope();
     void endScope();
+    bool canFallThrough(const Stmt& stmt) const;
+    bool blockCanFallThrough(const std::vector<std::unique_ptr<Stmt>>& statements) const;
 
     std::map<std::string, std::map<std::string, Symbol>> m_all_local_symbols;
     std::map<std::string, Symbol>* m_current_function_locals = nullptr;

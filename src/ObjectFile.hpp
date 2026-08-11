@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <fstream>
+#include "TargetConfig.hpp"
 
 // The type of relocation required.
 enum class RelocationType : uint8_t {
@@ -44,6 +45,7 @@ public:
     std::vector<uint8_t> data_section;
     std::vector<SymbolEntry> symbol_table;
     std::vector<RelocationEntry> relocation_table;
+    CompilerConfig config;
     
     // Serialization / Deserialization
     void write(const std::string& path);
