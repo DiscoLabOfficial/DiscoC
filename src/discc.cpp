@@ -8,7 +8,6 @@
 #include "Parser.hpp"
 #include "Analyzer.hpp"
 #include "Optimizer.hpp"
-#include "CodeGenerator.hpp"
 #include "AssemblyGenerator.hpp"
 #include "DataSegment.hpp"
 #include "ASTPrinter.hpp"
@@ -79,18 +78,6 @@ int main(int argc, char* argv[]) {
         std::cerr << "Warning: -o option is ignored when using an inspection output mode." << std::endl;
     }
 
-    // Re-parse args to set config flags on a temporary parser object
-    {
-        Lexer temp_lexer("");
-        auto temp_tokens = temp_lexer.scanTokens();
-        Parser temp_parser(temp_tokens);
-        for (int i = 1; i < argc; ++i) {
-            if (std::string(argv[i]) == "-Wno-cache-overflow") {
-                temp_parser.getConfigForUpdate().warn_on_cache_overflow = false;
-            }
-        }
-    }
-
     // Automatically determine output filename if not provided
     if (out_filepath.empty() && !emit_ast && !emit_ir) {
         // Find the last dot to replace the extension
@@ -150,7 +137,9 @@ int main(int argc, char* argv[]) {
         // 5. Backend (Code Generation or Assembly Emission)
         if (emit_asm) {
             std::cout << "Emitting Assembly: " << in_filepath << " -> " << out_filepath << std::endl;
-            AssemblyGenerator asm_gen(analyzer.getFunctionSymbols(), data_manager);
+            AssemblyGenerator asm_gen(analyzer.getFunctionSymbols(),
+                                      analyzer.getAllLocalSymbols(),
+                                      data_manager);
             std::string asm_output = asm_gen.generate(program_ast);
             
             std::ofstream outFile(out_filepath);

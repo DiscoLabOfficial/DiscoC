@@ -63,6 +63,18 @@ Every basic block must:
 
 The verifier also checks the shape of branch, switch, and return instructions. For a switch, the case-value count must match the non-default targets, and the default target is stored last when present.
 
+Before a backend consumes a function, verification also ensures that value IDs
+have exactly one definition, form a contiguous sequence, and are used only
+after their definitions. Definitions in different reachable blocks must
+dominate their uses. Operand categories are checked for indirect loads/stores,
+binary and unary operations, calls, conditions, switches, and returns. A
+non-void function must return a value with a compatible type, while a void
+function must use `return.void`.
+
+The lowerer may retain a synthetic unreachable merge block after both arms of
+an `if` terminate. Such a block is valid only when it contains a single
+`unreachable` instruction; arbitrary disconnected IR is rejected.
+
 ## Example
 
 The source:

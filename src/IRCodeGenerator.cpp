@@ -8,7 +8,7 @@
 #include "Opcodes.hpp"
 
 IRCodeGenerator::IRCodeGenerator(
-    const std::map<std::string, std::map<std::string, Symbol>>& all_local_symbols,
+    const std::map<std::string, Analyzer::LocalSymbolTable>& all_local_symbols,
     const std::map<std::string, FunctionSymbol>& global_function_symbols,
     const DataSegmentManager& data_manager,
     const CompilerConfig& config)
@@ -190,8 +190,8 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
     }
 
     const auto function_symbols = m_all_local_symbols.find(m_current_function->name);
-    if (function_symbols != m_all_local_symbols.end()) {
-        const auto symbol = function_symbols->second.find(instruction.symbol);
+    if (function_symbols != m_all_local_symbols.end() && instruction.symbol_id.isValid()) {
+        const auto symbol = function_symbols->second.find(instruction.symbol_id);
         if (symbol != function_symbols->second.end()) {
             emitMove(0, 9);
             if (symbol->second.stackOffset > 0) {
@@ -201,6 +201,8 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
             }
             return;
         }
+        fail("IR codegen: local symbol ID is not present in the current function.",
+             instruction.source);
     }
 
     if (m_data_manager.hasSymbol(instruction.symbol) ||

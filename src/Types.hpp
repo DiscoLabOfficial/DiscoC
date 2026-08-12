@@ -1,5 +1,19 @@
 #pragma once
+#include <cstdint>
 #include <string>
+
+// Stable identity for a declaration within one analyzed compilation unit.
+// Names are not sufficient because nested lexical scopes may legally shadow
+// one another.
+struct SymbolId {
+    static constexpr std::uint32_t Invalid = 0;
+    std::uint32_t value = Invalid;
+
+    bool isValid() const { return value != Invalid; }
+    friend bool operator==(SymbolId lhs, SymbolId rhs) { return lhs.value == rhs.value; }
+    friend bool operator!=(SymbolId lhs, SymbolId rhs) { return !(lhs == rhs); }
+    friend bool operator<(SymbolId lhs, SymbolId rhs) { return lhs.value < rhs.value; }
+};
 
 enum class AddressSpace {
     NONE, // Default, uninitialized state
@@ -27,6 +41,7 @@ struct Symbol {
     Type type;
     int stackOffset;
     std::string initial_literal_value;
+    SymbolId id;
 };
 
 // Helper for debugging.

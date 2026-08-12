@@ -1,0 +1,12 @@
+word shadow() {
+    word value = 1;
+    {
+        word value = 2;
+        value = value + 1;
+    }
+    return value;
+}
+
+void main() {
+    word result = shadow();
+}

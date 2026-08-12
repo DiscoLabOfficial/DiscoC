@@ -11,6 +11,7 @@ class AssemblyGenerator : public Visitor {
 public:
     AssemblyGenerator(
         const std::map<std::string, FunctionSymbol>& global_function_symbols,
+        const std::map<std::string, Analyzer::LocalSymbolTable>& all_local_symbols,
         const DataSegmentManager& data_manager
     );
 
@@ -59,6 +60,7 @@ private:
     void analyzeAndSetLocals(FunctionDeclStmt& stmt);
 
     const std::map<std::string, FunctionSymbol>& m_global_function_symbols;
+    const std::map<std::string, Analyzer::LocalSymbolTable>& m_all_local_symbols;
     const DataSegmentManager& m_data_manager;
     std::stringstream m_out;
     int m_indent_level = 0;
@@ -67,7 +69,7 @@ private:
     // State for current function
     std::string m_currentFunctionName;
     std::vector<std::string> m_break_labels; 
-    std::map<std::string, Symbol> m_symbolTable;
+    Analyzer::LocalSymbolTable m_symbolTable;
     int m_stackOffset = 0;
     bool m_isInPlottingContext = false;
 	bool m_functionHasExplicitReturn = false;

@@ -9,6 +9,7 @@ include(CMakePrintHelpers)
 # Build Options
 # Add an option to specifically enable settings for a DOS build
 option(DISCO_DOS_BUILD "Enable settings for a 16/32-bit DOS cross-compilation" OFF)
+option(DISCO_BUILD_FUZZERS "Build optional Clang libFuzzer targets" OFF)
 
 # Compiler & System Configuration
 # Set the default C++ standard. This can be overridden for specific platforms.
@@ -75,7 +76,6 @@ set(COMPILER_SOURCES
     src/Parser.cpp
     src/Analyzer.cpp
     src/Optimizer.cpp
-    src/CodeGenerator.cpp
     src/IR.cpp
     src/IRCodeGenerator.cpp
     src/AssemblyGenerator.cpp
@@ -103,6 +103,65 @@ add_executable(discc ${COMPILER_SOURCES})
 add_executable(discld ${LINKER_SOURCES})
 add_executable(discas ${ASSEMBLER_SOURCES})
 
+if(DISCO_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "DISCO_BUILD_FUZZERS requires a Clang compiler with libFuzzer support.")
+    endif()
+    add_executable(disco_frontend_fuzzer
+        tests/FrontendFuzzer.cpp
+        src/Lexer.cpp
+        src/Token.cpp
+        src/Parser.cpp
+        src/Assembler.cpp
+        src/ObjectFile.cpp
+    )
+    target_include_directories(disco_frontend_fuzzer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_compile_options(disco_frontend_fuzzer PRIVATE -fsanitize=fuzzer,address,undefined)
+    target_link_options(disco_frontend_fuzzer PRIVATE -fsanitize=fuzzer,address,undefined)
+endif()
+
+include(CTest)
+if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
+    enable_testing()
+    add_executable(disco_object_tests
+        tests/ObjectFileTests.cpp
+        src/ObjectFile.cpp
+    )
+    target_include_directories(disco_object_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(disco_object_tests PRIVATE disco_common_warnings)
+
+    add_executable(disco_ir_verifier_tests
+        tests/IRVerifierTests.cpp
+        src/IR.cpp
+        src/Token.cpp
+    )
+    target_include_directories(disco_ir_verifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(disco_ir_verifier_tests PRIVATE disco_common_warnings)
+
+    function(add_toolchain_regression name case_name)
+        add_test(
+            NAME ${name}
+            COMMAND ${CMAKE_COMMAND}
+                -DCASE=${case_name}
+                -DROOT_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/${case_name}
+                -DDISCC=$<TARGET_FILE:discc>
+                -DDISCAS=$<TARGET_FILE:discas>
+                -DDISCLD=$<TARGET_FILE:discld>
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_toolchain_regression.cmake
+        )
+    endfunction()
+
+    add_test(NAME object_file_hardening COMMAND disco_object_tests)
+    add_test(NAME ir_verifier COMMAND disco_ir_verifier_tests)
+    add_toolchain_regression(ir_and_cfg ir_and_cfg)
+    add_toolchain_regression(shadowing shadowing)
+    add_toolchain_regression(diagnostics diagnostics)
+    add_toolchain_regression(backend_equivalence backend_equivalence)
+    add_toolchain_regression(data_relocation data_relocation)
+    add_toolchain_regression(feature_examples feature_examples)
+endif()
+
 # Link Dependencies & Apply Flags
 # Apply the common flags and include directories to both targets
 target_include_directories(discc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -113,7 +172,6 @@ target_include_directories(discas PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(discc PRIVATE disco_common_warnings)
 target_link_libraries(discld PRIVATE disco_common_warnings)
 target_link_libraries(discas PRIVATE disco_common_warnings)
-
 # Final Status Output
 cmake_print_variables(CMAKE_CXX_COMPILER_ID CMAKE_SYSTEM_NAME CMAKE_BUILD_TYPE)
 message(STATUS "Project configured successfully. Build with 'cmake --build .'")

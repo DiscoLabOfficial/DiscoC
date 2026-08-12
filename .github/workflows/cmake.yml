@@ -48,6 +48,10 @@ jobs:
         shell: bash
         run: cmake --build build
 
+      - name: Test
+        shell: bash
+        run: ctest --test-dir build --output-on-failure
+
       - name: Upload artifacts (Native)
         uses: actions/upload-artifact@v4
         with:
@@ -92,3 +96,28 @@ jobs:
         with:
           name: dos-Release
           path: build-dos/
+
+  sanitizers:
+    name: Sanitizers (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-sanitizers -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build
+        run: cmake --build build-sanitizers
+
+      - name: Test
+        run: ctest --test-dir build-sanitizers --output-on-failure

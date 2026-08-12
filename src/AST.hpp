@@ -58,6 +58,7 @@ struct Stmt {
 struct Parameter {
     Type type;
     Token name;
+    SymbolId symbol_id;
 };
 
 // Represents a function call, e.g., `add(5, 10)`
@@ -96,6 +97,7 @@ struct LiteralExpr : public Expr {
     void accept(Visitor& v, const Type* c) override { v.visit(*this, c); }
 };
 struct VariableExpr : public Expr {
+    SymbolId symbol_id;
     VariableExpr(Token n) { token = std::move(n); }
     void accept(Visitor& v, const Type* c) override { v.visit(*this, c); }
 };
@@ -149,6 +151,7 @@ struct ReturnStmt : public Stmt {
 };
 struct VarDeclStmt : public Stmt {
     Type type; std::unique_ptr<Expr> initializer;
+    SymbolId symbol_id;
     int base_stack_offset = 0;
     VarDeclStmt(Type t, Token n, std::unique_ptr<Expr> i)
         : type(std::move(t)), initializer(std::move(i)) { token = std::move(n); }
@@ -237,7 +240,7 @@ struct BreakStmt : public Stmt {
 // Represents a 'case <constant>:' label. It doesn't own statements itself.
 struct CaseStmt : public Stmt {
     std::unique_ptr<Expr> value;
-    // This will be filled by the CodeGenerator
+    // Filled by the textual assembly backend when it emits a switch.
     std::string label_name; 
     CaseStmt(Token t, std::unique_ptr<Expr> v) : value(std::move(v)) { token = std::move(t); }
     void accept(Visitor& v) override { v.visit(*this); }
@@ -245,7 +248,7 @@ struct CaseStmt : public Stmt {
 
 // Represents a 'default:' label.
 struct DefaultStmt : public Stmt {
-    // This will be filled by the CodeGenerator
+    // Filled by the textual assembly backend when it emits a switch.
     std::string label_name; 
     DefaultStmt(Token t) { token = std::move(t); }
     void accept(Visitor& v) override { v.visit(*this); }

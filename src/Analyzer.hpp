@@ -21,11 +21,13 @@ struct StructSymbol {
 
 class Analyzer : public Visitor {
 public:
+    using LocalSymbolTable = std::map<SymbolId, Symbol>;
+
     Analyzer(DataSegmentManager& dataManager);
     void analyze(const std::vector<std::unique_ptr<Stmt>>& program);
 
     const std::map<std::string, FunctionSymbol>& getFunctionSymbols() const;
-    const std::map<std::string, std::map<std::string, Symbol>>& getAllLocalSymbols() const;
+    const std::map<std::string, LocalSymbolTable>& getAllLocalSymbols() const;
 
     void registerFunctionSymbol(FunctionDeclStmt& stmt);
     void registerStructSymbol(StructDefStmt& stmt);
@@ -73,9 +75,12 @@ private:
     bool canFallThrough(const Stmt& stmt) const;
     bool blockCanFallThrough(const std::vector<std::unique_ptr<Stmt>>& statements) const;
 
-    std::map<std::string, std::map<std::string, Symbol>> m_all_local_symbols;
-    std::map<std::string, Symbol>* m_current_function_locals = nullptr;
-    std::vector<std::map<std::string, Symbol*>> m_scopes;
+    SymbolId createSymbolId();
+
+    std::map<std::string, LocalSymbolTable> m_all_local_symbols;
+    LocalSymbolTable* m_current_function_locals = nullptr;
+    std::vector<std::map<std::string, SymbolId>> m_scopes;
+    std::uint32_t m_next_symbol_id = 1;
 
     std::vector<bool> m_switch_context_stack;
     std::vector<std::set<long>> m_case_values_stack;

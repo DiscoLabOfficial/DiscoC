@@ -66,6 +66,7 @@ struct IRInstruction {
     std::int64_t immediate = 0;
     std::string operation;
     std::string symbol;
+    SymbolId symbol_id;
     Token source = {TokenType::UNKNOWN, "", 0, 0};
 
     bool isTerminator() const;
@@ -153,7 +154,8 @@ private:
                         const std::vector<IRValueId>& operands = {},
                         const std::string& operation = {},
                         const std::string& symbol = {},
-                        std::int64_t immediate = 0);
+                        std::int64_t immediate = 0,
+                        SymbolId symbol_id = {});
     void emitInstruction(IRInstruction instruction);
     void emitBranch(IRBlockId target, const Token& source);
     void emitConditionalBranch(IRValueId condition, IRBlockId true_target,

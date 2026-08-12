@@ -165,7 +165,7 @@ std::unique_ptr<Stmt> Parser::functionDeclaration(bool is_cached, Type returnTyp
             }
             Type paramType = parseType();
             Token paramName = consume(TokenType::IDENTIFIER, "Expect parameter name.");
-            params.push_back({paramType, paramName});
+            params.push_back({paramType, paramName, {}});
         } while (match({TokenType::COMMA}));
     }
     consume(TokenType::RPAREN, "Expect ')' after parameters.");

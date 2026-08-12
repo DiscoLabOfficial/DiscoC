@@ -1,7 +1,6 @@
 #include "AssemblyGenerator.hpp"
 #include <stdexcept>
 #include "CompilerError.hpp"
-#include <iostream>
 
 namespace {
 
@@ -25,8 +24,11 @@ bool statementAlwaysTerminates(const Stmt& statement) {
 
 AssemblyGenerator::AssemblyGenerator(
     const std::map<std::string, FunctionSymbol>& global_function_symbols,
+    const std::map<std::string, Analyzer::LocalSymbolTable>& all_local_symbols,
     const DataSegmentManager& data_manager
-) : m_global_function_symbols(global_function_symbols), m_data_manager(data_manager) {}
+) : m_global_function_symbols(global_function_symbols),
+    m_all_local_symbols(all_local_symbols),
+    m_data_manager(data_manager) {}
 
 std::string AssemblyGenerator::generate(const std::vector<std::unique_ptr<Stmt>>& program) {
     emit(".setcpu \"GSU\"");
@@ -95,51 +97,16 @@ std::string AssemblyGenerator::newLabel() {
 }
 
 void AssemblyGenerator::analyzeAndSetLocals(FunctionDeclStmt& stmt) {
-    m_symbolTable.clear();
-
-    // The Analyzer has already done the heavy lifting of calculating offsets.
-    // We just need to load them into our local symbol table for this function.
-    // The AssemblyGenerator does NOT need to calculate anything anymore.
-    // We can get the pre-calculated symbol map from the Analyzer's results, but
-    // for now, I'll just re-implement the same logic to keep it self-contained.
-    // A future refactor could pass the Analyzer's symbol map directly. We'll see how this goes. *shrugs*
-
-    // Calculate total size of local variables
-    int total_local_size = 0;
-    for (const auto& s : stmt.body) {
-        if (auto* var_decl = dynamic_cast<VarDeclStmt*>(s.get())) {
-             int size = ((var_decl->type.sizeInBytes + 1) / 2) * 2;
-             if (var_decl->type.array_size > 0) {
-                 int element_size = var_decl->type.sizeInBytes;
-                 size = ((var_decl->type.array_size * element_size + 1) / 2) * 2;
-             }
-             total_local_size += size;
-        }
+    const auto function = m_all_local_symbols.find(stmt.token.lexeme);
+    if (function == m_all_local_symbols.end()) {
+        throw CompilerError("ASM GEN: missing analyzed symbols for function '" +
+                            stmt.token.lexeme + "'.",
+                            stmt.token.line_number, stmt.token.col_number);
     }
-
-    if (total_local_size > 0) {
-        emit("sub sp, sp, #" + std::to_string(total_local_size), "Allocate space for all local variables");
-    }
-
-    // Assign offsets to parameters (positive offset from FP)
-    int paramOffset = 4; // fp+0=old_fp, fp+2=ret_addr
-    for (const auto& param : stmt.params) {
-        m_symbolTable[param.name.lexeme] = Symbol{param.type, paramOffset, ""};
-        paramOffset += 2; // All params are words
-    }
-    
-    // Assign offsets to local variables (negative offset from FP)
-    int localOffset = 0;
-    for (const auto& s : stmt.body) {
-         if (auto* var_decl = dynamic_cast<VarDeclStmt*>(s.get())) {
-             int size = ((var_decl->type.sizeInBytes + 1) / 2) * 2;
-             if (var_decl->type.array_size > 0) {
-                 int element_size = var_decl->type.sizeInBytes;
-                 size = ((var_decl->type.array_size * element_size + 1) / 2) * 2;
-             }
-             localOffset -= size;
-             m_symbolTable[var_decl->token.lexeme] = Symbol{var_decl->type, localOffset, ""};
-         }
+    m_symbolTable = function->second;
+    if (stmt.total_local_alloc_size > 0) {
+        emit("sub sp, sp, #" + std::to_string(stmt.total_local_alloc_size),
+             "Allocate space for all local variables");
     }
 }
 
@@ -169,7 +136,7 @@ void AssemblyGenerator::visit(FunctionDeclStmt& stmt) {
         emit("move sp, r9", "Deallocate local variables");
 
         if (m_currentFunctionName == "main") {
-            // Match CodeGenerator: main halts the program.
+            // Match the canonical backend: main halts the program.
             emit("stop", "Implicit end of program");
             emit("nop");
         } else {
@@ -213,6 +180,8 @@ void AssemblyGenerator::visit(VarDeclStmt& stmt) {
         emit("move " + scratch_reg + ", r0", "Value to be stored is now in " + scratch_reg);
 
         auto var_expr = VariableExpr(stmt.token);
+        var_expr.result_type = stmt.type;
+        var_expr.symbol_id = stmt.symbol_id;
         var_expr.accept(*this, nullptr); // Leaves address of the variable in R0
 
         if (stmt.type.base == BaseType::BYTE) {
@@ -341,8 +310,8 @@ void AssemblyGenerator::visit(IfStmt& stmt) {
 }
 
 void AssemblyGenerator::visit(VariableExpr& expr, const Type*) {
-    if (m_symbolTable.count(expr.token.lexeme)) {
-        const Symbol& symbol = m_symbolTable.at(expr.token.lexeme);
+    if (expr.symbol_id.isValid() && m_symbolTable.count(expr.symbol_id)) {
+        const Symbol& symbol = m_symbolTable.at(expr.symbol_id);
         // Generate FP-relative address calculation
         emit("move r0, r9", "Load base address from frame pointer");
         if (symbol.stackOffset != 0) {
@@ -510,7 +479,7 @@ void AssemblyGenerator::visit(SetColorStmt& stmt) {
 }
 
 void AssemblyGenerator::visit(PlotStmt& stmt) {
-    // CodeGenerator convention: evaluate Y -> R0, move to R2; evaluate X -> R0, move to R1; then PLOT.
+    // Backend convention: evaluate Y -> R0, move to R2; evaluate X -> R0, move to R1; then PLOT.
     stmt.y->accept(*this, nullptr);
     dereferenceIfNeeded(*stmt.y);
     emit("move r2, r0", "R2 = Plot Y");
@@ -539,7 +508,7 @@ void AssemblyGenerator::visit(CmodeStmt&) {
 
 void AssemblyGenerator::visit(RpixStmt&) { emit("; RpixStmt not fully implemented in ASM gen"); }
 void AssemblyGenerator::visit(HardwareLoopStmt& stmt) {
-    // Mirrors CodeGenerator::visit(HardwareLoopStmt):
+    // Mirrors the canonical backend's hardware-loop setup:
     //   IWT R12, #count
     //   WITH R13
     //   TO R15
