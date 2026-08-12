@@ -1,4 +1,6 @@
 #pragma once
+#include <cstdint>
+#include <string>
 #include <vector>
 #include "Token.hpp"
 #include "AST.hpp"
@@ -13,7 +15,8 @@ public:
     CompilerConfig& getConfigForUpdate();
 
 private:
-    const std::vector<Token>& m_tokens; int m_current = 0;
+    const std::vector<Token>& m_tokens;
+    std::size_t m_current = 0;
     CompilerConfig m_config;
 
     void parseDirective();
@@ -47,9 +50,11 @@ private:
     std::unique_ptr<Expr> postfix();
     std::unique_ptr<Expr> unary();
     std::unique_ptr<Expr> primary();
-    bool isAtEnd(); Token peek(); Token previous(); Token advance();
+    bool isAtEnd(); Token peek(); Token peekNext(); Token previous(); Token advance();
     bool isAtStartOfDeclaration();
     bool check(TokenType type);
     bool match(const std::vector<TokenType>& types);
     Token consume(TokenType type, const std::string& message);
+    std::int64_t parseIntegerLiteral(const Token& token, const std::string& context);
+    void validateValueType(const Type& type, const Token& token, const std::string& context);
 };

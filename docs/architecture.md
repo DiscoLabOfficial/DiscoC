@@ -53,6 +53,11 @@ The optimizer operates on the AST before semantic analysis. Current transformati
 
 The analyzer resolves functions, scopes, variables, structures, ROM data, types, pointer operations, and control-flow-related semantic rules. It also calculates stack offsets and local allocation sizes used by the backend.
 
+Function prototypes may declare a function without defining its body. The
+prototype participates in semantic checking of calls in that compilation
+unit, while the definition can be emitted by another source file and linked
+later. Prototypes do not generate code or duplicate object-file symbols.
+
 ### IR lowering and verification
 
 `IRLowerer` converts the analyzed AST into a typed, control-flow-aware IR. `IRVerifier` checks structural invariants before code generation. This keeps target-independent compiler structure separate from GSU byte encoding.

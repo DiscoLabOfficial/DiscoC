@@ -30,6 +30,22 @@ function(run_expected_failure)
     endif()
 endfunction()
 
+function(run_expected_failure_contains pattern)
+    execute_process(
+        COMMAND ${ARGN}
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE output
+        ERROR_VARIABLE error
+    )
+    if(NOT result)
+        message(FATAL_ERROR "Command unexpectedly succeeded: ${ARGN}")
+    endif()
+    string(CONCAT combined_output "${output}" "${error}")
+    if(NOT combined_output MATCHES "${pattern}")
+        message(FATAL_ERROR "Expected diagnostic '${pattern}' was not found for ${ARGN}\nstdout:\n${output}\nstderr:\n${error}")
+    endif()
+endfunction()
+
 if(CASE STREQUAL "ir_and_cfg")
     execute_process(
         COMMAND "${DISCC}" "${ROOT_DIR}/examples/ir_control_flow.dc" --emit-ir
@@ -67,6 +83,25 @@ elseif(CASE STREQUAL "shadowing")
 
 elseif(CASE STREQUAL "diagnostics")
     run_expected_failure("${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_missing_semicolon.dc" -o "${TEST_DIR}/invalid.o")
+
+elseif(CASE STREQUAL "language_diagnostics")
+    run_expected_failure_contains("Code start address" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_address.dc" -o "${TEST_DIR}/invalid-address.o")
+    run_expected_failure_contains("Array size" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_array_size.dc" -o "${TEST_DIR}/invalid-array.o")
+    run_expected_failure_contains("Invalid integer literal" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_integer_literal.dc" -o "${TEST_DIR}/invalid-literal.o")
+    run_expected_failure_contains("break.*loop or switch" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_break.dc" -o "${TEST_DIR}/invalid-break.o")
+    run_expected_failure_contains("Void is not a valid variable declaration type" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_void_variable.dc" -o "${TEST_DIR}/invalid-void.o")
+    run_expected_failure_contains("out of range for word" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_rom_value.dc" -o "${TEST_DIR}/invalid-rom.o")
+    run_command("${DISCC}" "${ROOT_DIR}/tests/fixtures/valid_break.dc" -o "${TEST_DIR}/valid-break.o")
+
+elseif(CASE STREQUAL "multifile")
+    set(example_dir "${ROOT_DIR}/examples/multifile")
+    run_command("${DISCC}" "${example_dir}/main.dc" -o "${TEST_DIR}/main.o")
+    run_command("${DISCC}" "${example_dir}/math.dc" -o "${TEST_DIR}/math.o")
+    run_command("${DISCLD}" "${TEST_DIR}/main.o" "${TEST_DIR}/math.o" -o "${TEST_DIR}/multifile.bin")
+    file(SIZE "${TEST_DIR}/multifile.bin" linked_size)
+    if(linked_size LESS 1)
+        message(FATAL_ERROR "Multi-file link produced an empty payload")
+    endif()
 
 elseif(CASE STREQUAL "backend_equivalence")
     foreach(name IN ITEMS math loop loop_opt plot test_casts ir_control_flow)

@@ -1,0 +1,5 @@
+word add(word left, word right);
+
+void main() {
+    word result = add(30, 12);
+}

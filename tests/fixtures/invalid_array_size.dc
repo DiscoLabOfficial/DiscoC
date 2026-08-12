@@ -1,0 +1,3 @@
+void main() {
+    word values[0];
+}

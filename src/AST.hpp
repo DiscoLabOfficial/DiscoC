@@ -159,6 +159,7 @@ struct VarDeclStmt : public Stmt {
 };
 struct FunctionDeclStmt : public Stmt {
     bool is_cached = false;
+    bool is_prototype = false;
     Type returnType;
     std::vector<Parameter> params;
     std::vector<std::unique_ptr<Stmt>> body;
@@ -167,8 +168,10 @@ struct FunctionDeclStmt : public Stmt {
     // Code generation uses this to emit the ABI epilogue for implicit void
     // returns without adding dead epilogues after explicit returns.
     bool needs_implicit_return = false;
-    FunctionDeclStmt(Token n, bool cached, Type rt, std::vector<Parameter> p, std::vector<std::unique_ptr<Stmt>> b)
-        : is_cached(cached), returnType(std::move(rt)), params(std::move(p)), body(std::move(b)) { token = std::move(n); }
+    FunctionDeclStmt(Token n, bool cached, Type rt, std::vector<Parameter> p,
+                     std::vector<std::unique_ptr<Stmt>> b, bool prototype = false)
+        : is_cached(cached), is_prototype(prototype), returnType(std::move(rt)),
+          params(std::move(p)), body(std::move(b)) { token = std::move(n); }
     void accept(Visitor& visitor) override { visitor.visit(*this); }
 };
 struct ExpressionStmt : public Stmt {

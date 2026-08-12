@@ -50,6 +50,11 @@ void ASTPrinter::visit(FunctionDeclStmt& stmt) {
     }
     temp_str += ")";
 
+    if (stmt.is_prototype) {
+        m_result = temp_str + ";)";
+        return;
+    }
+
     // Let's create a temporary BlockStmt to print the body consistently
     auto bodyBlock = std::make_unique<BlockStmt>(std::move(stmt.body));
     temp_str += " " + print(*bodyBlock);
