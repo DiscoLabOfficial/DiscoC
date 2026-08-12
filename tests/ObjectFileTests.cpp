@@ -90,6 +90,7 @@ int main() {
             loaded_from_memory.data_section != valid.data_section) {
             throw std::runtime_error("valid object did not load from memory");
         }
+        valid_input.close();
 
         std::filesystem::remove_all(directory);
         return 0;
