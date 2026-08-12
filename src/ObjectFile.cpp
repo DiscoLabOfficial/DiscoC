@@ -42,6 +42,10 @@ void ObjectFile::write(const std::string& path) {
     // Magic Header
     out.write("DISCO", 5);
 
+    const auto mapping = static_cast<uint8_t>(config.mapping);
+    out.write(reinterpret_cast<const char*>(&mapping), sizeof(mapping));
+    out.write(reinterpret_cast<const char*>(&config.code_start_address), sizeof(config.code_start_address));
+
     // Write sections
     write_vec(out, code_section);
     write_vec(out, data_section);
@@ -76,6 +80,14 @@ ObjectFile ObjectFile::read(const std::string& path) {
     if (std::string(magic) != "DISCO") {
         throw std::runtime_error("File is not a valid DiscoC object file: " + path);
     }
+
+    uint8_t mapping = 0;
+    in.read(reinterpret_cast<char*>(&mapping), sizeof(mapping));
+    in.read(reinterpret_cast<char*>(&obj.config.code_start_address), sizeof(obj.config.code_start_address));
+    if (!in || mapping > static_cast<uint8_t>(MemoryMapping::HiROM)) {
+        throw std::runtime_error("File has an invalid target configuration: " + path);
+    }
+    obj.config.mapping = static_cast<MemoryMapping>(mapping);
     
     read_vec(in, obj.code_section);
     read_vec(in, obj.data_section);

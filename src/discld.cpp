@@ -15,7 +15,6 @@ int main(int argc, char* argv[]) {
     
     std::vector<std::string> object_files;
     std::string out_filepath = "new.bin";
-    CompilerConfig config;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -39,6 +38,14 @@ int main(int argc, char* argv[]) {
         std::vector<ObjectFile> objects;
         for (const auto& path : object_files) {
             objects.push_back(ObjectFile::read(path));
+        }
+
+        const CompilerConfig& config = objects.front().config;
+        for (std::size_t index = 1; index < objects.size(); ++index) {
+            if (objects[index].config != config) {
+                throw std::runtime_error(
+                    "Input objects use incompatible target configurations.");
+            }
         }
 
         // --- 2. Layout and Symbol Resolution ---

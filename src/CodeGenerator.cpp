@@ -1,6 +1,8 @@
 #include "CodeGenerator.hpp"
 #include <stdexcept>
 #include <iostream>
+#include <cstdint>
+#include <algorithm>
 #include "Parser.hpp"
 #include "CompilerError.hpp"
 #include "ObjectFile.hpp"
@@ -19,6 +21,7 @@ CodeGenerator::CodeGenerator(
 ObjectFile CodeGenerator::generate(const std::vector<std::unique_ptr<Stmt>>& program) {
     // Start with a fresh object file.
     m_object_file = ObjectFile();
+    m_object_file.config = m_config;
 
     // 1. Generate code for all functions.
     // This will populate the .code_section and add symbols and relocations.
@@ -77,10 +80,86 @@ void CodeGenerator::emitWord(uint16_t word) {
     emitByte((word >> 8) & 0xFF);
 }
 
+void CodeGenerator::patchRelativeBranch(
+    std::size_t patch_offset,
+    std::size_t target_address,
+    const Token& source) {
+    const std::int64_t next_instruction = static_cast<std::int64_t>(patch_offset) + 1;
+    const std::int64_t distance = static_cast<std::int64_t>(target_address) - next_instruction;
+    if (distance < -128 || distance > 127) {
+        throw CompilerError(
+            "Branch target is out of range for the SuperFX 8-bit relative branch.",
+            source.line_number,
+            source.col_number);
+    }
+    m_object_file.code_section.at(patch_offset) =
+        static_cast<uint8_t>(static_cast<std::int8_t>(distance));
+}
+
 void CodeGenerator::emitLiteral(long value, const Type&) {
     // IWT is the most general, safest AND fastest instruction for any literal word or byte.
     emitByte(static_cast<uint8_t>(OpCode::IWT) | static_cast<uint8_t>(RETURN_VALUE_REGISTER));
     emitWord(static_cast<uint16_t>(value));
+}
+
+void CodeGenerator::emitMove(uint8_t destination, uint8_t source) {
+    if (source != 0) {
+        emitByte(0x20 | source); // WITH source
+    }
+    emitByte(0x10 | destination); // TO destination
+}
+
+void CodeGenerator::emitPush(uint8_t reg) {
+    if (reg != 0) {
+        emitByte(0x20 | reg); // WITH reg
+    }
+    emitByte(0x3A); // STW (R10)
+    emitByte(0xEA); // DEC R10
+    emitByte(0xEA); // DEC R10
+}
+
+void CodeGenerator::emitPop(uint8_t reg) {
+    emitByte(0xDA); // INC R10
+    emitByte(0xDA); // INC R10
+    if (reg != 0) {
+        emitByte(0x20 | reg); // WITH reg
+    }
+    emitByte(0x4A); // LDW (R10)
+}
+
+void CodeGenerator::emitStore(uint8_t address_reg, uint8_t value_reg, bool byte) {
+    if (value_reg != 0) {
+        emitByte(0x20 | value_reg); // WITH value_reg
+    }
+    if (byte) {
+        emitByte(static_cast<uint8_t>(OpCode::ALT1));
+    }
+    emitByte(0x30 | address_reg); // STW/STB (address_reg)
+}
+
+void CodeGenerator::emitImmediateArithmetic(uint8_t op_base, long value) {
+    if (value < 0) {
+        throw CompilerError("CodeGen: immediate arithmetic value cannot be negative.", 0, 0);
+    }
+
+    auto remaining = static_cast<unsigned long>(value);
+    while (remaining > 0) {
+        const auto chunk = static_cast<uint8_t>(std::min<unsigned long>(remaining, 15));
+        emitByte(static_cast<uint8_t>(OpCode::ALT2));
+        emitByte(op_base | chunk);
+        remaining -= chunk;
+    }
+}
+
+void CodeGenerator::emitAdjustStack(std::size_t bytes, bool add) {
+    const uint8_t op_base = add ? 0x50 : 0x60;
+    while (bytes > 0) {
+        const auto chunk = static_cast<uint8_t>(std::min<std::size_t>(bytes, 15));
+        emitByte(0x2A); // WITH R10 (SP)
+        emitByte(static_cast<uint8_t>(OpCode::ALT2));
+        emitByte(op_base | chunk);
+        bytes -= chunk;
+    }
 }
 
 // visit(CallExpr) now creates relocation entries
@@ -92,9 +171,7 @@ void CodeGenerator::visit(CallExpr& expr, const Type*) {
     for (int i = static_cast<int>(expr.arguments.size()) - 1; i >= 0; --i) {
         expr.arguments[i]->accept(*this, nullptr);
         dereferenceIfNeeded(*expr.arguments[i]);
-        emitByte(0xEA); // DEC R10
-        emitByte(0xEA); // DEC R10
-        emitByte(0x3A); // STW (R10)
+        emitPush(static_cast<uint8_t>(RETURN_VALUE_REGISTER));
     }
 
     // 2. Emit 'JAL' pseudo-op with a placeholder
@@ -103,7 +180,7 @@ void CodeGenerator::visit(CallExpr& expr, const Type*) {
     // The location to patch is the start of the IWT instruction.
     size_t patch_offset = m_object_file.code_section.size();
     emitByte(static_cast<uint8_t>(OpCode::IWT) | 0x0F); // IWT to R15 (PC)
-    emitWord(0xDEAD); // Placeholder address
+    emitWord(0); // Relocation placeholder
     
     // Record a relocation entry for the linker.
     m_object_file.relocation_table.push_back({
@@ -113,13 +190,9 @@ void CodeGenerator::visit(CallExpr& expr, const Type*) {
         RelocationType::ADDR16_JAL  // Type of relocation needed
     });
     
-    emitByte(static_cast<uint8_t>(OpCode::NOP)); // Branch delay slot
-
     // 3. Caller stack cleanup
     int bytes_to_pop = static_cast<int>(expr.arguments.size()) * 2;
-    for (int i = 0; i < bytes_to_pop; ++i) {
-        emitByte(0xDA); // INC R10
-    }
+    emitAdjustStack(static_cast<std::size_t>(bytes_to_pop), true);
     // The return value is now in R0, as per the ABI.
 }
 
@@ -134,21 +207,17 @@ void CodeGenerator::visit(FunctionDeclStmt& stmt) {
 
     // FUNCTION PROLOGUE
     // PUSH R11 (link register, assuming JAL was used)
-    emitByte(0xEA); emitByte(0xEA); // dec sp, dec sp
-    emitByte(0x2B); emitByte(0x3A); // with r11, stw (sp)
+    emitPush(11);
     
     // PUSH R9 (caller's frame pointer)
-    emitByte(0xEA); emitByte(0xEA); // dec sp, dec sp
-    emitByte(0x29); emitByte(0x3A); // with r9, stw (sp)
+    emitPush(9);
 
     // MOVE R9, R10 (new frame pointer = current stack pointer)
-    emitByte(0x19); emitByte(0xBA); // move r9, r10
+    emitMove(9, 10);
 
     // Allocate space for all local variables
     if (stmt.total_local_alloc_size > 0) {
-        // This is SUB SP, #size. We use a scratch register.
-        emitLiteral(stmt.total_local_alloc_size, {BaseType::WORD, "", 2, false}); // size -> R0
-        emitByte(0x6A); // sub r10, r0
+        emitAdjustStack(static_cast<std::size_t>(stmt.total_local_alloc_size), false);
     }
 
     // Cache size check
@@ -170,6 +239,10 @@ void CodeGenerator::visit(FunctionDeclStmt& stmt) {
     for (const auto& s : stmt.body) {
         s->accept(*this);
     }
+
+    if (stmt.needs_implicit_return) {
+        emitFunctionEpilogue();
+    }
 }
 
 void CodeGenerator::visit(BlockStmt& stmt) {
@@ -186,7 +259,7 @@ void CodeGenerator::visit(VarDeclStmt& stmt) {
 
         // 2. Save the value in a scratch register (R1 or R3).
         uint8_t scratch_reg = m_isInPlottingContext ? 3 : 1;
-        emitByte(0x10 | scratch_reg); emitByte(0xB0); // move scratch_reg, r0
+        emitMove(scratch_reg, static_cast<uint8_t>(RETURN_VALUE_REGISTER));
 
         // 3. Get the address of the variable we are assigning to.
         // This overwrites R0, which is why we saved the value.
@@ -194,12 +267,7 @@ void CodeGenerator::visit(VarDeclStmt& stmt) {
         var_expr.accept(*this, nullptr); // Leaves address of the variable in R0
 
         // 4. Store the saved value (from scratch_reg) at the address (in R0).
-        if (stmt.type.base == BaseType::BYTE) {
-            emitByte(static_cast<uint8_t>(OpCode::ALT1));
-            emitByte(0x30 | scratch_reg); // stb (r0), scratch_reg
-        } else {
-            emitByte(0x30 | scratch_reg); // stw (r0), scratch_reg
-        }
+        emitStore(0, scratch_reg, stmt.type.base == BaseType::BYTE);
     }
 }
 
@@ -213,7 +281,7 @@ void CodeGenerator::visit(SubscriptExpr& expr, const Type*) {
         emitByte(static_cast<uint8_t>(OpCode::ROL));
     }
 
-    emitByte(0xEA); emitByte(0xEA); emitByte(0x3A); // PUSH R0
+    emitPush(static_cast<uint8_t>(RETURN_VALUE_REGISTER));
 
     expr.array->accept(*this, nullptr);
 
@@ -221,9 +289,7 @@ void CodeGenerator::visit(SubscriptExpr& expr, const Type*) {
     uint8_t scratch_reg = m_isInPlottingContext ? 3 : 1; // R3 or R1
 
     // POP offset into scratch_reg
-    emitByte(0xDA); emitByte(0xDA);
-    emitByte(0x20 | scratch_reg); // WITH scratch_reg
-    emitByte(0x4A);               // LDW (R10)
+    emitPop(scratch_reg);
     
     // SUB scratch_reg (R0 = R0 - scratch_reg)
     emitByte(0x60 | scratch_reg);
@@ -239,8 +305,7 @@ void CodeGenerator::visit(MemberAccessExpr& expr, const Type*) {
         uint8_t scratch_reg = m_isInPlottingContext ? 3 : 1; // R3 or R1
 
         // MOVE scratch_reg, R0
-        emitByte(0x10 | scratch_reg); // TO scratch_reg
-        emitByte(0xB0);               // FROM R0
+        emitMove(scratch_reg, static_cast<uint8_t>(RETURN_VALUE_REGISTER));
         
         // Load offset into R0.
         emitLiteral(offset, {BaseType::WORD, "", 2, false});
@@ -256,6 +321,7 @@ void CodeGenerator::dereferenceIfNeeded(Expr& expr) {
         dynamic_cast<UnaryExpr*>(&expr) ||
         dynamic_cast<AddressOfExpr*>(&expr) || 
         dynamic_cast<CastExpr*>(&expr) ||
+        dynamic_cast<CallExpr*>(&expr) ||
         dynamic_cast<DereferenceExpr*>(&expr))
     {
         return; 
@@ -263,11 +329,11 @@ void CodeGenerator::dereferenceIfNeeded(Expr& expr) {
     
     if (auto* var = dynamic_cast<VariableExpr*>(&expr)) {
         if (var->token.lexeme == "plot_x") {
-            emitByte(0x10); emitByte(0xB1); // MOVE R0, R1
+            emitMove(static_cast<uint8_t>(RETURN_VALUE_REGISTER), 1);
             return;
         }
         if (var->token.lexeme == "plot_y") {
-            emitByte(0x10); emitByte(0xB2); // MOVE R0, R2
+            emitMove(static_cast<uint8_t>(RETURN_VALUE_REGISTER), 2);
             return;
         }
     }
@@ -284,7 +350,7 @@ void CodeGenerator::dereferenceIfNeeded(Expr& expr) {
 void CodeGenerator::visit(AssignExpr& expr, const Type*) {
     expr.name->accept(*this, nullptr);
     
-    emitByte(0xEA); emitByte(0xEA); emitByte(0x3A); // PUSH R0
+    emitPush(static_cast<uint8_t>(RETURN_VALUE_REGISTER));
 
     expr.value->accept(*this, nullptr);
     dereferenceIfNeeded(*expr.value);
@@ -293,16 +359,10 @@ void CodeGenerator::visit(AssignExpr& expr, const Type*) {
     uint8_t scratch_reg = m_isInPlottingContext ? 3 : 1; // R3 or R1
 
     // POP scratch_reg
-    emitByte(0xDA); emitByte(0xDA);
-    emitByte(0x20 | scratch_reg); // WITH scratch_reg
-    emitByte(0x4A);               // LDW (R10)
+    emitPop(scratch_reg);
 
-    if (expr.result_type.base == BaseType::BYTE) {
-        emitByte(static_cast<uint8_t>(OpCode::ALT1));
-        emitByte(0x30 | scratch_reg); // STB (scratch_reg)
-    } else {
-        emitByte(0x30 | scratch_reg); // STW (scratch_reg)
-    }
+    emitStore(scratch_reg, static_cast<uint8_t>(RETURN_VALUE_REGISTER),
+              expr.result_type.base == BaseType::BYTE);
 }
 
 void CodeGenerator::visit(ReturnStmt& stmt) {
@@ -311,24 +371,22 @@ void CodeGenerator::visit(ReturnStmt& stmt) {
         dereferenceIfNeeded(*stmt.value);
     }
     
+    emitFunctionEpilogue();
+}
+
+void CodeGenerator::emitFunctionEpilogue() {
     // FUNCTION EPILOGUE
     // 1. Deallocate locals by resetting SP to FP
-    emitByte(0x1A); emitByte(0xB9); // move r10, r9
-
-    // 2. Pop R9 (restore caller's frame pointer)
-    emitByte(0x29); emitByte(0x4A); // with r9, ldw (r10)
-    emitByte(0xDA); emitByte(0xDA); // inc sp, inc sp
-
-    // 3. Pop R11 (restore link register)
-	// See, I thought this was easy
-    emitByte(0x2B); emitByte(0x4A); // with r11, ldw (r10)
-    emitByte(0xDA); emitByte(0xDA); // inc sp, inc sp
+    emitMove(10, 9);
 
     if (m_currentFunctionName == "main") {
         emitByte(static_cast<uint8_t>(OpCode::STOP));
         emitByte(static_cast<uint8_t>(OpCode::NOP));
     } else {
-        emitByte(0x9E); // JMP R11 (equivalent to RET)
+        // Restore the caller's frame and link registers before returning.
+        emitPop(9);
+        emitPop(11);
+        emitByte(0x9B); // JMP R11 (equivalent to RET)
         emitByte(static_cast<uint8_t>(OpCode::NOP));
     }
 }
@@ -371,8 +429,7 @@ void CodeGenerator::visit(DereferenceExpr& expr, const Type*) {
         emitByte(0x40); // LDB (R0) -> bank_reg = bank_byte (LDB only exists with ALT1 attached to it, otherwise it is a simple LDW)
 
         // MOVE p_addr_save_reg, R0 (save address of p)
-        emitByte(0x10 | p_addr_save_reg); // TO p_addr_save_reg
-        emitByte(0xB0);                   // FROM R0
+        emitMove(p_addr_save_reg, static_cast<uint8_t>(RETURN_VALUE_REGISTER));
 
         emitLiteral(2, {BaseType::BYTE, "", 1, false}); // R0 = 2
 
@@ -395,8 +452,7 @@ void CodeGenerator::visit(DereferenceExpr& expr, const Type*) {
 
         if (expr.result_type.space == AddressSpace::ROM) {
             // MOVE R14, offset_reg
-            emitByte(0x1E);                     // TO R14
-            emitByte(0xB0 | offset_reg);        // FROM offset_reg
+            emitMove(14, offset_reg);
             if (expr.result_type.base == BaseType::BYTE) {
                 emitByte(static_cast<uint8_t>(OpCode::GETB));
             } else {
@@ -418,7 +474,7 @@ void CodeGenerator::visit(DereferenceExpr& expr, const Type*) {
         expr.right->accept(*this, nullptr);
         dereferenceIfNeeded(*expr.right);
         if (expr.result_type.space == AddressSpace::ROM) {
-            emitByte(0x1E); emitByte(0xB0); // MOVE R14, R0
+            emitMove(14, static_cast<uint8_t>(RETURN_VALUE_REGISTER));
             if (expr.result_type.base == BaseType::BYTE) {
                 emitByte(static_cast<uint8_t>(OpCode::GETB));
             } else {
@@ -471,7 +527,7 @@ void CodeGenerator::visit(BinaryExpr& expr, const Type*) {
     expr.right->accept(*this, nullptr);
     dereferenceIfNeeded(*expr.right);
     
-    emitByte(0xEA); emitByte(0xEA); emitByte(0x3A); // PUSH R0
+    emitPush(static_cast<uint8_t>(RETURN_VALUE_REGISTER));
 
     expr.left->accept(*this, nullptr);
     dereferenceIfNeeded(*expr.left);
@@ -480,9 +536,7 @@ void CodeGenerator::visit(BinaryExpr& expr, const Type*) {
     uint8_t scratch_reg = m_isInPlottingContext ? 3 : 1; // R3 or R1
 
     // POP scratch_reg
-    emitByte(0xDA); emitByte(0xDA);
-    emitByte(0x20 | scratch_reg); // WITH scratch_reg
-    emitByte(0x4A);               // LDW (R10)
+    emitPop(scratch_reg);
 
     uint8_t op_base = 0;
     uint8_t alt_prefix = 0;
@@ -515,19 +569,14 @@ void CodeGenerator::visit(VariableExpr& expr, const Type*) {
         int offset = symbol.stackOffset;
 
         // 1. Load Frame Pointer into R0
-        emitByte(0x10); emitByte(0xB9); // move r0, r9
+        emitMove(static_cast<uint8_t>(RETURN_VALUE_REGISTER), 9);
 
         // 2. Add or subtract the offset
         if (offset != 0) {
-            uint8_t scratch_reg = m_isInPlottingContext ? 3 : 1;
-            emitLiteral(std::abs(offset), {BaseType::WORD, "", 2, false}); // offset -> R0
-            emitByte(0x10 | scratch_reg); emitByte(0xB0);                   // move scratch_reg, r0
-            emitByte(0x10); emitByte(0xB9);                                 // move r0, r9 (restore FP to R0)
-
             if (offset > 0) { // It's a parameter, ADD
-                emitByte(0x50 | scratch_reg); // add r0, scratch_reg
+                emitImmediateArithmetic(0x50, offset);
             } else { // It's a local, SUB
-                emitByte(0x60 | scratch_reg); // sub r0, scratch_reg
+                emitImmediateArithmetic(0x60, std::abs(offset));
             }
         }
         // The final address is now in R0. If I remember it correctly.
@@ -537,7 +586,7 @@ void CodeGenerator::visit(VariableExpr& expr, const Type*) {
     if (m_data_manager.hasSymbol(expr.token.lexeme)) {
         size_t patch_offset = m_object_file.code_section.size();
         emitByte(static_cast<uint8_t>(OpCode::IWT) | static_cast<uint8_t>(RETURN_VALUE_REGISTER));
-        emitWord(0xDEAD);
+        emitWord(0);
         m_object_file.relocation_table.push_back({
             expr.token.lexeme, SymbolSection::CODE, (uint32_t)patch_offset, RelocationType::ADDR16_IWT
         });
@@ -547,7 +596,7 @@ void CodeGenerator::visit(VariableExpr& expr, const Type*) {
     if (m_global_function_symbols.count(expr.token.lexeme)) {
         size_t patch_offset = m_object_file.code_section.size();
         emitByte(static_cast<uint8_t>(OpCode::IWT) | static_cast<uint8_t>(RETURN_VALUE_REGISTER));
-        emitWord(0xBEEF);
+        emitWord(0);
         m_object_file.relocation_table.push_back({
             expr.token.lexeme, SymbolSection::CODE, (uint32_t)patch_offset, RelocationType::ADDR16_IWT
         });
@@ -588,14 +637,12 @@ void CodeGenerator::visit(IfStmt& stmt) {
     }
     
     size_t else_block_address = m_object_file.code_section.size();
-    int8_t else_offset = static_cast<int8_t>(else_block_address - (else_jump_patch + 1));
-    m_object_file.code_section[else_jump_patch] = else_offset;
+    patchRelativeBranch(else_jump_patch, else_block_address, stmt.token);
     
     if (stmt.elseBranch) {
         stmt.elseBranch->accept(*this);
         size_t end_if_address = m_object_file.code_section.size();
-        int8_t end_offset = static_cast<int8_t>(end_if_address - (end_jump_patch + 1));
-        m_object_file.code_section[end_jump_patch] = end_offset;
+        patchRelativeBranch(end_jump_patch, end_if_address, stmt.token);
     }
 }
 
@@ -637,13 +684,13 @@ void CodeGenerator::visit(WhileStmt& stmt) {
     stmt.body->accept(*this);
 
     emitByte(static_cast<uint8_t>(OpCode::BRA));
-    int8_t loopBackOffset = static_cast<int8_t>(loopTopAddress - (m_object_file.code_section.size() + 1));
-    emitByte(loopBackOffset);
+    const std::size_t loop_back_patch = m_object_file.code_section.size();
+    emitByte(0);
+    patchRelativeBranch(loop_back_patch, loopTopAddress, stmt.token);
     emitByte(static_cast<uint8_t>(OpCode::NOP));
 
     size_t loopEndAddress = m_object_file.code_section.size();
-    int8_t exitOffset = static_cast<int8_t>(loopEndAddress - (exitJumpPlaceholder + 1));
-    m_object_file.code_section[exitJumpPlaceholder] = exitOffset;
+    patchRelativeBranch(exitJumpPlaceholder, loopEndAddress, stmt.token);
 }
 
 void CodeGenerator::visit(HardwareLoopStmt& stmt) {
@@ -670,11 +717,11 @@ void CodeGenerator::visit(PlotStmt& stmt) {
     // This function is the one that USES R1 and R2.
     stmt.y->accept(*this, nullptr);
     dereferenceIfNeeded(*stmt.y);
-    emitByte(0x12); emitByte(0xB0); // MOVE R2, R0
+    emitMove(2, static_cast<uint8_t>(RETURN_VALUE_REGISTER));
 
     stmt.x->accept(*this, nullptr);
     dereferenceIfNeeded(*stmt.x);
-    emitByte(0x11); emitByte(0xB0); // MOVE R1, R0
+    emitMove(1, static_cast<uint8_t>(RETURN_VALUE_REGISTER));
 
     emitByte(0x4C); // PLOT opcode
 }
@@ -729,13 +776,12 @@ void CodeGenerator::visit(SwitchStmt& stmt) {
     for (CaseStmt* cs : case_stmts) {
         // Use R3 for comparison if plotting, since well, GSU uses registers in a different way
         uint8_t scratch_reg = m_isInPlottingContext ? 3 : 1;
-        emitByte(0x10 | scratch_reg); // MOVE scratch_reg, R0
-        emitByte(0xB0);
+        emitMove(scratch_reg, static_cast<uint8_t>(RETURN_VALUE_REGISTER));
         
         cs->value->accept(*this, nullptr); // Literal value is now in R0
         
         emitByte(static_cast<uint8_t>(OpCode::ALT3)); // alt3
-        emitByte(static_cast<uint8_t>(OpCode::ADD_R) | scratch_reg); // cmp scratch_reg
+        emitByte(0x60 | scratch_reg); // CMP scratch_reg
         
         emitByte(static_cast<uint8_t>(OpCode::BEQ));
         case_jump_patches[cs] = m_object_file.code_section.size();
@@ -761,17 +807,17 @@ void CodeGenerator::visit(SwitchStmt& stmt) {
 
     for (auto const& [cs, patch_addr] : case_jump_patches) {
         size_t target_addr = label_addresses.at(cs->label_name);
-        int8_t offset = static_cast<int8_t>(target_addr - (patch_addr + 1));
-        m_object_file.code_section[patch_addr] = offset;
+        patchRelativeBranch(patch_addr, target_addr, cs->token);
     }
     
     size_t default_target_addr = default_stmt ? label_addresses.at(default_stmt->label_name) : end_label_address;
-    int8_t default_offset = static_cast<int8_t>(default_target_addr - (default_jump_patch + 1));
-    m_object_file.code_section[default_jump_patch] = default_offset;
+    patchRelativeBranch(
+        default_jump_patch,
+        default_target_addr,
+        default_stmt ? default_stmt->token : stmt.token);
 
     for (size_t patch_addr : break_patch_locations) {
-        int8_t break_offset = static_cast<int8_t>(end_label_address - (patch_addr + 1));
-        m_object_file.code_section[patch_addr] = break_offset;
+        patchRelativeBranch(patch_addr, end_label_address, stmt.token);
     }
 
     m_break_labels.pop_back();

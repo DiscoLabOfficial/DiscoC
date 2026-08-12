@@ -1,0 +1,10 @@
+word read_far(far word* pointer) {
+    return *pointer;
+}
+
+byte read_far_byte(far byte* pointer) {
+    return *pointer;
+}
+
+void main() {
+}

@@ -1,0 +1,40 @@
+struct Pair {
+    byte low;
+    word high;
+};
+
+rom const word table = 20;
+
+word read_table() {
+    return table;
+}
+
+void select_value(word value) {
+    switch (value) {
+        case 1:
+            value = value + 1;
+            break;
+        case 2:
+            value = value + 2;
+            break;
+        default:
+            value = value + 3;
+            break;
+    }
+}
+
+word use_struct(word value) {
+    struct Pair pair;
+    pair.low = (byte)value;
+    pair.high = value;
+    return pair.high;
+}
+
+void main() {
+    word values[2];
+    values[0] = 1;
+    values[1] = 2;
+    select_value(values[0]);
+    word result = read_table();
+    result = use_struct(result);
+}

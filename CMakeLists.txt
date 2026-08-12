@@ -76,6 +76,8 @@ set(COMPILER_SOURCES
     src/Analyzer.cpp
     src/Optimizer.cpp
     src/CodeGenerator.cpp
+    src/IR.cpp
+    src/IRCodeGenerator.cpp
     src/AssemblyGenerator.cpp
     src/DataSegment.cpp
     src/ObjectFile.cpp
@@ -89,19 +91,28 @@ set(LINKER_SOURCES
     src/Token.cpp
 )
 
+set(ASSEMBLER_SOURCES
+    src/discas.cpp
+    src/Assembler.cpp
+    src/ObjectFile.cpp
+)
+
 # Build Targets
-# Define the two executables
+# Define the compiler, linker, and standalone assembler executables
 add_executable(discc ${COMPILER_SOURCES})
 add_executable(discld ${LINKER_SOURCES})
+add_executable(discas ${ASSEMBLER_SOURCES})
 
 # Link Dependencies & Apply Flags
 # Apply the common flags and include directories to both targets
 target_include_directories(discc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(discld PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(discas PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # Link our warning flags library to the targets
 target_link_libraries(discc PRIVATE disco_common_warnings)
 target_link_libraries(discld PRIVATE disco_common_warnings)
+target_link_libraries(discas PRIVATE disco_common_warnings)
 
 # Final Status Output
 cmake_print_variables(CMAKE_CXX_COMPILER_ID CMAKE_SYSTEM_NAME CMAKE_BUILD_TYPE)

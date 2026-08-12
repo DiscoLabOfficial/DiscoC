@@ -2,15 +2,7 @@
 #include <vector>
 #include "Token.hpp"
 #include "AST.hpp"
-
-// Configuration settings controlled by 'set' directives
-enum class MemoryMapping { LoROM, HiROM };
-struct CompilerConfig {
-    MemoryMapping mapping = MemoryMapping::LoROM;
-    uint32_t code_start_address = 0x8000; // Default for LoROM
-    bool optimize_loop_setup = false;
-	bool warn_on_cache_overflow = true;
-};
+#include "TargetConfig.hpp"
 
 
 class Parser {

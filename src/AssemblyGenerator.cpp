@@ -3,6 +3,26 @@
 #include "CompilerError.hpp"
 #include <iostream>
 
+namespace {
+
+bool statementAlwaysTerminates(const Stmt& statement) {
+    if (dynamic_cast<const ReturnStmt*>(&statement)) {
+        return true;
+    }
+    if (const auto* block = dynamic_cast<const BlockStmt*>(&statement)) {
+        return !block->statements.empty() &&
+               statementAlwaysTerminates(*block->statements.back());
+    }
+    if (const auto* conditional = dynamic_cast<const IfStmt*>(&statement)) {
+        return conditional->elseBranch &&
+               statementAlwaysTerminates(*conditional->thenBranch) &&
+               statementAlwaysTerminates(*conditional->elseBranch);
+    }
+    return false;
+}
+
+} // namespace
+
 AssemblyGenerator::AssemblyGenerator(
     const std::map<std::string, FunctionSymbol>& global_function_symbols,
     const DataSegmentManager& data_manager
@@ -10,7 +30,7 @@ AssemblyGenerator::AssemblyGenerator(
 
 std::string AssemblyGenerator::generate(const std::vector<std::unique_ptr<Stmt>>& program) {
     emit(".setcpu \"GSU\"");
-    emit(".include \"casfx.inc\"");	// You need casfx.inc, which is available https://raw.githubusercontent.com/ARM9/casfx/master/gsu/casfx.inc here.
+    emit(".include \"casfx.inc\"");
     emit("");
 
     // Data Segment
@@ -227,6 +247,35 @@ void AssemblyGenerator::visit(CallExpr& expr, const Type*) {
 }
 
 void AssemblyGenerator::visit(BinaryExpr& expr, const Type*) {
+    auto try_optimize_immediate = [&](Expr* non_literal_side, LiteralExpr* literal_side) -> bool {
+        const long value = std::stol(literal_side->token.lexeme, nullptr, 0);
+        std::string operation;
+        switch (expr.token.type) {
+            case TokenType::PLUS:  operation = "add"; break;
+            case TokenType::MINUS: operation = "sub"; break;
+            case TokenType::STAR:  operation = "mult"; break;
+            default: return false;
+        }
+        if (value < 0 || value > 15) return false;
+
+        non_literal_side->accept(*this, nullptr);
+        dereferenceIfNeeded(*non_literal_side);
+        emit(operation + " r0, r0, #" + std::to_string(value));
+        return true;
+    };
+
+    if (!dynamic_cast<LiteralExpr*>(expr.left.get()) &&
+        dynamic_cast<LiteralExpr*>(expr.right.get()) &&
+        try_optimize_immediate(expr.left.get(), dynamic_cast<LiteralExpr*>(expr.right.get()))) {
+        return;
+    }
+    if (dynamic_cast<LiteralExpr*>(expr.left.get()) &&
+        !dynamic_cast<LiteralExpr*>(expr.right.get()) &&
+        (expr.token.type == TokenType::PLUS || expr.token.type == TokenType::STAR) &&
+        try_optimize_immediate(expr.right.get(), dynamic_cast<LiteralExpr*>(expr.left.get()))) {
+        return;
+    }
+
     // Standard RPN-style evaluation
     expr.right->accept(*this, nullptr);
     dereferenceIfNeeded(*expr.right);
@@ -263,8 +312,8 @@ void AssemblyGenerator::visit(IfStmt& stmt) {
     
     std::string branch_op;
     switch(cond->token.type) {
-        case TokenType::GREATER:     branch_op = "ble"; break; // Branch if Not Greater (Less or Equal)
-        case TokenType::LESS:        branch_op = "bge"; break; // Branch if Not Less
+        case TokenType::GREATER:     branch_op = "bmi"; break;
+        case TokenType::LESS:        branch_op = "bpl"; break;
         case TokenType::EQUAL_EQUAL: branch_op = "bne"; break; // Branch if Not Equal
         case TokenType::BANG_EQUAL:  branch_op = "beq"; break; // Branch if Equal
         default: throw CompilerError("Unsupported operator in if condition.", cond->token.line_number, cond->token.col_number);
@@ -277,9 +326,11 @@ void AssemblyGenerator::visit(IfStmt& stmt) {
     stmt.thenBranch->accept(*this);
     m_indent_level--;
 
-    if (stmt.elseBranch) {
+    if (stmt.elseBranch && !statementAlwaysTerminates(*stmt.thenBranch)) {
         emit("bra " + endLabel);
         emit("nop"); // Fill the branch delay slot
+    }
+    if (stmt.elseBranch) {
         emit(elseLabel + ":");
         m_indent_level++;
         stmt.elseBranch->accept(*this);
@@ -316,6 +367,7 @@ void AssemblyGenerator::visit(VariableExpr& expr, const Type*) {
 void AssemblyGenerator::dereferenceIfNeeded(Expr& expr, bool is_for_assignment) {
     if (dynamic_cast<LiteralExpr*>(&expr) || 
         dynamic_cast<BinaryExpr*>(&expr) || 
+        dynamic_cast<UnaryExpr*>(&expr) ||
         dynamic_cast<AddressOfExpr*>(&expr) || 
         dynamic_cast<CallExpr*>(&expr) || 
         dynamic_cast<CastExpr*>(&expr)) {
@@ -368,7 +420,16 @@ void AssemblyGenerator::visit(StructDefStmt&) { /* No assembly for struct def */
 void AssemblyGenerator::visit(ConstDataStmt&) { /* Handled in main generate loop */ }
 
 // More stubs to be filled in as needed... Seems wasteful but that's how it is, it seems...
-void AssemblyGenerator::visit(UnaryExpr&, const Type*) { emit("; UnaryExpr not fully implemented in ASM gen"); }
+void AssemblyGenerator::visit(UnaryExpr& expr, const Type*) {
+    if (auto* literal = dynamic_cast<LiteralExpr*>(expr.right.get())) {
+        emit("iwt r0, #-" + literal->token.lexeme, "Negated literal");
+        return;
+    }
+
+    expr.right->accept(*this, nullptr);
+    emit("not", "Negate value");
+    emit("inc r0");
+}
 
 void AssemblyGenerator::visit(AddressOfExpr& expr, const Type*) {
     // Our L-value visitors now correctly compute the address and leave it in R0.
@@ -414,8 +475,8 @@ void AssemblyGenerator::visit(WhileStmt& stmt) {
     // Branch on NOT(condition) to exit loop.
     std::string branch_op;
     switch (cond->token.type) {
-        case TokenType::GREATER:     branch_op = "ble"; break; // not (>)
-        case TokenType::LESS:        branch_op = "bge"; break; // not (<)
+        case TokenType::GREATER:     branch_op = "bmi"; break;
+        case TokenType::LESS:        branch_op = "bpl"; break;
         case TokenType::EQUAL_EQUAL: branch_op = "bne"; break; // not (==)
         case TokenType::BANG_EQUAL:  branch_op = "beq"; break; // not (!=)
         default:

@@ -160,6 +160,10 @@ struct FunctionDeclStmt : public Stmt {
     std::vector<Parameter> params;
     std::vector<std::unique_ptr<Stmt>> body;
     int total_local_alloc_size = 0;
+    // Set by semantic analysis when control flow can reach the closing brace.
+    // Code generation uses this to emit the ABI epilogue for implicit void
+    // returns without adding dead epilogues after explicit returns.
+    bool needs_implicit_return = false;
     FunctionDeclStmt(Token n, bool cached, Type rt, std::vector<Parameter> p, std::vector<std::unique_ptr<Stmt>> b)
         : is_cached(cached), returnType(std::move(rt)), params(std::move(p)), body(std::move(b)) { token = std::move(n); }
     void accept(Visitor& visitor) override { visitor.visit(*this); }

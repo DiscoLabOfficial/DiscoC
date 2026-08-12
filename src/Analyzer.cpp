@@ -137,6 +137,14 @@ void Analyzer::visit(FunctionDeclStmt& stmt) {
     stmt.body = std::move(bodyBlock->statements);
     endScope();
 
+    stmt.needs_implicit_return = blockCanFallThrough(stmt.body);
+    if (stmt.returnType.base != BaseType::VOID && stmt.needs_implicit_return) {
+        throw CompilerError(
+            "Non-void function may reach the end without returning a value.",
+            stmt.token.line_number,
+            stmt.token.col_number);
+    }
+
     // STEP 3: Calculate the total allocation size for all locals in this function.
     // This is needed by the code generators for the function prologue.
     int total_local_size = 0;
@@ -571,4 +579,39 @@ void Analyzer::visit(BreakStmt& stmt) {
     if (m_switch_context_stack.empty()) {
         throw CompilerError("'break' statement not within a switch statement.", stmt.token.line_number, stmt.token.col_number);
     }
+}
+
+bool Analyzer::blockCanFallThrough(const std::vector<std::unique_ptr<Stmt>>& statements) const {
+    for (const auto& statement : statements) {
+        if (!canFallThrough(*statement)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Analyzer::canFallThrough(const Stmt& stmt) const {
+    if (dynamic_cast<const ReturnStmt*>(&stmt)) {
+        return false;
+    }
+
+    if (const auto* block = dynamic_cast<const BlockStmt*>(&stmt)) {
+        return blockCanFallThrough(block->statements);
+    }
+
+    if (const auto* conditional = dynamic_cast<const IfStmt*>(&stmt)) {
+        // Without an else branch, the condition can always choose the path
+        // that reaches the end of the if statement.
+        if (!conditional->elseBranch) {
+            return true;
+        }
+        return canFallThrough(*conditional->thenBranch) ||
+               canFallThrough(*conditional->elseBranch);
+    }
+
+    // A loop is conservatively considered fall-through.  Proving that a
+    // source-controlled loop is infinite requires constant evaluation and
+    // handling of break/control-flow edges; rejecting a missing return is
+    // safer than accepting an invalid function ABI on an incomplete proof.
+    return true;
 }

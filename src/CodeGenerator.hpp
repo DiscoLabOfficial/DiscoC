@@ -58,6 +58,14 @@ private:
     void emitByte(uint8_t byte);
     void emitWord(uint16_t word);
     void emitLiteral(long value, const Type& type);
+	void emitMove(uint8_t destination, uint8_t source);
+	void emitPush(uint8_t reg);
+	void emitPop(uint8_t reg);
+	void emitStore(uint8_t address_reg, uint8_t value_reg, bool byte);
+	void emitImmediateArithmetic(uint8_t op_base, long value);
+	void emitAdjustStack(std::size_t bytes, bool add);
+	void emitFunctionEpilogue();
+	void patchRelativeBranch(std::size_t patch_offset, std::size_t target_address, const Token& source);
 	std::vector<uint8_t> visitAndMeasure(Stmt& stmt);
     std::string newLabel();
     int m_label_counter = 0;
