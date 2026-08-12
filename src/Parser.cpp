@@ -1,6 +1,14 @@
 #include "Parser.hpp"
 #include <stdexcept>
+#include <algorithm>
 #include "CompilerError.hpp"
+
+namespace {
+
+constexpr std::int64_t MaxArrayElements = 1'000'000;
+constexpr std::int64_t MaxCodeAddress = 0xFFFFFF;
+
+} // namespace
 
 Parser::Parser(const std::vector<Token>& tokens) : m_tokens(tokens) {}
 
@@ -41,7 +49,12 @@ void Parser::parseDirective() {
         }
     } else if (key.lexeme == "code_start_address") {
         Token value = consume(TokenType::LITERAL_INTEGER, "Expect an integer literal for the start address.");
-        m_config.code_start_address = std::stol(value.lexeme, nullptr, 0);
+        const auto address = parseIntegerLiteral(value, "code start address");
+        if (address < 0 || address > MaxCodeAddress) {
+            throw CompilerError("Code start address must fit in 24 bits.",
+                                value.line_number, value.col_number);
+        }
+        m_config.code_start_address = static_cast<std::uint32_t>(address);
     } else {
         throw std::runtime_error("Parse Error: Unknown configuration key '" + key.lexeme + "'.");
     }
@@ -117,11 +130,13 @@ Type Parser::parseType() {
 
 std::unique_ptr<Stmt> Parser::globalDeclaration() {
     bool is_cached = match({TokenType::KEYWORD_CACHE});
-    if (peek().type == TokenType::KEYWORD_ROM && m_tokens[m_current + 1].type == TokenType::KEYWORD_CONST) {
+    if (peek().type == TokenType::KEYWORD_ROM &&
+        peekNext().type == TokenType::KEYWORD_CONST) {
         advance(); advance();
         if(is_cached) throw std::runtime_error("Parse Error: 'cache' cannot be applied to 'rom const' data.");
         Type type = parseType();
         type.space = AddressSpace::ROM;
+        validateValueType(type, peek(), "ROM data");
         Token name = consume(TokenType::IDENTIFIER, "Expect identifier for rom const data.");
         return romConstDeclaration(type, name);
     } else if (peek().type == TokenType::KEYWORD_STRUCT) {
@@ -144,7 +159,13 @@ std::unique_ptr<Stmt> Parser::romConstDeclaration(Type type, Token name) {
         consume(TokenType::EQUAL, "Expect '=' for rom data initialization.");
         consume(TokenType::LBRACE, "Expect '{' for rom data list.");
         if (!check(TokenType::RBRACE)) {
-            do { initializers.push_back(expression()); } while (match({TokenType::COMMA}));
+            do {
+                if (initializers.size() >= static_cast<std::size_t>(MaxArrayElements)) {
+                    throw CompilerError("ROM data initializer list is too large.",
+                                        peek().line_number, peek().col_number);
+                }
+                initializers.push_back(expression());
+            } while (match({TokenType::COMMA}));
         }
         consume(TokenType::RBRACE, "Expect '}' to close rom data list.");
     } else {
@@ -164,11 +185,21 @@ std::unique_ptr<Stmt> Parser::functionDeclaration(bool is_cached, Type returnTyp
                 throw std::runtime_error("Parse Error: Expect type specifier for parameter.");
             }
             Type paramType = parseType();
+            validateValueType(paramType, peek(), "function parameter");
             Token paramName = consume(TokenType::IDENTIFIER, "Expect parameter name.");
             params.push_back({paramType, paramName, {}});
         } while (match({TokenType::COMMA}));
     }
     consume(TokenType::RPAREN, "Expect ')' after parameters.");
+    if (match({TokenType::SEMICOLON})) {
+        if (is_cached) {
+            throw CompilerError("'cache' cannot be applied to a function prototype.",
+                                name.line_number, name.col_number);
+        }
+        return std::make_unique<FunctionDeclStmt>(
+            name, false, returnType, std::move(params),
+            std::vector<std::unique_ptr<Stmt>>{}, true);
+    }
     auto body = statement();
     if (auto* block = dynamic_cast<BlockStmt*>(body.get())) {
         return std::make_unique<FunctionDeclStmt>(name, is_cached, returnType, std::move(params), std::move(block->statements));
@@ -184,6 +215,7 @@ std::unique_ptr<Stmt> Parser::structDeclaration() {
     std::vector<Member> members;
     while (!check(TokenType::RBRACE) && !isAtEnd()) {
         Type memberType = parseType();
+        validateValueType(memberType, peek(), "struct member");
         Token memberName = consume(TokenType::IDENTIFIER, "Expect member name.");
         consume(TokenType::SEMICOLON, "Expect ';' after struct member.");
         members.push_back({memberType, memberName});
@@ -258,11 +290,17 @@ std::unique_ptr<Stmt> Parser::switchStatement() {
 }
 
 std::unique_ptr<Stmt> Parser::varDeclaration(Type type, Token name) {
+    validateValueType(type, name, "variable declaration");
     std::unique_ptr<Expr> initializer = nullptr;
     if (match({TokenType::LBRACKET})) {
         if (type.pointer_level > 0) throw std::runtime_error("Arrays of pointers not supported yet.");
         Token size_token = consume(TokenType::LITERAL_INTEGER, "Expect array size.");
-        type.array_size = std::stoi(size_token.lexeme);
+        const auto array_size = parseIntegerLiteral(size_token, "array size");
+        if (array_size <= 0 || array_size > MaxArrayElements) {
+            throw CompilerError("Array size must be between 1 and 1000000.",
+                                size_token.line_number, size_token.col_number);
+        }
+        type.array_size = static_cast<int>(array_size);
         consume(TokenType::RBRACKET, "Expect ']' after array size.");
     } else if (match({TokenType::EQUAL})) {
         initializer = expression();
@@ -424,16 +462,49 @@ std::unique_ptr<Expr> Parser::primary() {
     throw CompilerError("Expected primary expression.", peek().line_number, peek().col_number);
 }
 
-bool Parser::isAtEnd() { return m_tokens[m_current].type == TokenType::END_OF_FILE; }
-Token Parser::peek() { return m_tokens[m_current]; }
-Token Parser::previous() { return m_tokens[m_current - 1]; }
+bool Parser::isAtEnd() { return m_current >= m_tokens.size() || m_tokens[m_current].type == TokenType::END_OF_FILE; }
+Token Parser::peek() {
+    if (m_current >= m_tokens.size()) return Token(TokenType::END_OF_FILE, "", 0, 0);
+    return m_tokens[m_current];
+}
+Token Parser::peekNext() {
+    if (m_current + 1 >= m_tokens.size()) return Token(TokenType::END_OF_FILE, "", 0, 0);
+    return m_tokens[m_current + 1];
+}
+Token Parser::previous() {
+    if (m_current == 0 || m_tokens.empty()) return Token(TokenType::END_OF_FILE, "", 0, 0);
+    return m_tokens[std::min(m_current - 1, m_tokens.size() - 1)];
+}
 Token Parser::advance() { if (!isAtEnd()) m_current++; return previous(); }
-bool Parser::check(TokenType type) { if (isAtEnd()) return false; return peek().type == type; }
+bool Parser::check(TokenType type) { return !isAtEnd() && peek().type == type; }
 bool Parser::match(const std::vector<TokenType>& types) { for (auto t : types) { if (check(t)) { advance(); return true; } } return false; }
 Token Parser::consume(TokenType type, const std::string& message) { 
     if (check(type)) return advance(); 
     Token prev = previous();
     throw CompilerError(message, prev.line_number, prev.col_number + (int)prev.lexeme.length());
+}
+
+std::int64_t Parser::parseIntegerLiteral(const Token& token, const std::string& context) {
+    try {
+        std::size_t parsed = 0;
+        const auto value = std::stoll(token.lexeme, &parsed, 0);
+        if (parsed != token.lexeme.size()) throw std::invalid_argument("trailing characters");
+        return value;
+    } catch (const std::exception&) {
+        throw CompilerError("Invalid integer literal for " + context + ".",
+                            token.line_number, token.col_number);
+    }
+}
+
+void Parser::validateValueType(const Type& type, const Token& token, const std::string& context) {
+    if (type.base == BaseType::VOID && type.pointer_level == 0) {
+        throw CompilerError("Void is not a valid " + context + " type.",
+                            token.line_number, token.col_number);
+    }
+    if (type.is_unsigned && type.base != BaseType::BYTE && type.base != BaseType::WORD) {
+        throw CompilerError("Unsigned is only valid with byte or word types.",
+                            token.line_number, token.col_number);
+    }
 }
 std::unique_ptr<Stmt> Parser::plotStatement() {
     consume(TokenType::LPAREN, "Expect '(' after 'plot'.");

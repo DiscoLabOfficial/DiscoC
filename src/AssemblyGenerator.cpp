@@ -111,6 +111,8 @@ void AssemblyGenerator::analyzeAndSetLocals(FunctionDeclStmt& stmt) {
 }
 
 void AssemblyGenerator::visit(FunctionDeclStmt& stmt) {
+    if (stmt.is_prototype) return;
+
     emit("");
     emit(".export " + stmt.token.lexeme, "Export for linker visibility");
     emit(stmt.token.lexeme + ":");

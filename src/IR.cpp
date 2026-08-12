@@ -712,6 +712,8 @@ void IRLowerer::visit(VarDeclStmt& stmt) {
 }
 
 void IRLowerer::visit(FunctionDeclStmt& stmt) {
+    if (stmt.is_prototype) return;
+
     m_module.functions.push_back({});
     m_current_function = m_module.functions.size() - 1;
     auto& function = currentFunction();

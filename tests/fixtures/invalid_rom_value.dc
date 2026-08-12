@@ -1,0 +1,4 @@
+rom const word value = 65535;
+
+void main() {
+}

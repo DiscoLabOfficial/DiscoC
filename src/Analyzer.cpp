@@ -1,7 +1,25 @@
 #include "Analyzer.hpp"
+#include <cstdint>
 #include <stdexcept>
 #include <set>
+#include <limits>
 #include "CompilerError.hpp"
+
+namespace {
+
+std::int64_t parseIntegerLiteral(const Token& token, const std::string& context) {
+    try {
+        std::size_t parsed = 0;
+        const auto value = std::stoll(token.lexeme, &parsed, 0);
+        if (parsed != token.lexeme.size()) throw std::invalid_argument("trailing characters");
+        return value;
+    } catch (const std::exception&) {
+        throw CompilerError("Invalid integer literal for " + context + ".",
+                            token.line_number, token.col_number);
+    }
+}
+
+} // namespace
 
 Analyzer::Analyzer(DataSegmentManager& dataManager) : m_data_manager(dataManager) {}
 
@@ -60,6 +78,11 @@ void Analyzer::registerStructSymbol(StructDefStmt& stmt) {
         }
 
         if (current_offset % 2 != 0) current_offset++;
+        if (member.type.sizeInBytes < 0 ||
+            current_offset > std::numeric_limits<int>::max() - member.type.sizeInBytes) {
+            throw CompilerError("Struct layout exceeds the supported size limit.",
+                                member.name.line_number, member.name.col_number);
+        }
         
         struct_symbol.members[member.name.lexeme] = {member.type, current_offset};
         current_offset += member.type.sizeInBytes;
@@ -90,12 +113,16 @@ void Analyzer::analyze(const std::vector<std::unique_ptr<Stmt>>& program) {
     m_struct_symbols.clear();
     m_all_local_symbols.clear();
     m_next_symbol_id = 1;
+    m_break_context_stack.clear();
+    m_case_values_stack.clear();
+    m_isInPlottingContext = false;
 
-    for (const auto& stmt : program) {
+    for (const auto& stmt : program)
+        if (auto* s = dynamic_cast<StructDefStmt*>(stmt.get())) registerStructSymbol(*s);
+    for (const auto& stmt : program)
         if (auto* func = dynamic_cast<FunctionDeclStmt*>(stmt.get())) registerFunctionSymbol(*func);
-        else if (auto* s = dynamic_cast<StructDefStmt*>(stmt.get())) registerStructSymbol(*s);
-        else if (auto* data = dynamic_cast<ConstDataStmt*>(stmt.get())) registerRomSymbol(*data);
-    }
+    for (const auto& stmt : program)
+        if (auto* data = dynamic_cast<ConstDataStmt*>(stmt.get())) registerRomSymbol(*data);
     for (const auto& stmt : program) {
         stmt->accept(*this);
     }
@@ -106,6 +133,8 @@ void Analyzer::analyzeExpr(Expr& expr, const Type* context) {
 }
 
 void Analyzer::visit(FunctionDeclStmt& stmt) {
+    if (stmt.is_prototype) return;
+
     // Create a new local symbol table for this function in our main map.
     m_current_function_locals = &m_all_local_symbols[stmt.token.lexeme];
     m_current_function_locals->clear();
@@ -163,10 +192,25 @@ void Analyzer::visit(FunctionDeclStmt& stmt) {
         const auto& symbol = pair.second;
         // Only sum up locals (negative offsets).
         if (symbol.stackOffset < 0) {
+            if (symbol.type.sizeInBytes <= 0) {
+                throw CompilerError("Local variable has an invalid size.",
+                                    Token(TokenType::UNKNOWN, "", 0, 0).line_number,
+                                    Token(TokenType::UNKNOWN, "", 0, 0).col_number);
+            }
             int var_size = ((symbol.type.sizeInBytes + 1) / 2) * 2;
             if (symbol.type.array_size > 0) {
                  int element_size = symbol.type.sizeInBytes;
+                 if (symbol.type.array_size > std::numeric_limits<int>::max() / element_size) {
+                     throw CompilerError("Local allocation exceeds the supported size limit.",
+                                         Token(TokenType::UNKNOWN, "", 0, 0).line_number,
+                                         Token(TokenType::UNKNOWN, "", 0, 0).col_number);
+                 }
                  var_size = ((symbol.type.array_size * element_size + 1) / 2) * 2;
+            }
+            if (var_size > std::numeric_limits<int>::max() - total_local_size) {
+                throw CompilerError("Local allocation exceeds the supported size limit.",
+                                    Token(TokenType::UNKNOWN, "", 0, 0).line_number,
+                                    Token(TokenType::UNKNOWN, "", 0, 0).col_number);
             }
             total_local_size += var_size;
         }
@@ -241,6 +285,10 @@ void Analyzer::visit(VarDeclStmt& stmt) {
     int size_to_allocate = ((stmt.type.sizeInBytes + 1) / 2) * 2;
     if (stmt.type.array_size > 0) {
         int element_size = stmt.type.sizeInBytes;
+        if (stmt.type.array_size > std::numeric_limits<int>::max() / element_size) {
+            throw CompilerError("Array allocation exceeds the supported size limit.",
+                                stmt.token.line_number, stmt.token.col_number);
+        }
         size_to_allocate = ((stmt.type.array_size * element_size + 1) / 2) * 2;
     }
 
@@ -282,7 +330,9 @@ void Analyzer::visit(IfStmt& stmt) {
 
 void Analyzer::visit(WhileStmt& stmt) {
     analyzeExpr(*stmt.condition, nullptr);
+    m_break_context_stack.push_back(false);
     stmt.body->accept(*this);
+    m_break_context_stack.pop_back();
 }
 
 void Analyzer::visit(HardwareLoopStmt& stmt) {
@@ -479,7 +529,7 @@ void Analyzer::visit(VariableExpr& expr, const Type*) {
 }
 
 void Analyzer::visit(LiteralExpr& expr, const Type* context) {
-    long value = std::stol(expr.token.lexeme, nullptr, 0);
+    const auto value = parseIntegerLiteral(expr.token, "integer literal");
     if (context) {
         if (context->base == BaseType::BYTE) {
             if (context->is_unsigned) {
@@ -543,7 +593,7 @@ void Analyzer::visit(CastExpr& expr, const Type*) {
 }
 
 void Analyzer::visit(SwitchStmt& stmt) {
-    m_switch_context_stack.push_back(true);
+    m_break_context_stack.push_back(true);
     m_case_values_stack.emplace_back();
 
     analyzeExpr(*stmt.condition, nullptr);
@@ -566,19 +616,20 @@ void Analyzer::visit(SwitchStmt& stmt) {
         }
     }
 
-    m_switch_context_stack.pop_back();
+    m_break_context_stack.pop_back();
     m_case_values_stack.pop_back();
 }
 
 void Analyzer::visit(CaseStmt& stmt) {
-    if (m_switch_context_stack.empty()) {
-        throw CompilerError("'case' label not within a switch statement.", stmt.token.line_number, stmt.token.col_number);
+    if (m_break_context_stack.empty() || !m_break_context_stack.back()) {
+        throw CompilerError("'case' label not within a switch statement.",
+                            stmt.token.line_number, stmt.token.col_number);
     }
     auto* literal = dynamic_cast<LiteralExpr*>(stmt.value.get());
     if (!literal) {
         throw CompilerError("Case label must be a constant integer literal.", stmt.value->token.line_number, stmt.value->token.col_number);
     }
-    long value = std::stol(literal->token.lexeme, nullptr, 0);
+    const auto value = parseIntegerLiteral(literal->token, "case label");
     if (m_case_values_stack.back().count(value)) {
         throw CompilerError("Duplicate case value '" + std::to_string(value) + "'.", literal->token.line_number, literal->token.col_number);
     }
@@ -586,14 +637,15 @@ void Analyzer::visit(CaseStmt& stmt) {
 }
 
 void Analyzer::visit(DefaultStmt& stmt) {
-    if (m_switch_context_stack.empty()) {
+    if (m_break_context_stack.empty() || !m_break_context_stack.back()) {
         throw CompilerError("'default' label not within a switch statement.", stmt.token.line_number, stmt.token.col_number);
     }
 }
 
 void Analyzer::visit(BreakStmt& stmt) {
-    if (m_switch_context_stack.empty()) {
-        throw CompilerError("'break' statement not within a switch statement.", stmt.token.line_number, stmt.token.col_number);
+    if (m_break_context_stack.empty()) {
+        throw CompilerError("'break' statement not within a loop or switch.",
+                            stmt.token.line_number, stmt.token.col_number);
     }
 }
 

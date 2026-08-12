@@ -82,8 +82,8 @@ private:
     std::vector<std::map<std::string, SymbolId>> m_scopes;
     std::uint32_t m_next_symbol_id = 1;
 
-    std::vector<bool> m_switch_context_stack;
-    std::vector<std::set<long>> m_case_values_stack;
+    std::vector<bool> m_break_context_stack;
+    std::vector<std::set<std::int64_t>> m_case_values_stack;
 
     DataSegmentManager& m_data_manager;
     Type m_currentFunctionType;
