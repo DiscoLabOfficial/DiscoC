@@ -4,6 +4,7 @@
 #include <map>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include "ObjectFile.hpp"
 #include "Parser.hpp"
 
@@ -34,6 +35,13 @@ int main(int argc, char* argv[]) {
     std::cout << "DiscoC Linker: Linking " << object_files.size() << " object file(s) -> " << out_filepath << std::endl;
 
     try {
+        const auto checkedAddress = [](std::uint64_t value, const char* what) -> std::uint32_t {
+            if (value > std::numeric_limits<std::uint32_t>::max()) {
+                throw std::runtime_error(std::string("Linker Error: ") + what + " exceeds the address range.");
+            }
+            return static_cast<std::uint32_t>(value);
+        };
+
         // --- 1. Load all object files ---
         std::vector<ObjectFile> objects;
         for (const auto& path : object_files) {
@@ -53,7 +61,7 @@ int main(int argc, char* argv[]) {
         std::vector<uint8_t> final_data;
         std::map<std::string, uint32_t> final_addresses;
 
-        uint32_t current_code_offset = 0;
+        std::uint64_t current_code_offset = 0;
         for (const auto& obj : objects) {
             // Process CODE symbols
             for (const auto& sym : obj.symbol_table) {
@@ -61,16 +69,20 @@ int main(int argc, char* argv[]) {
                     if (final_addresses.count(sym.name)) {
                         throw std::runtime_error("Linker Error: Symbol '" + sym.name + "' defined multiple times.");
                     }
-                    final_addresses[sym.name] = config.code_start_address + current_code_offset + sym.offset;
+                    final_addresses[sym.name] = checkedAddress(
+                        static_cast<std::uint64_t>(config.code_start_address) +
+                            current_code_offset + sym.offset,
+                        "code symbol address");
                 }
             }
             final_code.insert(final_code.end(), obj.code_section.begin(), obj.code_section.end());
-            // FIX: Add static_cast to silence the warning.
-            current_code_offset += static_cast<uint32_t>(obj.code_section.size());
+            current_code_offset += obj.code_section.size();
         }
         
-        uint32_t data_start_address = config.code_start_address + current_code_offset;
-        uint32_t current_data_offset = 0;
+        const uint32_t data_start_address = checkedAddress(
+            static_cast<std::uint64_t>(config.code_start_address) + current_code_offset,
+            "data section address");
+        std::uint64_t current_data_offset = 0;
         for (const auto& obj : objects) {
             // Process DATA symbols
             for (const auto& sym : obj.symbol_table) {
@@ -78,17 +90,19 @@ int main(int argc, char* argv[]) {
                     if (final_addresses.count(sym.name)) {
                         throw std::runtime_error("Linker Error: Symbol '" + sym.name + "' defined multiple times.");
                     }
-                    final_addresses[sym.name] = data_start_address + current_data_offset + sym.offset;
+                    final_addresses[sym.name] = checkedAddress(
+                        static_cast<std::uint64_t>(data_start_address) +
+                            current_data_offset + sym.offset,
+                        "data symbol address");
                 }
             }
             final_data.insert(final_data.end(), obj.data_section.begin(), obj.data_section.end());
-            // FIX: Add static_cast to silence the warning.
-            current_data_offset += static_cast<uint32_t>(obj.data_section.size());
+            current_data_offset += obj.data_section.size();
         }
 
         // --- 3. Relocation (Patching) ---
-        current_code_offset = 0;
-        uint32_t code_base_in_rom = 0;
+        std::uint64_t current_code_base = 0;
+        std::uint64_t current_data_base = 0;
 
         for (const auto& obj : objects) {
             for (const auto& reloc : obj.relocation_table) {
@@ -96,25 +110,31 @@ int main(int argc, char* argv[]) {
                     throw std::runtime_error("Linker Error: Undefined symbol '" + reloc.target_symbol_name + "'.");
                 }
                 uint32_t target_addr = final_addresses.at(reloc.target_symbol_name);
-                uint32_t patch_location = (reloc.section_to_patch == SymbolSection::CODE ? code_base_in_rom : data_start_address) + reloc.patch_offset;
-                
-                std::vector<uint8_t>& section_to_patch = (reloc.section_to_patch == SymbolSection::CODE) ? final_code : final_data;
-                uint32_t offset_in_section = patch_location - (reloc.section_to_patch == SymbolSection::CODE ? 0 : data_start_address);
+                std::vector<uint8_t>& section_to_patch =
+                    reloc.section_to_patch == SymbolSection::CODE ? final_code : final_data;
+                const auto section_base = reloc.section_to_patch == SymbolSection::CODE
+                    ? current_code_base : current_data_base;
+                const auto offset_in_section = section_base + reloc.patch_offset;
+                const auto patch_size = reloc.type == RelocationType::ADDR24_BANK ? 2u : 3u;
+                if (static_cast<std::uint64_t>(offset_in_section) + patch_size > section_to_patch.size()) {
+                    throw std::runtime_error("Linker Error: relocation extends beyond its section.");
+                }
+                const auto patch_index = static_cast<std::size_t>(offset_in_section);
 
                 switch (reloc.type) {
                     case RelocationType::ADDR16_JAL:
                     case RelocationType::ADDR16_IWT:
                     case RelocationType::ADDR24_OFFSET:
-                        section_to_patch[offset_in_section + 1] = target_addr & 0xFF;
-                        section_to_patch[offset_in_section + 2] = (target_addr >> 8) & 0xFF;
+                        section_to_patch[patch_index + 1] = target_addr & 0xFF;
+                        section_to_patch[patch_index + 2] = (target_addr >> 8) & 0xFF;
                         break;
                     case RelocationType::ADDR24_BANK:
-                        section_to_patch[offset_in_section + 1] = (target_addr >> 16) & 0xFF;
+                        section_to_patch[patch_index + 1] = (target_addr >> 16) & 0xFF;
                         break;
                 }
             }
-            // FIX: Add static_cast to silence the warning.
-            code_base_in_rom += static_cast<uint32_t>(obj.code_section.size());
+            current_code_base += obj.code_section.size();
+            current_data_base += obj.data_section.size();
         }
 
         // --- 4. Final Assembly & Output ---

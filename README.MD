@@ -38,7 +38,7 @@ This is not just a parser; it is a full-stack compiler implementation including:
 *   **The `discld` Linker:** A custom linker built from scratch to handle symbol resolution, memory placement, and binary patching across multiple compilation units.
 *   **Peephole Optimization:** The compiler analyzes the AST to detect high-level patterns (like decrementing `while` loops) and emits specialized hardware instructions (`LOOP` opcode) for zero-overhead looping.
 *   **Manual ABI Management:** Implements a full stack frame convention (Frame Pointer `R9`, Stack Pointer `R10`) to support recursion and local scope management.
-*   **Software-Defined Arithmetic:** Implementation of **BF16 (Brain Float 16)** and **FP16** logic purely in software to enable modern numerics on a 16-bit integer chip.
+*   **Numerics Roadmap:** Planned software-defined **BF16 (Brain Float 16)** and **FP16** support for modern numerics on a 16-bit integer chip.
 
 ## "Hello, World!" (The "Add" Example)
 
@@ -134,6 +134,7 @@ Detailed design and format documentation is available in the [`docs/`](docs/) di
 * [`architecture.md`](docs/architecture.md) — compiler pipeline, backends, ABI, and ownership boundaries.
 * [`ir-cfg.md`](docs/ir-cfg.md) — the typed intermediate representation and control-flow graph model.
 * [`object-format.md`](docs/object-format.md) — relocatable object-file layout and linker behavior.
+* [`testing.md`](docs/testing.md) — CTest regressions, sanitizer checks, and optional fuzzing.
 * [`assembler.md`](docs/assembler.md) — the `discas` input language and supported assembly workflow.
 
 ## License

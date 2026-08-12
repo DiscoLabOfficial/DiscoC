@@ -9,8 +9,15 @@ const std::map<std::string, FunctionSymbol>& Analyzer::getFunctionSymbols() cons
     return m_function_symbols;
 }
 
-const std::map<std::string, std::map<std::string, Symbol>>& Analyzer::getAllLocalSymbols() const {
+const std::map<std::string, Analyzer::LocalSymbolTable>& Analyzer::getAllLocalSymbols() const {
     return m_all_local_symbols;
+}
+
+SymbolId Analyzer::createSymbolId() {
+    if (m_next_symbol_id == SymbolId::Invalid) {
+        throw std::runtime_error("Analyzer ran out of stable symbol identifiers.");
+    }
+    return SymbolId{m_next_symbol_id++};
 }
 
 void Analyzer::registerFunctionSymbol(FunctionDeclStmt& stmt) {
@@ -82,6 +89,7 @@ void Analyzer::analyze(const std::vector<std::unique_ptr<Stmt>>& program) {
     m_function_symbols.clear();
     m_struct_symbols.clear();
     m_all_local_symbols.clear();
+    m_next_symbol_id = 1;
 
     for (const auto& stmt : program) {
         if (auto* func = dynamic_cast<FunctionDeclStmt*>(stmt.get())) registerFunctionSymbol(*func);
@@ -125,8 +133,11 @@ void Analyzer::visit(FunctionDeclStmt& stmt) {
             param.type.sizeInBytes = m_struct_symbols.at(param.type.structName).totalSize;
         }
 
-        auto& symbol = (*m_current_function_locals)[param.name.lexeme] = Symbol{param.type, paramOffset, ""};
-        m_scopes.back()[param.name.lexeme] = &symbol;
+        const auto symbol_id = createSymbolId();
+        Symbol symbol{param.type, paramOffset, "", symbol_id};
+        m_current_function_locals->emplace(symbol_id, symbol);
+        param.symbol_id = symbol_id;
+        m_scopes.back()[param.name.lexeme] = symbol_id;
         paramOffset += 2; // All params passed on stack are word-aligned as it should be
     }
 
@@ -175,8 +186,9 @@ void Analyzer::visit(BlockStmt& stmt) {
         auto& parentScope = m_scopes[m_scopes.size() - 2];
         int minOffset = 0;
         for (const auto& pair : parentScope) {
-            if (pair.second->stackOffset < minOffset) {
-                minOffset = pair.second->stackOffset;
+            const auto& symbol = m_current_function_locals->at(pair.second);
+            if (symbol.stackOffset < minOffset) {
+                minOffset = symbol.stackOffset;
             }
         }
         currentLocalOffset = minOffset;
@@ -189,7 +201,7 @@ void Analyzer::visit(BlockStmt& stmt) {
             varDecl->base_stack_offset = currentLocalOffset;
             varDecl->accept(*this);
             // After visiting, the VarDeclStmt's symbol has the final offset. Update our tracker.
-            currentLocalOffset = m_current_function_locals->at(varDecl->token.lexeme).stackOffset;
+            currentLocalOffset = m_current_function_locals->at(varDecl->symbol_id).stackOffset;
         } else {
             s->accept(*this);
         }
@@ -236,8 +248,11 @@ void Analyzer::visit(VarDeclStmt& stmt) {
     int final_offset = stmt.base_stack_offset - size_to_allocate;
 
     if (!m_current_function_locals) throw std::runtime_error("Internal Analyzer Error: Not in a function context.");
-    auto& symbol = (*m_current_function_locals)[stmt.token.lexeme] = Symbol{stmt.type, final_offset, ""};
-    m_scopes.back()[stmt.token.lexeme] = &symbol;
+    const auto symbol_id = createSymbolId();
+    Symbol symbol{stmt.type, final_offset, "", symbol_id};
+    m_current_function_locals->emplace(symbol_id, symbol);
+    stmt.symbol_id = symbol_id;
+    m_scopes.back()[stmt.token.lexeme] = symbol_id;
 }
 
 void Analyzer::visit(StructDefStmt&) {}
@@ -443,7 +458,8 @@ void Analyzer::visit(VariableExpr& expr, const Type*) {
     for (auto it = m_scopes.rbegin(); it != m_scopes.rend(); ++it) {
         const auto& scope = *it;
         if (scope.count(expr.token.lexeme)) {
-            expr.result_type = scope.at(expr.token.lexeme)->type;
+            expr.symbol_id = scope.at(expr.token.lexeme);
+            expr.result_type = m_current_function_locals->at(expr.symbol_id).type;
             return;
         }
     }

@@ -11,6 +11,7 @@ All integer fields are written in the host's little-endian representation by the
 | Field | Encoding |
 | --- | --- |
 | Magic | 5 ASCII bytes: `DISCO` |
+| Format version | `uint8_t`: currently `1` |
 | Memory mapping | `uint8_t`: `0` = LoROM, `1` = HiROM |
 | Code start address | `uint32_t` |
 | Code section | `uint32_t` byte count, followed by raw code bytes |
@@ -89,4 +90,4 @@ The linker's `.bin` output is the final linked GSU payload for the object set. I
 
 ## Compatibility and evolution
 
-The format currently has no version field, checksum, alignment table, or section flags. Changes to the serialization order or enum values require coordinated changes to `ObjectFile::write`, `ObjectFile::read`, `discld`, and `discas`. Treat `.o` files as versioned together with the compiler release until an explicit format version is introduced.
+The format currently has no checksum, alignment table, or section flags. The version byte is validated by `ObjectFile::read`; incompatible versions are rejected instead of being interpreted as a different layout. Changes to the serialization order or enum values require coordinated changes to `ObjectFile::write`, `ObjectFile::read`, `discld`, and `discas`.

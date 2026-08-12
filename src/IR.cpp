@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cstdlib>
 #include <limits>
+#include <queue>
+#include <set>
 #include <sstream>
+#include <iterator>
 #include <utility>
 
 namespace {
@@ -83,6 +86,22 @@ void verifyTarget(const IRFunction& function, IRBlockId target, const Token& sou
     }
 }
 
+bool isVoidType(const Type& type) {
+    return type.base == BaseType::VOID;
+}
+
+bool isIntegerType(const Type& type) {
+    return type.pointer_level == 0 &&
+           (type.base == BaseType::BYTE || type.base == BaseType::WORD);
+}
+
+bool sameValueType(const Type& left, const Type& right) {
+    return left.base == right.base &&
+           left.structName == right.structName &&
+           left.pointer_level == right.pointer_level &&
+           (left.pointer_level == 0 || left.is_far == right.is_far);
+}
+
 } // namespace
 
 bool IRInstruction::isTerminator() const {
@@ -115,6 +134,21 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
         fail("IR verifier: function entry block is invalid.", Token(TokenType::UNKNOWN, "", 0, 0));
     }
 
+    if (function.entry.value != 0) {
+        fail("IR verifier: function entry block must be block zero.",
+             Token(TokenType::UNKNOWN, "", 0, 0));
+    }
+
+    struct Definition {
+        std::size_t block = 0;
+        std::size_t instruction = 0;
+        Token source = {TokenType::UNKNOWN, "", 0, 0};
+    };
+
+    std::map<std::uint32_t, Definition> definitions;
+    std::vector<std::vector<std::size_t>> successors(function.blocks.size());
+    std::vector<std::vector<std::size_t>> predecessors(function.blocks.size());
+
     for (std::size_t index = 0; index < function.blocks.size(); ++index) {
         const auto& block = function.blocks[index];
         if (!block.id.isValid() || block.id.value != index) {
@@ -138,6 +172,10 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                     instruction.result.value > function.value_count) {
                     fail("IR verifier: value-producing instruction has an invalid result.",
                          instruction.source);
+                }
+                if (!definitions.emplace(instruction.result.value,
+                                         Definition{index, instruction_index, instruction.source}).second) {
+                    fail("IR verifier: value is defined more than once.", instruction.source);
                 }
             } else if (instruction.result.isValid()) {
                 fail("IR verifier: non-value instruction unexpectedly has a result.",
@@ -169,6 +207,15 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                         instruction.targets.size()) {
                         fail("IR verifier: switch case values and targets do not match.", instruction.source);
                     }
+                    for (std::size_t case_index = 0;
+                         case_index < instruction.case_values.size(); ++case_index) {
+                        for (std::size_t previous = 0; previous < case_index; ++previous) {
+                            if (instruction.case_values[case_index] == instruction.case_values[previous]) {
+                                fail("IR verifier: switch contains duplicate case values.",
+                                     instruction.source);
+                            }
+                        }
+                    }
                     break;
                 case IROpcode::Return:
                     if (instruction.operands.size() != 1) {
@@ -187,12 +234,191 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
             }
             for (const auto target : instruction.targets) {
                 verifyTarget(function, target, instruction.source);
+                successors[index].push_back(target.value);
+                predecessors[target.value].push_back(index);
             }
         }
 
         if (!block.instructions.back().isTerminator()) {
             fail("IR verifier: basic block does not end in a terminator.",
                  block.instructions.back().source);
+        }
+    }
+
+    if (definitions.size() != function.value_count) {
+        fail("IR verifier: value IDs must form a contiguous definition sequence.",
+             Token(TokenType::UNKNOWN, "", 0, 0));
+    }
+    for (std::uint32_t value = 1; value <= function.value_count; ++value) {
+        if (definitions.find(value) == definitions.end()) {
+            fail("IR verifier: value ID has no definition.",
+                 Token(TokenType::UNKNOWN, "", 0, 0));
+        }
+    }
+
+    std::vector<bool> reachable(function.blocks.size(), false);
+    std::queue<std::size_t> worklist;
+    reachable[function.entry.value] = true;
+    worklist.push(function.entry.value);
+    while (!worklist.empty()) {
+        const auto block = worklist.front();
+        worklist.pop();
+        for (const auto successor : successors[block]) {
+            if (!reachable[successor]) {
+                reachable[successor] = true;
+                worklist.push(successor);
+            }
+        }
+    }
+
+    for (std::size_t index = 0; index < function.blocks.size(); ++index) {
+        if (!reachable[index]) {
+            const auto& block = function.blocks[index];
+            if (block.instructions.size() != 1 ||
+                block.instructions.front().opcode != IROpcode::Unreachable) {
+                fail("IR verifier: unreachable blocks must contain only 'unreachable'.",
+                     block.instructions.front().source);
+            }
+        }
+    }
+
+    std::vector<std::set<std::size_t>> dominators(function.blocks.size());
+    for (std::size_t index = 0; index < function.blocks.size(); ++index) {
+        if (!reachable[index]) continue;
+        if (index == function.entry.value) {
+            dominators[index].insert(index);
+        } else {
+            for (std::size_t candidate = 0; candidate < function.blocks.size(); ++candidate) {
+                if (reachable[candidate]) dominators[index].insert(candidate);
+            }
+        }
+    }
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (std::size_t index = 0; index < function.blocks.size(); ++index) {
+            if (!reachable[index] || index == function.entry.value) continue;
+
+            std::set<std::size_t> intersection;
+            bool has_predecessor = false;
+            for (const auto predecessor : predecessors[index]) {
+                if (!reachable[predecessor]) continue;
+                if (!has_predecessor) {
+                    intersection = dominators[predecessor];
+                    has_predecessor = true;
+                } else {
+                    std::set<std::size_t> next;
+                    std::set_intersection(intersection.begin(), intersection.end(),
+                                          dominators[predecessor].begin(),
+                                          dominators[predecessor].end(),
+                                          std::inserter(next, next.begin()));
+                    intersection = std::move(next);
+                }
+            }
+            intersection.insert(index);
+            if (intersection != dominators[index]) {
+                dominators[index] = std::move(intersection);
+                changed = true;
+            }
+        }
+    }
+
+    auto definitionType = [&](IRValueId value, const Token& source) -> const Type& {
+        const auto definition = definitions.find(value.value);
+        if (definition == definitions.end()) {
+            fail("IR verifier: operand refers to an undefined value.", source);
+        }
+        return function.blocks[definition->second.block]
+            .instructions[definition->second.instruction].type;
+    };
+
+    for (std::size_t block_index = 0; block_index < function.blocks.size(); ++block_index) {
+        const auto& block = function.blocks[block_index];
+        for (std::size_t instruction_index = 0;
+             instruction_index < block.instructions.size(); ++instruction_index) {
+            const auto& instruction = block.instructions[instruction_index];
+
+            for (const auto operand : instruction.operands) {
+                const auto definition = definitions.at(operand.value);
+                if (definition.block == block_index) {
+                    if (definition.instruction >= instruction_index) {
+                        fail("IR verifier: value is used before its definition.", instruction.source);
+                    }
+                } else if (reachable[block_index] &&
+                           (!reachable[definition.block] ||
+                            dominators[block_index].count(definition.block) == 0)) {
+                    fail("IR verifier: value definition does not dominate its use.",
+                         instruction.source);
+                }
+            }
+
+            switch (instruction.opcode) {
+                case IROpcode::LoadIndirect:
+                    if (instruction.operands.size() != 1 ||
+                        definitionType(instruction.operands.front(), instruction.source).pointer_level == 0) {
+                        fail("IR verifier: load.indirect requires one pointer operand.", instruction.source);
+                    }
+                    break;
+                case IROpcode::StoreIndirect:
+                    if (instruction.operands.size() != 2 ||
+                        definitionType(instruction.operands.front(), instruction.source).pointer_level == 0 ||
+                        isVoidType(definitionType(instruction.operands.back(), instruction.source)) ||
+                        !sameValueType(instruction.type,
+                                       definitionType(instruction.operands.back(), instruction.source))) {
+                        fail("IR verifier: store.indirect has incompatible operands.", instruction.source);
+                    }
+                    break;
+                case IROpcode::Binary:
+                    if (instruction.operands.size() != 2 || instruction.operation.empty() ||
+                        isVoidType(definitionType(instruction.operands[0], instruction.source)) ||
+                        isVoidType(definitionType(instruction.operands[1], instruction.source))) {
+                        fail("IR verifier: binary instruction has invalid operands.", instruction.source);
+                    }
+                    break;
+                case IROpcode::Unary:
+                case IROpcode::Cast:
+                    if (instruction.operands.size() != 1 ||
+                        isVoidType(definitionType(instruction.operands.front(), instruction.source))) {
+                        fail("IR verifier: unary/cast instruction has an invalid operand.", instruction.source);
+                    }
+                    break;
+                case IROpcode::Call:
+                    if (instruction.symbol.empty()) {
+                        fail("IR verifier: call has no target symbol.", instruction.source);
+                    }
+                    for (const auto operand : instruction.operands) {
+                        if (isVoidType(definitionType(operand, instruction.source))) {
+                            fail("IR verifier: call cannot pass a void value.", instruction.source);
+                        }
+                    }
+                    break;
+                case IROpcode::CondBranch:
+                    if (!isIntegerType(definitionType(instruction.operands.front(), instruction.source))) {
+                        fail("IR verifier: conditional branch requires an integer condition.", instruction.source);
+                    }
+                    break;
+                case IROpcode::Switch:
+                    if (!isIntegerType(definitionType(instruction.operands.front(), instruction.source))) {
+                        fail("IR verifier: switch requires an integer condition.", instruction.source);
+                    }
+                    break;
+                case IROpcode::Return:
+                    if (isVoidType(function.return_type) ||
+                        !sameValueType(function.return_type,
+                                       definitionType(instruction.operands.front(), instruction.source))) {
+                        fail("IR verifier: return value does not match the function return type.",
+                             instruction.source);
+                    }
+                    break;
+                case IROpcode::ReturnVoid:
+                    if (!isVoidType(function.return_type)) {
+                        fail("IR verifier: non-void function must return a value.", instruction.source);
+                    }
+                    break;
+                default:
+                    break;
+            }
         }
     }
 }
@@ -241,7 +467,8 @@ IRValueId IRLowerer::emitValue(IROpcode opcode, const Type& type, const Token& s
                                const std::vector<IRValueId>& operands,
                                const std::string& operation,
                                const std::string& symbol,
-                               std::int64_t immediate) {
+                               std::int64_t immediate,
+                               SymbolId symbol_id) {
     IRInstruction instruction;
     instruction.opcode = opcode;
     instruction.type = type;
@@ -249,6 +476,7 @@ IRValueId IRLowerer::emitValue(IROpcode opcode, const Type& type, const Token& s
     instruction.operands = operands;
     instruction.operation = operation;
     instruction.symbol = symbol;
+    instruction.symbol_id = symbol_id;
     instruction.immediate = immediate;
     if (isValueOpcode(opcode) &&
         !(opcode == IROpcode::Call && type.base == BaseType::VOID)) {
@@ -312,7 +540,8 @@ IRValueId IRLowerer::lowerAddress(Expr& expr) {
     address_type.pointer_level += 1;
 
     if (auto* variable = dynamic_cast<VariableExpr*>(&expr)) {
-        return emitValue(IROpcode::Address, address_type, expr.token, {}, {}, variable->token.lexeme);
+        return emitValue(IROpcode::Address, address_type, expr.token, {}, {},
+                         variable->token.lexeme, 0, variable->symbol_id);
     }
     if (auto* dereference = dynamic_cast<DereferenceExpr*>(&expr)) {
         return lowerExpression(*dereference->right);
@@ -469,6 +698,8 @@ void IRLowerer::visit(VarDeclStmt& stmt) {
         return;
     }
     VariableExpr variable(stmt.token);
+    variable.result_type = stmt.type;
+    variable.symbol_id = stmt.symbol_id;
     const auto address = lowerAddress(variable);
     const auto value = lowerExpression(*stmt.initializer);
     IRInstruction instruction;
@@ -749,6 +980,9 @@ std::string dumpIR(const IRModule& module) {
                 }
                 if (!instruction.symbol.empty()) {
                     output << " @" << instruction.symbol;
+                    if (instruction.symbol_id.isValid()) {
+                        output << "#" << instruction.symbol_id.value;
+                    }
                 }
                 if (instruction.opcode == IROpcode::Constant) {
                     output << " " << instruction.immediate;

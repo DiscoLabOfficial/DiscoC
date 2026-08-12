@@ -17,7 +17,7 @@
 class IRCodeGenerator {
 public:
     IRCodeGenerator(
-        const std::map<std::string, std::map<std::string, Symbol>>& all_local_symbols,
+        const std::map<std::string, Analyzer::LocalSymbolTable>& all_local_symbols,
         const std::map<std::string, FunctionSymbol>& global_function_symbols,
         const DataSegmentManager& data_manager,
         const CompilerConfig& config);
@@ -65,7 +65,7 @@ private:
                        RelocationType type);
     void fail(const std::string& message, const Token& source) const;
 
-    const std::map<std::string, std::map<std::string, Symbol>>& m_all_local_symbols;
+    const std::map<std::string, Analyzer::LocalSymbolTable>& m_all_local_symbols;
     const std::map<std::string, FunctionSymbol>& m_global_function_symbols;
     const DataSegmentManager& m_data_manager;
     const CompilerConfig& m_config;

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <fstream>
+#include <istream>
 #include "TargetConfig.hpp"
 
 // The type of relocation required.
@@ -38,6 +39,12 @@ struct RelocationEntry {
 // Represents the entire contents of a .o file.
 class ObjectFile {
 public:
+    static constexpr std::uint8_t CurrentFormatVersion = 1;
+    static constexpr std::uint32_t MaxSectionBytes = 64u * 1024u * 1024u;
+    static constexpr std::uint32_t MaxStringBytes = 4096u;
+    static constexpr std::uint32_t MaxSymbolCount = 1'000'000u;
+    static constexpr std::uint32_t MaxRelocationCount = 1'000'000u;
+
     ObjectFile() = default;
 
     // Data members
@@ -50,13 +57,19 @@ public:
     // Serialization / Deserialization
     void write(const std::string& path);
     static ObjectFile read(const std::string& path);
+    static ObjectFile readBytes(const std::vector<std::uint8_t>& bytes);
 
 private:
     // Helpers for binary I/O
     static void write_string(std::ofstream& out, const std::string& s);
-    static std::string read_string(std::ifstream& in);
+    static std::string read_string(std::istream& in, const char* field_name);
     template<typename T>
     static void write_vec(std::ofstream& out, const std::vector<T>& vec);
     template<typename T>
-    static void read_vec(std::ifstream& in, std::vector<T>& vec);
+    static void read_vec(std::istream& in, std::vector<T>& vec,
+                         std::uint32_t max_elements, const char* field_name);
+    static std::uint64_t remaining_bytes(std::istream& in);
+    static ObjectFile read_stream(std::istream& in, const std::string& source_name);
+    static void validate_relocation(const RelocationEntry& relocation,
+                                    const ObjectFile& object);
 };
