@@ -1,4 +1,6 @@
 #include "AssemblyGenerator.hpp"
+#include "ABI.hpp"
+#include <limits>
 #include <stdexcept>
 #include "CompilerError.hpp"
 
@@ -210,7 +212,12 @@ void AssemblyGenerator::visit(CallExpr& expr, const Type*) {
     emit("jal " + callee_var->token.lexeme);
 
     // 3. Caller stack cleanup
-    int bytes_to_pop = static_cast<int>(expr.arguments.size()) * 2;
+    if (expr.arguments.size() >
+        std::numeric_limits<std::size_t>::max() / GSUAbi::ParameterSlotSize) {
+        throw CompilerError("ASM GEN: call argument area is too large.",
+                            expr.token.line_number, expr.token.col_number);
+    }
+    const auto bytes_to_pop = expr.arguments.size() * GSUAbi::ParameterSlotSize;
     if (bytes_to_pop > 0) {
         emit("add sp, sp, #" + std::to_string(bytes_to_pop), "Clean up arguments from stack");
     }
@@ -558,18 +565,31 @@ void AssemblyGenerator::visit(SwitchStmt& stmt) {
     
     // Choose a safe scratch register for comparison.
     std::string scratch_reg = m_isInPlottingContext ? "r3" : "r1";
-    
-    for (const auto* cs : case_stmts) {
-        emit("push r0", "Save switch condition value");
-        cs->value->accept(*this, nullptr); // Literal value is now in R0
-        emit("pop " + scratch_reg, "Restore switch condition value to " + scratch_reg);
-        emit("cmp " + scratch_reg + ", r0", "Compare condition with case value");
-        emit("beq " + cs->label_name);
+
+    if (auto* literal_condition = dynamic_cast<LiteralExpr*>(stmt.condition.get())) {
+        const auto selector = std::stoll(literal_condition->token.lexeme, nullptr, 0);
+        const CaseStmt* selected_case = nullptr;
+        for (const auto* cs : case_stmts) {
+            const auto case_value = std::stoll(cs->value->token.lexeme, nullptr, 0);
+            if (case_value == selector) {
+                selected_case = cs;
+                break;
+            }
+        }
+        emit("bra " + (selected_case ? selected_case->label_name : default_target_label),
+             "Constant switch selector" );
+        emit("nop");
+    } else {
+        emit("move " + scratch_reg + ", r0", "Keep switch selector in a scratch register");
+        for (const auto* cs : case_stmts) {
+            cs->value->accept(*this, nullptr);
+            emit("cmp " + scratch_reg + ", r0", "Compare selector with case value");
+            emit("beq " + cs->label_name);
+            emit("nop");
+        }
+        emit("bra " + default_target_label);
         emit("nop");
     }
-    
-    emit("bra " + default_target_label);
-    emit("nop");
 
     emit("", "--- Switch Body ---");
     m_indent_level++;

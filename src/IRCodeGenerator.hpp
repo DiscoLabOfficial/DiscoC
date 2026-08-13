@@ -32,6 +32,12 @@ private:
         Token source = {TokenType::UNKNOWN, "", 0, 0};
     };
 
+    struct LocalBranchFixup {
+        std::size_t patch_offset = 0;
+        std::size_t target_offset = 0;
+        Token source = {TokenType::UNKNOWN, "", 0, 0};
+    };
+
     void emitByte(std::uint8_t byte);
     void emitWord(std::uint16_t word);
     void emitLiteral(std::int64_t value);
@@ -50,6 +56,7 @@ private:
     void emitConditionalBranch(const IRInstruction& instruction);
     void emitSwitch(const IRInstruction& instruction);
     void patchBranches();
+    void patchLocalBranches(const std::vector<LocalBranchFixup>& fixups);
 
     std::uint8_t scratchRegister() const;
     const IRInstruction& producer(IRValueId value, const Token& source) const;

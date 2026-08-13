@@ -1,0 +1,40 @@
+word choose(word value) {
+    word result = 99;
+    switch (value) {
+        case 1:
+            result = 10;
+            break;
+        case 2:
+            result = 20;
+            break;
+        case 3:
+            result = 30;
+            break;
+        case 4:
+            result = 40;
+            break;
+        default:
+            break;
+    }
+    return result;
+}
+
+word accumulate(word first, word second, word third) {
+    return first + second + third;
+}
+
+void main() {
+    word selected = choose(4);
+    word result = accumulate(selected, 2, 3);
+    switch (3) {
+        case 1:
+            result = 1;
+            break;
+        case 3:
+            result = result + 1;
+            break;
+        default:
+            result = 0;
+            break;
+    }
+}

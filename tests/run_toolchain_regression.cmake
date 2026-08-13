@@ -103,6 +103,36 @@ elseif(CASE STREQUAL "multifile")
         message(FATAL_ERROR "Multi-file link produced an empty payload")
     endif()
 
+elseif(CASE STREQUAL "switch_abi")
+    set(source "${ROOT_DIR}/examples/switch_abi.dc")
+    run_command("${DISCC}" "${source}" -o "${TEST_DIR}/switch-abi.o")
+    run_command("${DISCLD}" "${TEST_DIR}/switch-abi.o" -o "${TEST_DIR}/switch-abi.bin")
+    file(SIZE "${TEST_DIR}/switch-abi.bin" linked_size)
+    if(linked_size LESS 1)
+        message(FATAL_ERROR "Switch/ABI regression produced an empty payload")
+    endif()
+
+    execute_process(
+        COMMAND "${DISCC}" --emit-asm "${source}" -o "${TEST_DIR}/switch-abi.s"
+        RESULT_VARIABLE asm_result
+        OUTPUT_VARIABLE asm_output
+        ERROR_VARIABLE asm_error
+    )
+    if(asm_result)
+        message(FATAL_ERROR "Assembly ABI regression failed\nstdout:\n${asm_output}\nstderr:\n${asm_error}")
+    endif()
+    file(READ "${TEST_DIR}/switch-abi.s" asm_output)
+    if(asm_output MATCHES "Save switch condition value")
+        message(FATAL_ERROR "Assembly switch path still saves the selector for every case")
+    endif()
+    if(NOT asm_output MATCHES "Constant switch selector")
+        message(FATAL_ERROR "Assembly switch constant-folding path was not used")
+    endif()
+    if(NOT asm_output MATCHES "push r11" OR NOT asm_output MATCHES "push r9" OR
+       NOT asm_output MATCHES "jal accumulate")
+        message(FATAL_ERROR "ABI prologue/call sequence is missing from assembly output")
+    endif()
+
 elseif(CASE STREQUAL "backend_equivalence")
     foreach(name IN ITEMS math loop loop_opt plot test_casts ir_control_flow)
         set(source "${ROOT_DIR}/examples/${name}.dc")

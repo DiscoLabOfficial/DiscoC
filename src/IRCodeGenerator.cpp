@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 
 #include "CompilerError.hpp"
+#include "ABI.hpp"
 #include "Opcodes.hpp"
 
 IRCodeGenerator::IRCodeGenerator(
@@ -103,15 +105,15 @@ void IRCodeGenerator::emitAdjustStack(std::size_t bytes, bool add, const Token& 
 }
 
 void IRCodeGenerator::emitFunctionEpilogue() {
-    emitMove(10, 9);
+    emitMove(GSUAbi::StackPointerRegister, GSUAbi::FramePointerRegister);
     if (m_current_function->name == "main") {
         emitByte(static_cast<std::uint8_t>(OpCode::STOP));
         emitByte(static_cast<std::uint8_t>(OpCode::NOP));
         return;
     }
-    emitPop(9);
-    emitPop(11);
-    emitByte(static_cast<std::uint8_t>(0x90 | 11));
+    emitPop(GSUAbi::FramePointerRegister);
+    emitPop(GSUAbi::LinkRegister);
+    emitByte(static_cast<std::uint8_t>(0x90 | GSUAbi::LinkRegister));
     emitByte(static_cast<std::uint8_t>(OpCode::NOP));
 }
 
@@ -401,7 +403,12 @@ void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
     emitByte(static_cast<std::uint8_t>(OpCode::IWT) | 0x0F);
     emitWord(0);
     addRelocation(instruction.symbol, patch_offset, RelocationType::ADDR16_JAL);
-    emitAdjustStack(instruction.operands.size() * 2, true, instruction.source);
+    if (instruction.operands.size() >
+        std::numeric_limits<std::size_t>::max() / GSUAbi::ParameterSlotSize) {
+        fail("IR codegen: call argument area is too large.", instruction.source);
+    }
+    emitAdjustStack(instruction.operands.size() * GSUAbi::ParameterSlotSize,
+                    true, instruction.source);
     restoreRegistersAfterCall(saved_registers);
 }
 
@@ -540,30 +547,137 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
     if (instruction.operands.size() != 1 || instruction.targets.empty()) {
         fail("IR codegen: switch shape is invalid.", instruction.source);
     }
+    const auto default_index = instruction.has_default_target
+        ? instruction.targets.size() - 1
+        : instruction.targets.size();
+
+    std::int64_t constant_selector = 0;
+    if (constantValue(instruction.operands.front(), constant_selector)) {
+        for (std::size_t index = 0; index < instruction.case_values.size(); ++index) {
+            if (instruction.case_values[index] == constant_selector) {
+                emitBranch(instruction.targets[index], instruction.source);
+                return;
+            }
+        }
+        if (default_index < instruction.targets.size()) {
+            emitBranch(instruction.targets[default_index], instruction.source);
+        }
+        return;
+    }
+
     materialize(instruction.operands.front());
     emitMove(scratchRegister(), 0);
 
-    std::size_t case_index = 0;
-    for (; case_index < instruction.case_values.size(); ++case_index) {
+    // A short switch remains a compact linear chain. For larger switches,
+    // compare against the median case and recursively search each half. This
+    // reduces comparisons from O(n) to O(log n) without changing case/fall-
+    // through semantics or the object-file relocation model.
+    if (instruction.case_values.size() < 4) {
+        for (std::size_t case_index = 0;
+             case_index < instruction.case_values.size(); ++case_index) {
+            emitLiteral(instruction.case_values[case_index]);
+            emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
+            emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
+            emitByte(static_cast<std::uint8_t>(OpCode::BEQ));
+            const auto patch_offset = m_object_file.code_section.size();
+            emitByte(0);
+            emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+            m_branch_fixups.push_back({patch_offset, instruction.targets[case_index], instruction.source});
+        }
+        if (default_index < instruction.targets.size()) {
+            emitByte(static_cast<std::uint8_t>(OpCode::BRA));
+            const auto patch_offset = m_object_file.code_section.size();
+            emitByte(0);
+            emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+            m_branch_fixups.push_back({patch_offset, instruction.targets[default_index], instruction.source});
+        }
+        return;
+    }
+
+    std::vector<std::size_t> order(instruction.case_values.size());
+    for (std::size_t index = 0; index < order.size(); ++index) order[index] = index;
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t left, std::size_t right) {
+        return instruction.case_values[left] < instruction.case_values[right];
+    });
+
+    std::vector<std::size_t> labels;
+    std::vector<LocalBranchFixup> local_fixups;
+    const auto new_label = [&labels]() {
+        labels.push_back(0);
+        return labels.size() - 1;
+    };
+    const auto emit_local_branch = [&](std::uint8_t opcode, std::size_t label) {
+        emitByte(opcode);
+        const auto patch_offset = m_object_file.code_section.size();
+        emitByte(0);
+        emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+        local_fixups.push_back({patch_offset, label, instruction.source});
+    };
+    const auto emit_block_branch = [&](std::uint8_t opcode, IRBlockId target) {
+        emitByte(opcode);
+        const auto patch_offset = m_object_file.code_section.size();
+        emitByte(0);
+        emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+        m_branch_fixups.push_back({patch_offset, target, instruction.source});
+    };
+
+    std::function<void(std::size_t, std::size_t, std::size_t)> emit_search;
+    emit_search = [&](std::size_t begin, std::size_t end, std::size_t label) {
+        labels[label] = m_object_file.code_section.size();
+        const auto middle = begin + (end - begin) / 2;
+        const auto case_index = order[middle];
         emitLiteral(instruction.case_values[case_index]);
         emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
         emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
         emitByte(static_cast<std::uint8_t>(OpCode::BEQ));
-        const auto patch_offset = m_object_file.code_section.size();
+        const auto equal_patch = m_object_file.code_section.size();
         emitByte(0);
         emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-        m_branch_fixups.push_back({patch_offset, instruction.targets[case_index], instruction.source});
-    }
+        m_branch_fixups.push_back({equal_patch, instruction.targets[case_index], instruction.source});
 
-    const auto default_index = instruction.has_default_target
-        ? instruction.targets.size() - 1
-        : instruction.targets.size();
-    if (default_index < instruction.targets.size()) {
-        emitByte(static_cast<std::uint8_t>(OpCode::BRA));
-        const auto patch_offset = m_object_file.code_section.size();
-        emitByte(0);
-        emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-        m_branch_fixups.push_back({patch_offset, instruction.targets[default_index], instruction.source});
+        const bool has_left = begin < middle;
+        const bool has_right = middle + 1 < end;
+        std::size_t left_label = 0;
+        std::size_t right_label = 0;
+        if (has_left) {
+            left_label = new_label();
+            // The GSU CMP/branch convention used by the existing relational
+            // emitter selects the lower half with BPL after cmp scratch,R0.
+            emit_local_branch(static_cast<std::uint8_t>(OpCode::BPL), left_label);
+        } else if (default_index < instruction.targets.size()) {
+            emit_block_branch(static_cast<std::uint8_t>(OpCode::BPL),
+                              instruction.targets[default_index]);
+        }
+        if (has_right) {
+            right_label = new_label();
+            emit_local_branch(static_cast<std::uint8_t>(OpCode::BRA), right_label);
+        } else if (default_index < instruction.targets.size()) {
+            emit_block_branch(static_cast<std::uint8_t>(OpCode::BRA),
+                              instruction.targets[default_index]);
+        }
+
+        if (has_left) {
+            emit_search(begin, middle, left_label);
+        }
+        if (has_right) {
+            emit_search(middle + 1, end, right_label);
+        }
+    };
+
+    const auto root_label = new_label();
+    emit_search(0, order.size(), root_label);
+    patchLocalBranches(local_fixups);
+}
+
+void IRCodeGenerator::patchLocalBranches(const std::vector<LocalBranchFixup>& fixups) {
+    for (const auto& fixup : fixups) {
+        const auto next_instruction = static_cast<std::int64_t>(fixup.patch_offset) + 1;
+        const auto distance = static_cast<std::int64_t>(fixup.target_offset) - next_instruction;
+        if (distance < -128 || distance > 127) {
+            fail("IR codegen: optimized switch branch is out of range.", fixup.source);
+        }
+        m_object_file.code_section.at(fixup.patch_offset) =
+            static_cast<std::uint8_t>(static_cast<std::int8_t>(distance));
     }
 }
 
@@ -700,9 +814,9 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
         const auto function_offset = static_cast<std::uint32_t>(m_object_file.code_section.size());
         m_object_file.symbol_table.push_back({function.name, SymbolSection::CODE, function_offset});
 
-        emitPush(11);
-        emitPush(9);
-        emitMove(9, 10);
+        emitPush(GSUAbi::LinkRegister);
+        emitPush(GSUAbi::FramePointerRegister);
+        emitMove(GSUAbi::FramePointerRegister, GSUAbi::StackPointerRegister);
         if (function.total_local_alloc_size > 0) {
             emitAdjustStack(static_cast<std::size_t>(function.total_local_alloc_size), false,
                             Token(TokenType::UNKNOWN, "", 0, 0));

@@ -1,4 +1,5 @@
 #include "Analyzer.hpp"
+#include "ABI.hpp"
 #include <cstdint>
 #include <stdexcept>
 #include <set>
@@ -145,7 +146,7 @@ void Analyzer::visit(FunctionDeclStmt& stmt) {
 
     // STEP 1: Process parameters. They have POSITIVE offsets from the frame pointer.
     // The layout is: [FP+4]=Param1, [FP+2]=ReturnAddr, [FP]=Old_FP
-    int paramOffset = 4;
+    int paramOffset = GSUAbi::FirstParameterOffset;
     for (auto& param : stmt.params) {
         if (m_scopes.back().count(param.name.lexeme)) {
             throw CompilerError("Duplicate parameter name '" + param.name.lexeme + "'.", param.name.line_number, param.name.col_number);
@@ -167,7 +168,7 @@ void Analyzer::visit(FunctionDeclStmt& stmt) {
         m_current_function_locals->emplace(symbol_id, symbol);
         param.symbol_id = symbol_id;
         m_scopes.back()[param.name.lexeme] = symbol_id;
-        paramOffset += 2; // All params passed on stack are word-aligned as it should be
+        paramOffset += static_cast<int>(GSUAbi::ParameterSlotSize);
     }
 
     // STEP 2: Process the function body to find local variables and their sizes.

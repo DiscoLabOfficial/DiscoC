@@ -81,6 +81,11 @@ Each compilation unit can produce a relocatable `.o` file. The object stores cod
 
 The linker currently lays out all code before all data. Symbol addresses are calculated from the configured code start address and the accumulated section offsets.
 
+For switches, constant selectors are lowered to a direct branch. Dynamic
+switches with four or more cases use a balanced comparison tree; smaller
+switches retain the compact linear form. Case blocks and fall-through edges
+remain explicit in the IR, so this is a dispatch optimization only.
+
 ## GSU ABI conventions
 
 The compiler targets the GSU instruction set and ABI described in Nintendo's official SNES Development Manual, Book II, Super FX section. The generated code follows the project's documented GSU conventions while keeping external assembly support optional.
@@ -99,6 +104,13 @@ The relevant register conventions used by the compiler are:
 | `R15` / `PC` | program counter and call target register |
 
 Generated functions save the link and frame registers, establish `R9` as the frame pointer, allocate aligned local storage, and restore the frame before returning. Parameters use positive frame-pointer offsets beginning at `FP + 4`; locals use negative offsets. Stack arguments are word-aligned.
+
+The ABI classifies `R9` and `R11` as callee-preserved. `R0`, `R1`, `R3`, and
+the allocated value registers `R5`, `R7`, and `R8` are caller-preserved; the
+caller saves any allocated value that remains live across a call. `R10` is
+owned by the stack frame, `R12`/`R13` are reserved for hardware loops, `R14`
+is the ROM address register, and `R15` is the program counter. Every argument
+occupies one aligned two-byte stack slot, including byte arguments.
 
 ## Target configuration
 
