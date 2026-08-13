@@ -1,6 +1,8 @@
 # DiscoC Architecture
 
-DiscoC is a small compiler toolchain for the SuperFX/GSU processor. The repository contains a source compiler, a textual assembly emitter, a standalone assembler, and a relocatable object linker.
+DiscoC is a small compiler toolkit for specialized hardware targets. The current
+code-generation backend targets the SuperFX/GSU processor; the repository also
+contains the initial target model for a future SPC-700 backend.
 
 ## End-to-end pipeline
 
@@ -19,7 +21,10 @@ Lexer -> Parser -> AST -> Optimizer -> Analyzer
                                IRVerifier
                                       |
                                       v
-                            IRCodeGenerator
+                       target backend selection
+                         /              \\
+                        v                v
+                 IRCodeGenerator   future SPC700 backend
                                       |
                                       v
                               relocatable .o
@@ -28,7 +33,7 @@ Lexer -> Parser -> AST -> Optimizer -> Analyzer
                                discld linker
                                       |
                                       v
-                              linked GSU payload
+                         linked target payload
 ```
 
 The compiler also exposes two inspection or alternate-emission paths:
@@ -60,11 +65,17 @@ later. Prototypes do not generate code or duplicate object-file symbols.
 
 ### IR lowering and verification
 
-`IRLowerer` converts the analyzed AST into a typed, control-flow-aware IR. `IRVerifier` checks structural invariants before code generation. This keeps target-independent compiler structure separate from GSU byte encoding.
+`IRLowerer` converts the analyzed AST into a typed, control-flow-aware IR. `IRVerifier` checks structural invariants before code generation. This keeps target-independent compiler structure separate from GSU or SPC-700 byte encoding.
 
 ### Target backends
 
 The default object path uses `IRCodeGenerator`. It consumes only verified IR plus analyzed symbol/data information and emits GSU instructions into the project object format.
+
+The `SPC700Target` model records the SPC-700 address width, memory-mapped
+regions, register roles, and initial return-value convention. It is a
+foundation-only target at present: `--emit-ir` can inspect programs selected
+for SPC-700, while object and assembly emission reject that target until its
+lowering and assembler stages exist.
 
 Before emission, `IRCodeGenerator` runs a linear-scan allocation over the
 verified `IRValueId` live intervals. Reused values may reside in `R5`, `R7`, or
@@ -114,14 +125,25 @@ occupies one aligned two-byte stack slot, including byte arguments.
 
 ## Target configuration
 
-The object format carries the memory mapping and code start address. The supported mappings are `LoROM` and `HiROM`. The linker rejects a set of input objects when their target configurations are incompatible.
+The object format carries the target, memory mapping, and code start address.
+The supported target identifiers are `GSU` and `SPC700`; the supported SNES
+mappings are `LoROM` and `HiROM`. The linker rejects a set of input objects
+when their target configurations are incompatible.
 
-Source-level configuration is set with directives such as:
+Build-level target selection is provided on the command line, while source
+directives configure target-specific placement details:
 
 ```c
 set memory_mapping = lorom;
 set code_start_address = 0x8000;
 ```
+
+```bash
+discc --target gsu program.dc -o program.o
+```
+
+The SPC-700 target model and ABI proposal are documented in
+[`spc700-target.md`](spc700-target.md).
 
 ## Ownership and stability model
 

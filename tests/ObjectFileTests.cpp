@@ -24,7 +24,9 @@ void appendU32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
 }
 
 std::vector<std::uint8_t> objectPrefix() {
-    std::vector<std::uint8_t> bytes{'D', 'I', 'S', 'C', 'O', ObjectFile::CurrentFormatVersion, 0};
+    std::vector<std::uint8_t> bytes{
+        'D', 'I', 'S', 'C', 'O', ObjectFile::CurrentFormatVersion,
+        static_cast<std::uint8_t>(TargetKind::GSU), 0};
     appendU32(bytes, 0x8000);
     return bytes;
 }
@@ -69,6 +71,7 @@ int main() {
         expectReadFailure(directory / "invalid-relocation.o");
 
         ObjectFile valid;
+        valid.config.target = TargetKind::SPC700;
         valid.code_section = {0x01, 0x02};
         valid.data_section = {0x03};
         valid.symbol_table.push_back({"entry", SymbolSection::CODE, 0});
@@ -77,6 +80,7 @@ int main() {
         const auto loaded = ObjectFile::read(valid_path.string());
         if (loaded.code_section != valid.code_section ||
             loaded.data_section != valid.data_section ||
+            loaded.config.target != valid.config.target ||
             loaded.symbol_table.size() != 1 ||
             loaded.symbol_table.front().name != "entry") {
             throw std::runtime_error("valid object did not round-trip");

@@ -147,6 +147,15 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     target_include_directories(disco_linear_scan_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(disco_linear_scan_tests PRIVATE disco_common_warnings)
 
+    add_executable(disco_target_foundation_tests
+        tests/TargetFoundationTests.cpp
+        src/Lexer.cpp
+        src/Parser.cpp
+        src/Token.cpp
+    )
+    target_include_directories(disco_target_foundation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(disco_target_foundation_tests PRIVATE disco_common_warnings)
+
     function(add_toolchain_regression name case_name)
         add_test(
             NAME ${name}
@@ -164,6 +173,7 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_test(NAME object_file_hardening COMMAND disco_object_tests)
     add_test(NAME ir_verifier COMMAND disco_ir_verifier_tests)
     add_test(NAME linear_scan_allocator COMMAND disco_linear_scan_tests)
+    add_test(NAME target_foundation COMMAND disco_target_foundation_tests)
     add_toolchain_regression(ir_and_cfg ir_and_cfg)
     add_toolchain_regression(shadowing shadowing)
     add_toolchain_regression(diagnostics diagnostics)
@@ -173,6 +183,7 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_toolchain_regression(backend_equivalence backend_equivalence)
     add_toolchain_regression(data_relocation data_relocation)
     add_toolchain_regression(feature_examples feature_examples)
+    add_toolchain_regression(spc700_target spc700_target)
 endif()
 
 # Link Dependencies & Apply Flags

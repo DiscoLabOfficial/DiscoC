@@ -15,6 +15,22 @@
 #include "IR.hpp"
 #include "IRCodeGenerator.hpp"
 
+namespace {
+
+bool parseTargetName(const std::string& name, TargetKind& target) {
+    if (name == "gsu") {
+        target = TargetKind::GSU;
+        return true;
+    }
+    if (name == "spc700") {
+        target = TargetKind::SPC700;
+        return true;
+    }
+    return false;
+}
+
+} // namespace
+
 // Helper function to read a file's content into a string
 std::string readFile(const std::string& path) {
     std::ifstream file(path);
@@ -28,11 +44,12 @@ std::string readFile(const std::string& path) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: discc [options] <file.dc> -o <outfile>" << std::endl;
+        std::cerr << "Usage: discc [options] [--target <gsu|spc700>] <file.dc> -o <outfile>" << std::endl;
         std::cerr << "Options:" << std::endl;
         std::cerr << "  --emit-asm    Output human-readable assembly (.s) instead of an object file (.o)." << std::endl;
         std::cerr << "  --emit-ast    Print the Abstract Syntax Tree (AST) and exit." << std::endl;
         std::cerr << "  --emit-ir     Print the verified intermediate representation and CFG." << std::endl;
+        std::cerr << "  --target      Select the code-generation target (default: gsu)." << std::endl;
         std::cerr << "  -Wno-cache-overflow   Suppress warnings for cached blocks exceeding 512 bytes." << std::endl;
         return 1;
     }
@@ -42,6 +59,7 @@ int main(int argc, char* argv[]) {
     bool emit_asm = false;
 	bool emit_ast = false;
 	bool emit_ir = false;
+    TargetKind target = TargetKind::GSU;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -58,6 +76,17 @@ int main(int argc, char* argv[]) {
             emit_ast = true;
         } else if (arg == "--emit-ir") {
             emit_ir = true;
+        } else if (arg == "--target") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --target requires 'gsu' or 'spc700'." << std::endl;
+                return 1;
+            }
+            const std::string target_name = argv[++i];
+            if (!parseTargetName(target_name, target)) {
+                std::cerr << "Error: Unsupported target '" << target_name
+                          << "'. Use 'gsu' or 'spc700'." << std::endl;
+                return 1;
+            }
         } else if (arg == "-Wno-cache-overflow") {
             // This flag will be read later from the parser's config object.
         } else {
@@ -94,6 +123,7 @@ int main(int argc, char* argv[]) {
         Lexer lexer(source);
         auto tokens = lexer.scanTokens();
         Parser parser(tokens);
+        parser.getConfigForUpdate().target = target;
         // Now, handle the flag again for the actual parser instance
         for (int i = 1; i < argc; ++i) {
              if (std::string(argv[i]) == "-Wno-cache-overflow") {
@@ -132,6 +162,13 @@ int main(int argc, char* argv[]) {
         if (emit_ir) {
             std::cout << dumpIR(ir_module);
             return 0;
+        }
+
+        if (parser.getConfig().target != TargetKind::GSU) {
+            throw CompilerError(
+                std::string("Target '") + targetName(parser.getConfig().target) +
+                    "' has a target model but no code-generation backend yet.",
+                1, 1);
         }
 
         // 5. Backend (Code Generation or Assembly Emission)

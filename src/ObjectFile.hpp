@@ -39,7 +39,7 @@ struct RelocationEntry {
 // Represents the entire contents of a .o file.
 class ObjectFile {
 public:
-    static constexpr std::uint8_t CurrentFormatVersion = 1;
+    static constexpr std::uint8_t CurrentFormatVersion = 2;
     static constexpr std::uint32_t MaxSectionBytes = 64u * 1024u * 1024u;
     static constexpr std::uint32_t MaxStringBytes = 4096u;
     static constexpr std::uint32_t MaxSymbolCount = 1'000'000u;

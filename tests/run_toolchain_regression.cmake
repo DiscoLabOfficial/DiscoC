@@ -91,6 +91,7 @@ elseif(CASE STREQUAL "language_diagnostics")
     run_expected_failure_contains("break.*loop or switch" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_break.dc" -o "${TEST_DIR}/invalid-break.o")
     run_expected_failure_contains("Void is not a valid variable declaration type" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_void_variable.dc" -o "${TEST_DIR}/invalid-void.o")
     run_expected_failure_contains("out of range for word" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_rom_value.dc" -o "${TEST_DIR}/invalid-rom.o")
+    run_expected_failure_contains("Unknown configuration key" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_target_directive.dc" -o "${TEST_DIR}/invalid-target.o")
     run_command("${DISCC}" "${ROOT_DIR}/tests/fixtures/valid_break.dc" -o "${TEST_DIR}/valid-break.o")
 
 elseif(CASE STREQUAL "multifile")
@@ -163,6 +164,19 @@ elseif(CASE STREQUAL "feature_examples")
         run_command("${DISCC}" "${ROOT_DIR}/examples/${name}.dc" -o "${TEST_DIR}/${name}.o")
         run_command("${DISCLD}" "${TEST_DIR}/${name}.o" -o "${TEST_DIR}/${name}.bin")
     endforeach()
+
+elseif(CASE STREQUAL "spc700_target")
+    set(source "${ROOT_DIR}/tests/fixtures/spc700_foundation.dc")
+    execute_process(
+        COMMAND "${DISCC}" --target spc700 "${source}" --emit-ir
+        RESULT_VARIABLE ir_result
+        OUTPUT_VARIABLE ir_output
+        ERROR_VARIABLE ir_error
+    )
+    if(ir_result OR NOT ir_output MATCHES "function main")
+        message(FATAL_ERROR "SPC700 target should remain inspectable through IR\nstdout:\n${ir_output}\nstderr:\n${ir_error}")
+    endif()
+    run_expected_failure_contains("no code-generation backend" "${DISCC}" --target spc700 "${source}" -o "${TEST_DIR}/spc700.o")
 
 else()
     message(FATAL_ERROR "Unknown regression case: ${CASE}")

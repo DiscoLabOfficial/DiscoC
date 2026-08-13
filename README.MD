@@ -1,8 +1,11 @@
-# DiscoC: A C++23 Toolchain for SuperFX (GSU)
+# DiscoC: A C++23 Cross-Compilation Toolchain
 
 [![CMake](https://github.com/DiscoLabOfficial/DiscoC/actions/workflows/cmake.yml/badge.svg)](https://github.com/DiscoLabOfficial/DiscoC/actions/workflows/cmake.yml)
 
-DiscoC is a custom **systems programming language and complete toolchain** (Compiler, Assembler, and Linker) targeting the **Super Nintendo's SuperFX (GSU)** RISC co-processor.
+DiscoC is a custom **systems programming language and complete cross-compilation
+toolchain** (Compiler, Assembler, and Linker) for specialized hardware targets.
+The current production backend targets the **Super Nintendo's SuperFX (GSU)**
+RISC co-processor, while the SPC-700 target foundation is now being developed.
 
 Written in **Modern C++ (C++23)**, this project aims to bring modern development practices to legacy hardware constraints. It features a custom **Relocatable Object File format**, a dedicated Linker for memory mapping resolution, and hardware-specific optimizations.
 
@@ -23,12 +26,17 @@ Written in **Modern C++ (C++23)**, this project aims to bring modern development
 ### Compiler & Toolchain
 *   **Two-Stage Build Process:** A separate compiler (`discc`) and linker (`discld`) for multi-file projects.
 *   **Assembly Export:** Inspect the compiler's output with the `--emit-asm` flag.
+*   **Explicit target selection:** Choose the processor from the build command,
+    for example `discc --target gsu program.dc` or `discc --target spc700 program.dc`.
 *   **Standalone Assembler:** `discas` consumes the emitted ca65-like `.s` syntax and produces the same relocatable `.o` format used by `discc`.
 *   **Intermediate Representation and CFG:** `discc --emit-ir` prints the verified, target-independent IR and its basic blocks/control-flow graph. Normal object compilation verifies this stage before the IR backend emits GSU code.
 *   **Hardware-Specific Optimizations:**
     *   Recognizes `for` loops and converts them to the ultra-fast `LOOP` instruction.
     *   Optimizes small integer arithmetic into single-byte immediate instructions.
 *   **Custom Object File Format** for relocatable code.
+*   **Multi-target foundation:** the object format and configuration identify
+    the target processor explicitly. The initial SPC-700 model is available for
+    IR inspection, with code generation planned for a later milestone.
 
 ### Architecture & Engineering Highlights
 
@@ -136,6 +144,7 @@ Detailed design and format documentation is available in the [`docs/`](docs/) di
 * [`object-format.md`](docs/object-format.md) — relocatable object-file layout and linker behavior.
 * [`testing.md`](docs/testing.md) — CTest regressions, sanitizer checks, and optional fuzzing.
 * [`assembler.md`](docs/assembler.md) — the `discas` input language and supported assembly workflow.
+* [`spc700-target.md`](docs/spc700-target.md) — SPC-700 target model, ABI proposal, and initial language subset.
 
 ## License
 

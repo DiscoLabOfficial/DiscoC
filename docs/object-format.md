@@ -11,7 +11,8 @@ All integer fields are written in the host's little-endian representation by the
 | Field | Encoding |
 | --- | --- |
 | Magic | 5 ASCII bytes: `DISCO` |
-| Format version | `uint8_t`: currently `1` |
+| Format version | `uint8_t`: currently `2` |
+| Target | `uint8_t`: `0` = GSU, `1` = SPC700 |
 | Memory mapping | `uint8_t`: `0` = LoROM, `1` = HiROM |
 | Code start address | `uint32_t` |
 | Code section | `uint32_t` byte count, followed by raw code bytes |
