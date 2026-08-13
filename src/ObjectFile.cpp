@@ -97,6 +97,9 @@ void ObjectFile::write(const std::string& path) {
     const auto version = CurrentFormatVersion;
     out.write(reinterpret_cast<const char*>(&version), sizeof(version));
 
+    const auto target = static_cast<std::uint8_t>(config.target);
+    out.write(reinterpret_cast<const char*>(&target), sizeof(target));
+
     const auto mapping = static_cast<uint8_t>(config.mapping);
     out.write(reinterpret_cast<const char*>(&mapping), sizeof(mapping));
     out.write(reinterpret_cast<const char*>(&config.code_start_address), sizeof(config.code_start_address));
@@ -155,6 +158,13 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
     if (!in || version != CurrentFormatVersion) {
         throw std::runtime_error("File has an unsupported DiscoC object format version: " + path);
     }
+
+    uint8_t target = 0;
+    in.read(reinterpret_cast<char*>(&target), sizeof(target));
+    if (!in || target > static_cast<uint8_t>(TargetKind::SPC700)) {
+        throw std::runtime_error("File has an invalid compiler target: " + path);
+    }
+    obj.config.target = static_cast<TargetKind>(target);
 
     uint8_t mapping = 0;
     in.read(reinterpret_cast<char*>(&mapping), sizeof(mapping));
