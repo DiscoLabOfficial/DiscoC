@@ -1,6 +1,6 @@
 # Testing and Fuzzing
 
-The repository includes an automated CTest suite covering the compiler, textual assembly path, standalone assembler, linker, object-file reader, diagnostics, CFG output, lexical shadowing, and multi-object data relocations.
+The repository includes an automated CTest suite covering the compiler, linear-scan allocator, textual assembly path, standalone assembler, linker, object-file reader, diagnostics, CFG output, lexical shadowing, and multi-object data relocations.
 
 ## Run the regression suite
 

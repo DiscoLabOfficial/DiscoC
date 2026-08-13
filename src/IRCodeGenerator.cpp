@@ -119,6 +119,46 @@ std::uint8_t IRCodeGenerator::scratchRegister() const {
     return m_isInPlottingContext ? 3 : 1;
 }
 
+void IRCodeGenerator::buildRegisterAllocation(const IRFunction& function) {
+    // R0 is the expression accumulator, R1/R3 are backend temporaries, R9 is
+    // the frame pointer, and R10-R15 have ABI or hardware roles. R5, R7, and
+    // R8 are general-purpose registers for the current backend operations.
+    m_register_allocator.run(function, {5, 7, 8});
+}
+
+bool IRCodeGenerator::usesRegisterAllocation(IRValueId value) const {
+    const auto location = m_register_allocator.find(value);
+    const auto uses = m_use_counts.find(value.value);
+    return location != nullptr && location->has_register &&
+           uses != m_use_counts.end() && uses->second > 1;
+}
+
+void IRCodeGenerator::saveLiveRegistersForCall(
+    const IRInstruction& instruction,
+    std::vector<std::uint8_t>& saved_registers) {
+    std::set<std::uint8_t> unique_registers;
+    for (const auto& pair : m_register_allocator.locations()) {
+        const auto& location = pair.second;
+        const auto uses = m_use_counts.find(pair.first);
+        if (!location.has_register || uses == m_use_counts.end() || uses->second <= 1 ||
+            location.start > m_current_instruction_position ||
+            location.end < m_current_instruction_position ||
+            (instruction.result.isValid() && pair.first == instruction.result.value)) {
+            continue;
+        }
+        unique_registers.insert(location.physical_register);
+    }
+    saved_registers.assign(unique_registers.begin(), unique_registers.end());
+    for (const auto reg : saved_registers) emitPush(reg);
+}
+
+void IRCodeGenerator::restoreRegistersAfterCall(
+    const std::vector<std::uint8_t>& saved_registers) {
+    for (auto it = saved_registers.rbegin(); it != saved_registers.rend(); ++it) {
+        emitPop(*it);
+    }
+}
+
 const IRInstruction& IRCodeGenerator::producer(IRValueId value, const Token& source) const {
     if (!value.isValid()) {
         fail("IR codegen: invalid value reference.", source);
@@ -234,7 +274,7 @@ void IRCodeGenerator::emitLoadIndirect(const IRInstruction& instruction) {
         // reused to address the pointer fields, matching the GSU ABI.
         const std::uint8_t bank_reg = m_isInPlottingContext ? 3 : 1;
         const std::uint8_t offset_reg = m_isInPlottingContext ? 4 : 2;
-        const std::uint8_t pointer_reg = m_isInPlottingContext ? 5 : 3;
+        const std::uint8_t pointer_reg = m_isInPlottingContext ? 6 : 3;
 
         emitByte(static_cast<std::uint8_t>(0x20 | bank_reg));
         emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
@@ -349,6 +389,8 @@ void IRCodeGenerator::emitCast(const IRInstruction& instruction) {
 }
 
 void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
+    std::vector<std::uint8_t> saved_registers;
+    saveLiveRegistersForCall(instruction, saved_registers);
     for (auto argument = instruction.operands.rbegin();
          argument != instruction.operands.rend(); ++argument) {
         materialize(*argument);
@@ -360,6 +402,7 @@ void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
     emitWord(0);
     addRelocation(instruction.symbol, patch_offset, RelocationType::ADDR16_JAL);
     emitAdjustStack(instruction.operands.size() * 2, true, instruction.source);
+    restoreRegistersAfterCall(saved_registers);
 }
 
 void IRCodeGenerator::emitStoreIndirect(const IRInstruction& instruction) {
@@ -403,6 +446,12 @@ void IRCodeGenerator::emitHardwareLoop(const IRInstruction& instruction) {
 
 void IRCodeGenerator::materialize(IRValueId value) {
     const auto& instruction = producer(value, Token(TokenType::UNKNOWN, "", 0, 0));
+    const auto* location = m_register_allocator.find(value);
+    if (usesRegisterAllocation(value) &&
+        m_materialized_values.count(value.value) != 0) {
+        emitMove(0, location->physical_register);
+        return;
+    }
     if (!m_active_values.insert(value.value).second) {
         fail("IR codegen: cyclic value definition.", instruction.source);
     }
@@ -441,6 +490,10 @@ void IRCodeGenerator::materialize(IRValueId value) {
         default:
             fail("IR codegen: instruction does not produce a materializable value.",
                  instruction.source);
+    }
+    if (usesRegisterAllocation(value)) {
+        emitMove(location->physical_register, 0);
+        m_materialized_values.insert(value.value);
     }
     m_active_values.erase(value.value);
 }
@@ -577,7 +630,9 @@ void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
 }
 
 void IRCodeGenerator::emitBlock(const IRBasicBlock& block) {
+    m_materialized_values.clear();
     for (const auto& instruction : block.instructions) {
+        m_current_instruction_position = m_emission_position++;
         // A void call has no SSA result, but it is still a side effect that
         // must be emitted when it appears as an expression statement.
         if (instruction.opcode == IROpcode::Call &&
@@ -622,9 +677,12 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
         m_values.clear();
         m_use_counts.clear();
         m_active_values.clear();
+        m_materialized_values.clear();
         m_block_addresses.clear();
         m_branch_fixups.clear();
         m_current_block_index = 0;
+        m_current_instruction_position = 0;
+        m_emission_position = 0;
         m_isInPlottingContext = false;
 
         for (const auto& block : function.blocks) {
@@ -637,6 +695,7 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
                 }
             }
         }
+        buildRegisterAllocation(function);
 
         const auto function_offset = static_cast<std::uint32_t>(m_object_file.code_section.size());
         m_object_file.symbol_table.push_back({function.name, SymbolSection::CODE, function_offset});

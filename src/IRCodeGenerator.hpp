@@ -9,6 +9,7 @@
 
 #include "DataSegment.hpp"
 #include "IR.hpp"
+#include "LinearScanAllocator.hpp"
 #include "ObjectFile.hpp"
 #include "Parser.hpp"
 
@@ -64,6 +65,11 @@ private:
     void addRelocation(const std::string& symbol, std::size_t patch_offset,
                        RelocationType type);
     void fail(const std::string& message, const Token& source) const;
+    void buildRegisterAllocation(const IRFunction& function);
+    bool usesRegisterAllocation(IRValueId value) const;
+    void saveLiveRegistersForCall(const IRInstruction& instruction,
+                                  std::vector<std::uint8_t>& saved_registers);
+    void restoreRegistersAfterCall(const std::vector<std::uint8_t>& saved_registers);
 
     const std::map<std::string, Analyzer::LocalSymbolTable>& m_all_local_symbols;
     const std::map<std::string, FunctionSymbol>& m_global_function_symbols;
@@ -75,8 +81,12 @@ private:
     std::map<std::uint32_t, const IRInstruction*> m_values;
     std::map<std::uint32_t, std::size_t> m_use_counts;
     std::set<std::uint32_t> m_active_values;
+    std::set<std::uint32_t> m_materialized_values;
+    LinearScanAllocator m_register_allocator;
     std::map<std::uint32_t, std::size_t> m_block_addresses;
     std::vector<BranchFixup> m_branch_fixups;
     std::size_t m_current_block_index = 0;
+    std::size_t m_current_instruction_position = 0;
+    std::size_t m_emission_position = 0;
     bool m_isInPlottingContext = false;
 };
