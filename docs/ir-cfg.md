@@ -155,4 +155,7 @@ When adding an instruction or pass:
 6. Add a source example covering success and invalid forms.
 7. Re-run `--emit-ir`, object compilation, assembly emission, and linking.
 
-The backend currently materializes expression trees on demand. Introducing a register allocator, phi nodes, or multi-pass optimization should preserve the existing ID and verifier invariants.
+The backend materializes expression trees on demand and uses a linear-scan
+allocator for reusable values. Introducing phi nodes, explicit spill slots, or
+multi-pass optimization should preserve the existing ID and verifier
+invariants.

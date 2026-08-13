@@ -66,6 +66,13 @@ later. Prototypes do not generate code or duplicate object-file symbols.
 
 The default object path uses `IRCodeGenerator`. It consumes only verified IR plus analyzed symbol/data information and emits GSU instructions into the project object format.
 
+Before emission, `IRCodeGenerator` runs a linear-scan allocation over the
+verified `IRValueId` live intervals. Reused values may reside in `R5`, `R7`, or
+`R8`; `R0` remains the expression accumulator and `R1`/`R3` remain backend
+temporaries. Values that do not fit, or are used only once, are rematerialized
+from their defining IR instruction. Calls preserve allocated live values while
+the existing stack-based argument ABI remains unchanged.
+
 The `AssemblyGenerator` remains available for human-readable assembly export. It is useful for inspection and for the `discas` workflow, but it is a separate textual backend and should not be treated as the canonical implementation of every high-level feature.
 
 ## Object and link stages
@@ -112,4 +119,9 @@ This separation is intentional: the AST and IR are compiler-phase data, while `O
 
 ## Current boundaries
 
-The project is pre-release compiler infrastructure. Register allocation is still conservative and generated code relies heavily on `R0`, stack operations, and scratch registers. The assembly-export path also has narrower feature coverage than the IR binary backend for some advanced constructs. These limitations should be considered when using `--emit-asm` as a source of hand-edited assembly.
+The project is pre-release compiler infrastructure. Register allocation is
+still conservative and uses rematerialization rather than explicit spill slots
+when register pressure exceeds the current pool. The assembly-export path also
+has narrower feature coverage than the IR binary backend for some advanced
+constructs. These limitations should be considered when using `--emit-asm` as
+a source of hand-edited assembly.

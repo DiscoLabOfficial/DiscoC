@@ -78,6 +78,7 @@ set(COMPILER_SOURCES
     src/Optimizer.cpp
     src/IR.cpp
     src/IRCodeGenerator.cpp
+    src/LinearScanAllocator.cpp
     src/AssemblyGenerator.cpp
     src/DataSegment.cpp
     src/ObjectFile.cpp
@@ -138,6 +139,14 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     target_include_directories(disco_ir_verifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(disco_ir_verifier_tests PRIVATE disco_common_warnings)
 
+    add_executable(disco_linear_scan_tests
+        tests/LinearScanAllocatorTests.cpp
+        src/LinearScanAllocator.cpp
+        src/Token.cpp
+    )
+    target_include_directories(disco_linear_scan_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(disco_linear_scan_tests PRIVATE disco_common_warnings)
+
     function(add_toolchain_regression name case_name)
         add_test(
             NAME ${name}
@@ -154,6 +163,7 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
 
     add_test(NAME object_file_hardening COMMAND disco_object_tests)
     add_test(NAME ir_verifier COMMAND disco_ir_verifier_tests)
+    add_test(NAME linear_scan_allocator COMMAND disco_linear_scan_tests)
     add_toolchain_regression(ir_and_cfg ir_and_cfg)
     add_toolchain_regression(shadowing shadowing)
     add_toolchain_regression(diagnostics diagnostics)
