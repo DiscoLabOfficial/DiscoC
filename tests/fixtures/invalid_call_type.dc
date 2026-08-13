@@ -1,0 +1,7 @@
+void takes_byte(byte value) {
+}
+
+void main() {
+    word value = 1;
+    takes_byte(value);
+}

@@ -95,6 +95,13 @@ bool isIntegerType(const Type& type) {
            (type.base == BaseType::BYTE || type.base == BaseType::WORD);
 }
 
+bool isLegalBinaryOperation(const std::string& operation) {
+    return operation == "+" || operation == "-" || operation == "*" ||
+           operation == "/" || operation == ">" || operation == "<" ||
+           operation == ">=" || operation == "<=" || operation == "==" ||
+           operation == "!=";
+}
+
 bool sameValueType(const Type& left, const Type& right) {
     return left.base == right.base &&
            left.structName == right.structName &&
@@ -372,7 +379,13 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                 case IROpcode::Binary:
                     if (instruction.operands.size() != 2 || instruction.operation.empty() ||
                         isVoidType(definitionType(instruction.operands[0], instruction.source)) ||
-                        isVoidType(definitionType(instruction.operands[1], instruction.source))) {
+                        isVoidType(definitionType(instruction.operands[1], instruction.source)) ||
+                        !isLegalBinaryOperation(instruction.operation) ||
+                        !isIntegerType(definitionType(instruction.operands[0], instruction.source)) ||
+                        !isIntegerType(definitionType(instruction.operands[1], instruction.source)) ||
+                        !sameValueType(definitionType(instruction.operands[0], instruction.source),
+                                       definitionType(instruction.operands[1], instruction.source)) ||
+                        !isIntegerType(instruction.type)) {
                         fail("IR verifier: binary instruction has invalid operands.", instruction.source);
                     }
                     break;
@@ -394,12 +407,14 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                     }
                     break;
                 case IROpcode::CondBranch:
-                    if (!isIntegerType(definitionType(instruction.operands.front(), instruction.source))) {
+                    if (instruction.operands.size() != 1 || instruction.targets.size() != 2 ||
+                        !isIntegerType(definitionType(instruction.operands.front(), instruction.source))) {
                         fail("IR verifier: conditional branch requires an integer condition.", instruction.source);
                     }
                     break;
                 case IROpcode::Switch:
-                    if (!isIntegerType(definitionType(instruction.operands.front(), instruction.source))) {
+                    if (instruction.operands.size() != 1 ||
+                        !isIntegerType(definitionType(instruction.operands.front(), instruction.source))) {
                         fail("IR verifier: switch requires an integer condition.", instruction.source);
                     }
                     break;
@@ -556,7 +571,11 @@ IRValueId IRLowerer::lowerAddress(Expr& expr) {
             base = lowerExpression(*subscript->array);
         }
         const auto index = lowerExpression(*subscript->index);
-        const auto element_size = subscript->array->result_type.base == BaseType::WORD ? 2 : 1;
+        if (subscript->element_size <= 0) {
+            throw CompilerError("IR lowering: subscript has no validated element stride.",
+                                subscript->token.line_number, subscript->token.col_number);
+        }
+        const auto element_size = subscript->element_size;
         return emitValue(IROpcode::Address, address_type, expr.token, {base, index}, "index",
                          {}, element_size);
     }
@@ -867,6 +886,10 @@ void IRLowerer::visit(HardwareLoopStmt& stmt) {
     instruction.source = stmt.token;
     emitInstruction(std::move(instruction));
     stmt.body->accept(*this);
+    if (isTerminated()) {
+        throw CompilerError("IR lowering: hardware loop body cannot terminate with return or branch.",
+                            stmt.token.line_number, stmt.token.col_number);
+    }
     IRInstruction end;
     end.opcode = IROpcode::HardwareLoopEnd;
     end.source = stmt.token;

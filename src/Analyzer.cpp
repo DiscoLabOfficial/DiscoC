@@ -40,15 +40,73 @@ SymbolId Analyzer::createSymbolId() {
 }
 
 void Analyzer::registerFunctionSymbol(FunctionDeclStmt& stmt) {
-    if (m_function_symbols.count(stmt.token.lexeme)) {
-        throw CompilerError("Function '" + stmt.token.lexeme + "' already declared.", stmt.token.line_number, stmt.token.col_number);
-    }
+    normalizeType(stmt.returnType, stmt.token);
     FunctionSymbol symbol;
     symbol.returnType = stmt.returnType;
-    for (const auto& param : stmt.params) {
+    for (auto& param : stmt.params) {
+        normalizeType(param.type, param.name);
         symbol.paramTypes.push_back(param.type);
     }
-    m_function_symbols[stmt.token.lexeme] = symbol;
+
+    const auto existing = m_function_symbols.find(stmt.token.lexeme);
+    if (existing == m_function_symbols.end()) {
+        symbol.has_definition = !stmt.is_prototype;
+        m_function_symbols.emplace(stmt.token.lexeme, std::move(symbol));
+        return;
+    }
+
+    if (!sameType(existing->second.returnType, symbol.returnType) ||
+        existing->second.paramTypes.size() != symbol.paramTypes.size()) {
+        throw CompilerError("Conflicting declaration of function '" + stmt.token.lexeme + "'.",
+                            stmt.token.line_number, stmt.token.col_number);
+    }
+    for (std::size_t i = 0; i < symbol.paramTypes.size(); ++i) {
+        if (!sameType(existing->second.paramTypes[i], symbol.paramTypes[i])) {
+            throw CompilerError("Conflicting parameter type in declaration of function '" +
+                                    stmt.token.lexeme + "'.",
+                                stmt.params[i].name.line_number, stmt.params[i].name.col_number);
+        }
+    }
+    if (!stmt.is_prototype && existing->second.has_definition) {
+        throw CompilerError("Function '" + stmt.token.lexeme + "' already has a definition.",
+                            stmt.token.line_number, stmt.token.col_number);
+    }
+    existing->second.has_definition = existing->second.has_definition || !stmt.is_prototype;
+}
+
+bool containsReturnStatement(const Stmt& statement) {
+    if (dynamic_cast<const ReturnStmt*>(&statement)) return true;
+    if (const auto* block = dynamic_cast<const BlockStmt*>(&statement)) {
+        for (const auto& child : block->statements) {
+            if (containsReturnStatement(*child)) return true;
+        }
+    } else if (const auto* conditional = dynamic_cast<const IfStmt*>(&statement)) {
+        return containsReturnStatement(*conditional->thenBranch) ||
+               (conditional->elseBranch && containsReturnStatement(*conditional->elseBranch));
+    } else if (const auto* loop = dynamic_cast<const WhileStmt*>(&statement)) {
+        return containsReturnStatement(*loop->body);
+    } else if (const auto* switch_stmt = dynamic_cast<const SwitchStmt*>(&statement)) {
+        return containsReturnStatement(*switch_stmt->body);
+    }
+    return false;
+}
+
+bool containsPlotBoundary(const Stmt& statement) {
+    if (dynamic_cast<const PlotBeginStmt*>(&statement) ||
+        dynamic_cast<const PlotEndStmt*>(&statement)) return true;
+    if (const auto* block = dynamic_cast<const BlockStmt*>(&statement)) {
+        for (const auto& child : block->statements) {
+            if (containsPlotBoundary(*child)) return true;
+        }
+    } else if (const auto* conditional = dynamic_cast<const IfStmt*>(&statement)) {
+        return containsPlotBoundary(*conditional->thenBranch) ||
+               (conditional->elseBranch && containsPlotBoundary(*conditional->elseBranch));
+    } else if (const auto* loop = dynamic_cast<const WhileStmt*>(&statement)) {
+        return containsPlotBoundary(*loop->body);
+    } else if (const auto* switch_stmt = dynamic_cast<const SwitchStmt*>(&statement)) {
+        return containsPlotBoundary(*switch_stmt->body);
+    }
+    return false;
 }
 
 void Analyzer::registerStructSymbol(StructDefStmt& stmt) {
@@ -65,18 +123,7 @@ void Analyzer::registerStructSymbol(StructDefStmt& stmt) {
             throw CompilerError("Duplicate member '" + member.name.lexeme + "' in struct '" + stmt.token.lexeme + "'.", member.name.line_number, member.name.col_number);
         }
         
-        if (member.type.base == BaseType::STRUCT) {
-            if (!m_struct_symbols.count(member.type.structName)) {
-                throw CompilerError("Struct member '" + member.name.lexeme + "' has unknown type 'struct " + member.type.structName + "'.", member.name.line_number, member.name.col_number);
-            }
-            member.type.sizeInBytes = m_struct_symbols.at(member.type.structName).totalSize;
-        } else if (member.type.pointer_level > 0) {
-            member.type.sizeInBytes = 2;
-        } else if (member.type.base == BaseType::BYTE) {
-            member.type.sizeInBytes = 1;
-        } else if (member.type.base == BaseType::WORD) {
-            member.type.sizeInBytes = 2;
-        }
+        normalizeType(member.type, member.name);
 
         if (current_offset % 2 != 0) current_offset++;
         if (member.type.sizeInBytes < 0 ||
@@ -117,6 +164,7 @@ void Analyzer::analyze(const std::vector<std::unique_ptr<Stmt>>& program) {
     m_break_context_stack.clear();
     m_case_values_stack.clear();
     m_isInPlottingContext = false;
+    m_next_local_stack_offset = 0;
 
     for (const auto& stmt : program)
         if (auto* s = dynamic_cast<StructDefStmt*>(stmt.get())) registerStructSymbol(*s);
@@ -133,6 +181,82 @@ void Analyzer::analyzeExpr(Expr& expr, const Type* context) {
     expr.accept(*this, context);
 }
 
+void Analyzer::normalizeType(Type& type, const Token& source) {
+    if (type.pointer_level < 0) {
+        throw CompilerError("Invalid negative pointer depth.", source.line_number, source.col_number);
+    }
+    if (type.pointer_level > 0) {
+        type.sizeInBytes = 2;
+        return;
+    }
+    switch (type.base) {
+        case BaseType::BYTE:
+            type.sizeInBytes = 1;
+            break;
+        case BaseType::WORD:
+            type.sizeInBytes = 2;
+            break;
+        case BaseType::VOID:
+            type.sizeInBytes = 0;
+            break;
+        case BaseType::STRUCT: {
+            const auto found = m_struct_symbols.find(type.structName);
+            if (found == m_struct_symbols.end()) {
+                throw CompilerError("Unknown struct type 'struct " + type.structName + "'.",
+                                    source.line_number, source.col_number);
+            }
+            type.sizeInBytes = found->second.totalSize;
+            break;
+        }
+        default:
+            throw CompilerError("Invalid incomplete type.", source.line_number, source.col_number);
+    }
+}
+
+bool Analyzer::sameType(const Type& left, const Type& right) const {
+    return left.base == right.base &&
+           left.structName == right.structName &&
+           left.is_unsigned == right.is_unsigned &&
+           left.pointer_level == right.pointer_level &&
+           left.is_far == right.is_far &&
+           left.array_size == right.array_size &&
+           (left.pointer_level == 0 || left.space == right.space);
+}
+
+bool Analyzer::canImplicitlyConvert(const Type& source, const Type& target) const {
+    if (sameType(source, target)) return true;
+    if (source.pointer_level != 0 || target.pointer_level != 0 ||
+        source.structName != target.structName ||
+        source.is_far != target.is_far ||
+        (source.pointer_level != 0 && source.space != target.space) ||
+        source.array_size != target.array_size) {
+        return false;
+    }
+    return (source.base == BaseType::BYTE && target.base == BaseType::WORD) ||
+           (source.base == BaseType::WORD && target.base == BaseType::WORD);
+}
+
+void Analyzer::coerceExpr(std::unique_ptr<Expr>& expression, const Type& target) {
+    const Type source = expression->result_type;
+    if (sameType(source, target)) return;
+    if (!canImplicitlyConvert(source, target)) {
+        throw CompilerError("Cannot implicitly convert '" + to_string(source) +
+                                "' to '" + to_string(target) + "'.",
+                            expression->token.line_number, expression->token.col_number);
+    }
+    auto converted = std::make_unique<CastExpr>(expression->token, target, std::move(expression));
+    converted->implicit_conversion = true;
+    converted->result_type = target;
+    expression = std::move(converted);
+}
+
+bool Analyzer::isAssignableLValue(const Expr& expression) const {
+    return dynamic_cast<const VariableExpr*>(&expression) != nullptr ||
+           dynamic_cast<const DereferenceExpr*>(&expression) != nullptr ||
+           dynamic_cast<const SubscriptExpr*>(&expression) != nullptr ||
+           dynamic_cast<const MemberAccessExpr*>(&expression) != nullptr;
+}
+
 void Analyzer::visit(FunctionDeclStmt& stmt) {
     if (stmt.is_prototype) return;
 
@@ -142,6 +266,8 @@ void Analyzer::visit(FunctionDeclStmt& stmt) {
     
     m_scopes.clear();
     m_currentFunctionType = stmt.returnType;
+    normalizeType(m_currentFunctionType, stmt.token);
+    m_next_local_stack_offset = 0;
     beginScope();
 
     // STEP 1: Process parameters. They have POSITIVE offsets from the frame pointer.
@@ -152,16 +278,7 @@ void Analyzer::visit(FunctionDeclStmt& stmt) {
             throw CompilerError("Duplicate parameter name '" + param.name.lexeme + "'.", param.name.line_number, param.name.col_number);
         }
 
-        // Calculate and store the size for the parameter's type.
-        if (param.type.pointer_level > 0) param.type.sizeInBytes = 2;
-        else if (param.type.base == BaseType::BYTE) param.type.sizeInBytes = 1;
-        else if (param.type.base == BaseType::WORD) param.type.sizeInBytes = 2;
-        else if (param.type.base == BaseType::STRUCT) {
-            if (!m_struct_symbols.count(param.type.structName)) {
-                 throw CompilerError("Parameter '" + param.name.lexeme + "' has unknown type 'struct " + param.type.structName + "'.", param.name.line_number, param.name.col_number);
-            }
-            param.type.sizeInBytes = m_struct_symbols.at(param.type.structName).totalSize;
-        }
+        normalizeType(param.type, param.name);
 
         const auto symbol_id = createSymbolId();
         Symbol symbol{param.type, paramOffset, "", symbol_id};
@@ -224,29 +341,15 @@ void Analyzer::visit(FunctionDeclStmt& stmt) {
 
 void Analyzer::visit(BlockStmt& stmt) {
     beginScope();
-    int currentLocalOffset = 0; // Block-scoped offset tracking
-
-    // Find the current frame offset to continue from.
-    if (m_scopes.size() > 1) { // If not the top-level block of a function
-        auto& parentScope = m_scopes[m_scopes.size() - 2];
-        int minOffset = 0;
-        for (const auto& pair : parentScope) {
-            const auto& symbol = m_current_function_locals->at(pair.second);
-            if (symbol.stackOffset < minOffset) {
-                minOffset = symbol.stackOffset;
-            }
-        }
-        currentLocalOffset = minOffset;
-    }
 
     for (const auto& s : stmt.statements) {
         if (auto* varDecl = dynamic_cast<VarDeclStmt*>(s.get())) {
-            // This is a bit of a hack. The visit method doesn't take extra params. 
-            // We set the offset before visiting. Seems is the best to do...
-            varDecl->base_stack_offset = currentLocalOffset;
+            // One monotonically decreasing cursor is shared by all lexical
+            // scopes.  Recomputing an offset from the parent scope would make
+            // sibling blocks reuse the same stack slots.
+            varDecl->base_stack_offset = m_next_local_stack_offset;
             varDecl->accept(*this);
-            // After visiting, the VarDeclStmt's symbol has the final offset. Update our tracker.
-            currentLocalOffset = m_current_function_locals->at(varDecl->symbol_id).stackOffset;
+            m_next_local_stack_offset = m_current_function_locals->at(varDecl->symbol_id).stackOffset;
         } else {
             s->accept(*this);
         }
@@ -262,25 +365,11 @@ void Analyzer::visit(VarDeclStmt& stmt) {
         throw CompilerError("Symbol '" + stmt.token.lexeme + "' already declared globally.", stmt.token.line_number, stmt.token.col_number);
     }
 
+    normalizeType(stmt.type, stmt.token);
+
     if (stmt.initializer) {
         analyzeExpr(*stmt.initializer, &stmt.type);
-        if (stmt.type.sizeInBytes < stmt.initializer->result_type.sizeInBytes && !dynamic_cast<CastExpr*>(stmt.initializer.get())) {
-             throw CompilerError("Implicit conversion from '" + to_string(stmt.initializer->result_type) + "' to '" + to_string(stmt.type) + "' requires an explicit cast.", stmt.initializer->token.line_number, stmt.initializer->token.col_number);
-        }
-    }
-
-    // Determine the size of this variable (with alignment)
-    if (stmt.type.base == BaseType::STRUCT) {
-        if (!m_struct_symbols.count(stmt.type.structName)) {
-             throw CompilerError("Variable '" + stmt.token.lexeme + "' has unknown type 'struct " + stmt.type.structName + "'.", stmt.token.line_number, stmt.token.col_number);
-        }
-        stmt.type.sizeInBytes = m_struct_symbols.at(stmt.type.structName).totalSize;
-    } else if (stmt.type.pointer_level > 0) {
-        stmt.type.sizeInBytes = 2;
-    } else if (stmt.type.base == BaseType::BYTE) {
-        stmt.type.sizeInBytes = 1;
-    } else {
-        stmt.type.sizeInBytes = 2;
+        coerceExpr(stmt.initializer, stmt.type);
     }
     
     int size_to_allocate = ((stmt.type.sizeInBytes + 1) / 2) * 2;
@@ -314,6 +403,7 @@ void Analyzer::visit(ReturnStmt& stmt) {
             throw CompilerError("Cannot return a value from a void function.", stmt.token.line_number, stmt.token.col_number);
         }
         analyzeExpr(*stmt.value, &m_currentFunctionType);
+        coerceExpr(stmt.value, m_currentFunctionType);
     } else {
         if (m_currentFunctionType.base != BaseType::VOID) {
             throw CompilerError("Non-void function must return a value.", stmt.token.line_number, stmt.token.col_number);
@@ -323,23 +413,50 @@ void Analyzer::visit(ReturnStmt& stmt) {
 
 void Analyzer::visit(IfStmt& stmt) {
     analyzeExpr(*stmt.condition, nullptr);
+    const bool incoming_plot_context = m_isInPlottingContext;
     stmt.thenBranch->accept(*this);
+    const bool then_plot_context = m_isInPlottingContext;
+    m_isInPlottingContext = incoming_plot_context;
     if (stmt.elseBranch) {
         stmt.elseBranch->accept(*this);
+        if (m_isInPlottingContext != then_plot_context) {
+            throw CompilerError("Plotting context must be balanced consistently across both branches.",
+                                stmt.token.line_number, stmt.token.col_number);
+        }
+    } else if (then_plot_context != incoming_plot_context) {
+        throw CompilerError("A plotting context cannot begin or end on only one branch.",
+                            stmt.token.line_number, stmt.token.col_number);
     }
+    m_isInPlottingContext = stmt.elseBranch ? then_plot_context : incoming_plot_context;
 }
 
 void Analyzer::visit(WhileStmt& stmt) {
     analyzeExpr(*stmt.condition, nullptr);
+    const bool incoming_plot_context = m_isInPlottingContext;
     m_break_context_stack.push_back(false);
     stmt.body->accept(*this);
     m_break_context_stack.pop_back();
+    if (m_isInPlottingContext != incoming_plot_context) {
+        throw CompilerError("A plotting context cannot cross a loop boundary.",
+                            stmt.token.line_number, stmt.token.col_number);
+    }
+    m_isInPlottingContext = incoming_plot_context;
 }
 
 void Analyzer::visit(HardwareLoopStmt& stmt) {
+    if (containsReturnStatement(*stmt.body)) {
+        throw CompilerError("A hardware loop cannot contain a return statement.",
+                            stmt.token.line_number, stmt.token.col_number);
+    }
+    const bool incoming_plot_context = m_isInPlottingContext;
     beginScope();
     stmt.body->accept(*this);
     endScope();
+    if (m_isInPlottingContext != incoming_plot_context) {
+        throw CompilerError("A plotting context cannot cross a hardware-loop boundary.",
+                            stmt.token.line_number, stmt.token.col_number);
+    }
+    m_isInPlottingContext = incoming_plot_context;
 }
 
 void Analyzer::visit(ExpressionStmt& stmt) {
@@ -394,12 +511,17 @@ void Analyzer::visit(CallExpr& expr, const Type*) {
     }
     for (size_t i = 0; i < expr.arguments.size(); ++i) {
         analyzeExpr(*expr.arguments[i], &func.paramTypes[i]);
+        coerceExpr(expr.arguments[i], func.paramTypes[i]);
     }
     expr.result_type = func.returnType;
 }
 
 void Analyzer::visit(AssignExpr& expr, const Type*) {
     analyzeExpr(*expr.name, nullptr);
+    if (!isAssignableLValue(*expr.name)) {
+        throw CompilerError("Left-hand side of assignment must be an l-value.",
+                            expr.name->token.line_number, expr.name->token.col_number);
+    }
     const Type& targetType = expr.name->result_type;
 
     if (targetType.space == AddressSpace::ROM) {
@@ -411,6 +533,9 @@ void Analyzer::visit(AssignExpr& expr, const Type*) {
                 throw CompilerError("Special variables 'plot_x' and 'plot_y' can only be used inside a plot_begin/plot_end block.", var->token.line_number, var->token.col_number);
             }
             analyzeExpr(*expr.value, nullptr);
+            if (expr.value->result_type.base == BaseType::VOID) {
+                throw CompilerError("Cannot assign a void value.", expr.value->token.line_number, expr.value->token.col_number);
+            }
             expr.result_type = {BaseType::WORD, "", 2, false};
             return;
         }
@@ -418,9 +543,7 @@ void Analyzer::visit(AssignExpr& expr, const Type*) {
 
     if (expr.value) {
         analyzeExpr(*expr.value, &targetType);
-        if (targetType.sizeInBytes < expr.value->result_type.sizeInBytes && !dynamic_cast<CastExpr*>(expr.value.get())) {
-             throw CompilerError("Implicit conversion from '" + to_string(expr.value->result_type) + "' to '" + to_string(targetType) + "' requires an explicit cast.", expr.value->token.line_number, expr.value->token.col_number);
-        }
+        coerceExpr(expr.value, targetType);
     }
     expr.result_type = targetType;
 }
@@ -428,13 +551,23 @@ void Analyzer::visit(AssignExpr& expr, const Type*) {
 void Analyzer::visit(BinaryExpr& expr, const Type*) {
     analyzeExpr(*expr.left, nullptr);
     analyzeExpr(*expr.right, nullptr);
-    // Implicitly promote byte to word for binary operations
-    if (expr.left->result_type.sizeInBytes > expr.right->result_type.sizeInBytes) {
-        expr.right->result_type = expr.left->result_type;
-    } else if (expr.right->result_type.sizeInBytes > expr.left->result_type.sizeInBytes) {
-        expr.left->result_type = expr.right->result_type;
+    if (expr.token.type == TokenType::SLASH) {
+        throw CompilerError("Division is not supported by the current GSU backend.",
+                            expr.token.line_number, expr.token.col_number);
     }
-    expr.result_type = {BaseType::WORD, "", 2, false};
+    if (expr.left->result_type.base == BaseType::STRUCT ||
+        expr.right->result_type.base == BaseType::STRUCT ||
+        expr.left->result_type.pointer_level != 0 ||
+        expr.right->result_type.pointer_level != 0) {
+        throw CompilerError("Binary operators require integer operands.",
+                            expr.token.line_number, expr.token.col_number);
+    }
+    Type promoted{BaseType::WORD, "", 2, false};
+    promoted.space = AddressSpace::RAM;
+    promoted.is_unsigned = expr.left->result_type.is_unsigned && expr.right->result_type.is_unsigned;
+    coerceExpr(expr.left, promoted);
+    coerceExpr(expr.right, promoted);
+    expr.result_type = promoted;
 }
 
 void Analyzer::visit(UnaryExpr& expr, const Type* context) {
@@ -444,7 +577,8 @@ void Analyzer::visit(UnaryExpr& expr, const Type* context) {
 
 void Analyzer::visit(MemberAccessExpr& expr, const Type*) {
     analyzeExpr(*expr.object, nullptr);
-    if (expr.object->result_type.base != BaseType::STRUCT) {
+    if (expr.object->result_type.pointer_level != 0 ||
+        expr.object->result_type.base != BaseType::STRUCT) {
         throw CompilerError("Request for member '" + expr.token.lexeme + "' in something that is not a struct.", expr.token.line_number, expr.token.col_number);
     }
     const StructSymbol& struct_def = m_struct_symbols.at(expr.object->result_type.structName);
@@ -475,6 +609,7 @@ void Analyzer::visit(DereferenceExpr& expr, const Type*) {
     }
     Type resultType = expr.right->result_type;
     resultType.pointer_level--;
+    if (resultType.pointer_level == 0) resultType.is_far = false;
     expr.result_type = resultType;
 }
 
@@ -489,11 +624,23 @@ void Analyzer::visit(SubscriptExpr& expr, const Type*) {
     if (arrayType.array_size == 0 && arrayType.pointer_level == 0) {
         throw CompilerError("Subscript operator '[]' can only be used on arrays or pointers.", expr.token.line_number, expr.token.col_number);
     }
+    if (arrayType.array_size > 0) {
+        expr.element_size = arrayType.sizeInBytes;
+    } else if (arrayType.pointer_level == 1 && arrayType.base == BaseType::STRUCT) {
+        const auto found = m_struct_symbols.find(arrayType.structName);
+        if (found == m_struct_symbols.end()) {
+            throw CompilerError("Unknown pointee struct type.", expr.token.line_number, expr.token.col_number);
+        }
+        expr.element_size = found->second.totalSize;
+    } else {
+        expr.element_size = arrayType.base == BaseType::BYTE ? 1 : 2;
+    }
     Type resultType = arrayType;
     if (resultType.array_size > 0) {
         resultType.array_size = 0;
     } else {
         resultType.pointer_level--;
+        if (resultType.pointer_level == 0) resultType.is_far = false;
     }
     expr.result_type = resultType;
 }
@@ -565,15 +712,7 @@ void Analyzer::visit(LiteralExpr& expr, const Type* context) {
 
 void Analyzer::visit(CastExpr& expr, const Type*) {
     analyzeExpr(*expr.expression, nullptr);
-
-    // Correctly populate the size of the cast's target type
-    if (expr.cast_to_type.base == BaseType::WORD) {
-        expr.cast_to_type.sizeInBytes = 2;
-    } else if (expr.cast_to_type.base == BaseType::BYTE) {
-        expr.cast_to_type.sizeInBytes = 1;
-    } else if (expr.cast_to_type.pointer_level > 0) {
-        expr.cast_to_type.sizeInBytes = 2; // Pointers are 2 bytes
-    }
+    normalizeType(expr.cast_to_type, expr.token);
 
     const Type& sourceType = expr.expression->result_type;
     const Type& targetType = expr.cast_to_type;
@@ -594,6 +733,10 @@ void Analyzer::visit(CastExpr& expr, const Type*) {
 }
 
 void Analyzer::visit(SwitchStmt& stmt) {
+    if (containsPlotBoundary(*stmt.body)) {
+        throw CompilerError("Plotting context boundaries cannot appear inside a switch.",
+                            stmt.token.line_number, stmt.token.col_number);
+    }
     m_break_context_stack.push_back(true);
     m_case_values_stack.emplace_back();
 

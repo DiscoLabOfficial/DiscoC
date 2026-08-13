@@ -12,9 +12,9 @@ DiscoC is an evolving research project. The current focus is on stability and fe
 - [x] **Hardware loops:** Automatic detection of loops suitable for the GSU `LOOP` instruction.
 
 ## In Progress
-- [ ] **Graph-Coloring Register Allocation:**
-    - *Current State:* The compiler relies heavily on the stack (`push`/`pop`) and accumulation registers (`R0`).
-    - *Goal:* Implement a graph-coloring algorithm (Chaitin-Briggs) to map variables to general-purpose registers (`R1`-`R14`), drastically reducing RAM access.
+- [x] **Linear-Scan Register Allocation:**
+    - *Current State:* The verified IR backend assigns reusable temporaries to the ABI-safe value registers `R5`, `R7`, and `R8`.
+    - *Future work:* Improve spill heuristics and extend allocation decisions as additional targets gain backends.
 - [ ] **Switch Statement Optimization:**
     - *Current State:* Uses linear $O(N)$ comparison chains.
     - *Goal:* Implement **Jump Tables** ($O(1)$) or Binary Search lookup for large case sets.

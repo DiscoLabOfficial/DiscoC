@@ -222,6 +222,10 @@ struct DereferenceExpr : public Expr {
 struct SubscriptExpr : public Expr {
     std::unique_ptr<Expr> array;
     std::unique_ptr<Expr> index;
+    // Filled by semantic analysis.  This is the size of one indexed element,
+    // including pointees such as struct values; the pointer itself is always
+    // two bytes and therefore cannot be used as the stride.
+    int element_size = 0;
     SubscriptExpr(std::unique_ptr<Expr> a, Token bracket, std::unique_ptr<Expr> i)
         : array(std::move(a)), index(std::move(i)) { token = bracket; }
     void accept(Visitor& v, const Type* c) override { v.visit(*this, c); }
@@ -270,6 +274,7 @@ struct SwitchStmt : public Stmt {
 struct CastExpr : public Expr {
     Type cast_to_type;
     std::unique_ptr<Expr> expression;
+    bool implicit_conversion = false;
     CastExpr(Token t, Type type, std::unique_ptr<Expr> expr)
         : cast_to_type(std::move(type)), expression(std::move(expr)) { token = std::move(t); }
     void accept(Visitor& v, const Type* c) override { v.visit(*this, c); }

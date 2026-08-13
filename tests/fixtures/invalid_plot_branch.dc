@@ -1,0 +1,8 @@
+void main() {
+    if (1) {
+        plot_begin;
+        plot_end;
+    } else {
+        plot_begin;
+    }
+}
