@@ -365,9 +365,51 @@ void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
     emitPop(scratchRegister());
 
     if (instruction.operation == ">" || instruction.operation == "<" ||
+        instruction.operation == ">=" || instruction.operation == "<=" ||
         instruction.operation == "==" || instruction.operation == "!=") {
         emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
         emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
+
+        std::vector<std::size_t> labels;
+        std::vector<LocalBranchFixup> fixups;
+        const auto new_label = [&labels]() {
+            labels.push_back(0);
+            return labels.size() - 1;
+        };
+        const auto true_label = new_label();
+        const auto end_label = new_label();
+        const auto emit_local_branch = [&](std::uint8_t opcode, std::size_t label) {
+            emitByte(opcode);
+            const auto patch_offset = m_object_file.code_section.size();
+            emitByte(0);
+            emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+            fixups.push_back({patch_offset, label, instruction.source});
+        };
+
+        if (instruction.operation == "==") {
+            emit_local_branch(static_cast<std::uint8_t>(OpCode::BEQ), true_label);
+        } else if (instruction.operation == "!=") {
+            emit_local_branch(static_cast<std::uint8_t>(OpCode::BNE), true_label);
+        } else if (instruction.operation == ">") {
+            emit_local_branch(static_cast<std::uint8_t>(OpCode::BPL), true_label);
+        } else if (instruction.operation == "<") {
+            emit_local_branch(static_cast<std::uint8_t>(OpCode::BMI), true_label);
+        } else if (instruction.operation == ">=") {
+            emit_local_branch(static_cast<std::uint8_t>(OpCode::BEQ), true_label);
+            emit_local_branch(static_cast<std::uint8_t>(OpCode::BPL), true_label);
+        } else if (instruction.operation == "<=") {
+            emit_local_branch(static_cast<std::uint8_t>(OpCode::BEQ), true_label);
+            emit_local_branch(static_cast<std::uint8_t>(OpCode::BMI), true_label);
+        }
+        emitLiteral(0);
+        emit_local_branch(static_cast<std::uint8_t>(OpCode::BRA), end_label);
+        labels[true_label] = m_object_file.code_section.size();
+        emitLiteral(1);
+        labels[end_label] = m_object_file.code_section.size();
+        for (auto& fixup : fixups) {
+            fixup.target_offset = labels[fixup.target_offset];
+        }
+        patchLocalBranches(fixups);
         return;
     }
     if (op_base != 0) {
@@ -520,27 +562,47 @@ void IRCodeGenerator::emitConditionalBranch(const IRInstruction& instruction) {
     if (instruction.operands.size() != 1 || instruction.targets.size() != 2) {
         fail("IR codegen: conditional branch shape is invalid.", instruction.source);
     }
-    materialize(instruction.operands.front());
     const auto& condition = producer(instruction.operands.front(), instruction.source);
-    std::uint8_t opcode = static_cast<std::uint8_t>(OpCode::BNE);
-    if (condition.opcode == IROpcode::Binary) {
-        if (condition.operation == ">") opcode = static_cast<std::uint8_t>(OpCode::BMI);
-        else if (condition.operation == "<") opcode = static_cast<std::uint8_t>(OpCode::BPL);
-        else if (condition.operation == "==") opcode = static_cast<std::uint8_t>(OpCode::BNE);
-        else if (condition.operation == "!=") opcode = static_cast<std::uint8_t>(OpCode::BEQ);
-        else fail("IR codegen: unsupported conditional operation.", condition.source);
-    } else {
-        fail("IR codegen: condition must be a comparison.", condition.source);
+    const bool is_comparison = condition.opcode == IROpcode::Binary &&
+                               (condition.operation == ">" || condition.operation == ">=" ||
+                                condition.operation == "<" || condition.operation == "<=" ||
+                                condition.operation == "==" || condition.operation == "!=");
+    if (is_comparison) {
+        materialize(condition.operands[1]);
+        emitPush(0);
+        materialize(condition.operands[0]);
+        emitPop(scratchRegister());
+        emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
+        emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
+        std::uint8_t false_opcode = static_cast<std::uint8_t>(OpCode::BNE);
+        if (condition.operation == ">" || condition.operation == ">=") {
+            false_opcode = static_cast<std::uint8_t>(OpCode::BMI);
+        } else if (condition.operation == "<" || condition.operation == "<=") {
+            false_opcode = static_cast<std::uint8_t>(OpCode::BPL);
+        } else if (condition.operation == "!=") {
+            false_opcode = static_cast<std::uint8_t>(OpCode::BEQ);
+        }
+        emitByte(false_opcode);
+        const auto false_patch = m_object_file.code_section.size();
+        emitByte(0);
+        emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+        m_branch_fixups.push_back({false_patch, instruction.targets[1], instruction.source});
+        emitBranch(instruction.targets[0], instruction.source);
+        return;
     }
 
-    emitByte(opcode);
-    const auto false_patch = m_object_file.code_section.size();
+    // Ordinary integer conditions use truthiness (non-zero is true).
+    materialize(instruction.operands.front());
+    emitMove(scratchRegister(), 0);
+    emitLiteral(0);
+    emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
+    emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
+    emitByte(static_cast<std::uint8_t>(OpCode::BNE));
+    const auto true_patch = m_object_file.code_section.size();
     emitByte(0);
     emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-    m_branch_fixups.push_back({false_patch, instruction.targets[1], instruction.source});
-    if (instruction.targets[0].value != m_current_block_index + 1) {
-        emitBranch(instruction.targets[0], instruction.source);
-    }
+    m_branch_fixups.push_back({true_patch, instruction.targets[0], instruction.source});
+    emitBranch(instruction.targets[1], instruction.source);
 }
 
 void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
@@ -666,6 +728,9 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
 
     const auto root_label = new_label();
     emit_search(0, order.size(), root_label);
+    for (auto& fixup : local_fixups) {
+        fixup.target_offset = labels[fixup.target_offset];
+    }
     patchLocalBranches(local_fixups);
 }
 

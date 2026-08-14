@@ -141,6 +141,20 @@ void testIndirectLoadRequiresPointer() {
                   "load.indirect requires one pointer operand");
 }
 
+void testInvalidBinaryOperation() {
+    auto function = baseFunction();
+    function.value_count = 3;
+    IRInstruction add;
+    add.opcode = IROpcode::Binary;
+    add.type = wordType();
+    add.result = IRValueId{3};
+    add.operands = {IRValueId{1}, IRValueId{2}};
+    add.operation = "^";
+    function.blocks[0].instructions = {constant(1), constant(2), add, returnValue(3)};
+    expectFailure("invalid binary operation", IRModule{{std::move(function)}},
+                  "binary instruction has invalid operands");
+}
+
 void testSyntheticUnreachableBlock() {
     auto function = baseFunction();
     function.value_count = 1;
@@ -163,6 +177,7 @@ int main() {
         testNonDominatingDefinition();
         testReturnType();
         testIndirectLoadRequiresPointer();
+        testInvalidBinaryOperation();
         testSyntheticUnreachableBlock();
         return 0;
     } catch (const std::exception& error) {

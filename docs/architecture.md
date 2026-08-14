@@ -12,7 +12,7 @@ The normal object-file path is:
 .dc source
     |
     v
-Lexer -> Parser -> AST -> Optimizer -> Analyzer
+Lexer -> Parser -> AST -> Analyzer -> Optimizer
                                       |
                                       v
                                IRLowerer
@@ -52,7 +52,13 @@ The lexer converts source text into tokens. The recursive-descent parser constru
 
 ### AST optimization
 
-The optimizer operates on the AST before semantic analysis. Current transformations include recognizing suitable loops for the GSU hardware `LOOP` instruction and simplifying selected small arithmetic operations.
+The analyzer runs before AST transformations. This ordering guarantees that
+an optimization cannot erase an invalid expression before it receives a
+diagnostic. The optimizer then operates on resolved `SymbolId` references;
+current transformations include recognizing suitable loops for the GSU
+hardware `LOOP` instruction and simplifying selected small arithmetic
+operations. Transformations are deliberately conservative when a loop value
+is observable outside the loop or control flow can escape it.
 
 ### Semantic analysis
 

@@ -69,8 +69,8 @@ private:
     // State for current function
     std::string m_currentFunctionName;
     std::vector<std::string> m_break_labels; 
-    Analyzer::LocalSymbolTable m_symbolTable;
+	Analyzer::LocalSymbolTable m_symbolTable;
     int m_stackOffset = 0;
     bool m_isInPlottingContext = false;
-	bool m_functionHasExplicitReturn = false;
+	bool m_emitting_condition = false;
 };

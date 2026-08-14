@@ -1,0 +1,15 @@
+word scopes() {
+    {
+        word first = 1;
+        first = first + 1;
+    }
+    {
+        word second = 2;
+        second = second + 1;
+    }
+    return 0;
+}
+
+void main() {
+    word result = scopes();
+}

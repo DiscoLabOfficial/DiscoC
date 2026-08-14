@@ -1,0 +1,6 @@
+word divide(word value) {
+    return value / 2;
+}
+
+void main() {
+}

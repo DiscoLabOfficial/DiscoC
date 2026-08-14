@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <cstddef>
 #include "Token.hpp"
 
 class Lexer {
@@ -16,10 +17,12 @@ private:
     const std::string& m_source;
     std::vector<Token> m_tokens;
 
-    int m_start = 0;   // Start of the current lexeme being scanned
-    int m_current = 0; // Current character we are looking at
+    std::size_t m_start = 0;   // Start of the current lexeme being scanned
+    std::size_t m_current = 0; // Current character we are looking at
     int m_line = 1;    // Current line number for error reporting
 	int m_col = 1;     // Current column number for error reporting
+	int m_token_line = 1;
+	int m_token_col = 1;
 
     bool isAtEnd();
     char advance();

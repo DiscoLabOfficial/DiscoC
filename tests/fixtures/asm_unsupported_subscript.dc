@@ -1,0 +1,7 @@
+word read_value() {
+    word values[1];
+    return values[0];
+}
+
+void main() {
+}

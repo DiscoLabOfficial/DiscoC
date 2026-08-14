@@ -40,7 +40,7 @@ static const std::map<std::string, TokenType> keywords = {
 
 bool Lexer::match(char expected) {
     if (isAtEnd() || m_source[m_current] != expected) return false;
-    m_current++;
+    advance();
     return true;
 }
 
@@ -48,8 +48,8 @@ std::vector<Token> Lexer::scanTokens() {
     while (!isAtEnd()) {
         // We are at the beginning of the next lexeme.
         m_start = m_current;
-
-        // The column of the new token is the current column
+        m_token_line = m_line;
+        m_token_col = m_col;
         scanToken();
     }
 
@@ -63,12 +63,19 @@ bool Lexer::isAtEnd() {
 }
 
 char Lexer::advance() {
-    return m_source[m_current++];
+    const char value = m_source[m_current++];
+    if (value == '\n') {
+        ++m_line;
+        m_col = 1;
+    } else {
+        ++m_col;
+    }
+    return value;
 }
 
 void Lexer::addToken(TokenType type) {
-    std::string text = m_source.substr(m_start, m_current - m_start);    
-    m_tokens.emplace_back(type, text, m_line, m_col - static_cast<int>(text.length()));
+    std::string text = m_source.substr(m_start, m_current - m_start);
+    m_tokens.emplace_back(type, text, m_token_line, m_token_col);
 }
 
 bool Lexer::isDigit(char c) {
@@ -183,8 +190,6 @@ void Lexer::scanToken() {
                 // A multi-line comment.
                 int start_line = m_line;
                 while (!(peek() == '*' && peekNext() == '/') && !isAtEnd()) {
-                    if (peek() == '\n') m_line++;
-					if (peek() == '\n') m_col = 0; // Reset column on new line
                     advance();
                 }
 
@@ -208,8 +213,6 @@ void Lexer::scanToken() {
         case '\t':
             break;
         case '\n':
-            m_line++;
-			m_col = 1; // Reset column on new line
             break;
 
         default:

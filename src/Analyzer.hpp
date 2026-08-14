@@ -8,6 +8,7 @@
 struct FunctionSymbol {
     Type returnType;
     std::vector<Type> paramTypes;
+    bool has_definition = false;
 };
 struct StructMemberSymbol {
     Type type;
@@ -70,6 +71,11 @@ public:
 
 private:
     void analyzeExpr(Expr& expr, const Type* context);
+    void normalizeType(Type& type, const Token& source);
+    bool sameType(const Type& left, const Type& right) const;
+    bool canImplicitlyConvert(const Type& source, const Type& target) const;
+    void coerceExpr(std::unique_ptr<Expr>& expression, const Type& target);
+    bool isAssignableLValue(const Expr& expression) const;
     void beginScope();
     void endScope();
     bool canFallThrough(const Stmt& stmt) const;
@@ -81,6 +87,7 @@ private:
     LocalSymbolTable* m_current_function_locals = nullptr;
     std::vector<std::map<std::string, SymbolId>> m_scopes;
     std::uint32_t m_next_symbol_id = 1;
+    int m_next_local_stack_offset = 0;
 
     std::vector<bool> m_break_context_stack;
     std::vector<std::set<std::int64_t>> m_case_values_stack;

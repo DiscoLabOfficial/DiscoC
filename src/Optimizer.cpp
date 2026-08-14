@@ -5,95 +5,95 @@
 
 namespace {
 
-bool expressionUsesName(const Expr& expr, const std::string& name) {
+bool expressionUsesSymbol(const Expr& expr, SymbolId id) {
     if (const auto* variable = dynamic_cast<const VariableExpr*>(&expr)) {
-        return variable->token.lexeme == name;
+        return variable->symbol_id == id;
     }
     if (const auto* binary = dynamic_cast<const BinaryExpr*>(&expr)) {
-        return expressionUsesName(*binary->left, name) ||
-               expressionUsesName(*binary->right, name);
+        return expressionUsesSymbol(*binary->left, id) ||
+               expressionUsesSymbol(*binary->right, id);
     }
     if (const auto* assignment = dynamic_cast<const AssignExpr*>(&expr)) {
-        return expressionUsesName(*assignment->name, name) ||
-               expressionUsesName(*assignment->value, name);
+        return expressionUsesSymbol(*assignment->name, id) ||
+               expressionUsesSymbol(*assignment->value, id);
     }
     if (const auto* unary = dynamic_cast<const UnaryExpr*>(&expr)) {
-        return expressionUsesName(*unary->right, name);
+        return expressionUsesSymbol(*unary->right, id);
     }
     if (const auto* address = dynamic_cast<const AddressOfExpr*>(&expr)) {
-        return expressionUsesName(*address->right, name);
+        return expressionUsesSymbol(*address->right, id);
     }
     if (const auto* dereference = dynamic_cast<const DereferenceExpr*>(&expr)) {
-        return expressionUsesName(*dereference->right, name);
+        return expressionUsesSymbol(*dereference->right, id);
     }
     if (const auto* subscript = dynamic_cast<const SubscriptExpr*>(&expr)) {
-        return expressionUsesName(*subscript->array, name) ||
-               expressionUsesName(*subscript->index, name);
+        return expressionUsesSymbol(*subscript->array, id) ||
+               expressionUsesSymbol(*subscript->index, id);
     }
     if (const auto* member = dynamic_cast<const MemberAccessExpr*>(&expr)) {
-        return expressionUsesName(*member->object, name);
+        return expressionUsesSymbol(*member->object, id);
     }
     if (const auto* call = dynamic_cast<const CallExpr*>(&expr)) {
-        if (expressionUsesName(*call->callee, name)) {
+        if (expressionUsesSymbol(*call->callee, id)) {
             return true;
         }
         for (const auto& argument : call->arguments) {
-            if (expressionUsesName(*argument, name)) {
+            if (expressionUsesSymbol(*argument, id)) {
                 return true;
             }
         }
         return false;
     }
     if (const auto* cast = dynamic_cast<const CastExpr*>(&expr)) {
-        return expressionUsesName(*cast->expression, name);
+        return expressionUsesSymbol(*cast->expression, id);
     }
     return false;
 }
 
-bool statementUsesName(const Stmt& stmt, const std::string& name) {
+bool statementUsesSymbol(const Stmt& stmt, SymbolId id) {
     if (const auto* block = dynamic_cast<const BlockStmt*>(&stmt)) {
         for (const auto& child : block->statements) {
-            if (statementUsesName(*child, name)) return true;
+            if (statementUsesSymbol(*child, id)) return true;
         }
         return false;
     }
     if (const auto* conditional = dynamic_cast<const IfStmt*>(&stmt)) {
-        return expressionUsesName(*conditional->condition, name) ||
-               statementUsesName(*conditional->thenBranch, name) ||
-               (conditional->elseBranch && statementUsesName(*conditional->elseBranch, name));
+        return expressionUsesSymbol(*conditional->condition, id) ||
+               statementUsesSymbol(*conditional->thenBranch, id) ||
+               (conditional->elseBranch && statementUsesSymbol(*conditional->elseBranch, id));
     }
     if (const auto* loop = dynamic_cast<const WhileStmt*>(&stmt)) {
-        return expressionUsesName(*loop->condition, name) ||
-               statementUsesName(*loop->body, name);
+        return expressionUsesSymbol(*loop->condition, id) ||
+               statementUsesSymbol(*loop->body, id);
     }
     if (const auto* hardware_loop = dynamic_cast<const HardwareLoopStmt*>(&stmt)) {
-        return expressionUsesName(*hardware_loop->count, name) ||
-               statementUsesName(*hardware_loop->body, name);
+        return expressionUsesSymbol(*hardware_loop->count, id) ||
+               statementUsesSymbol(*hardware_loop->body, id);
     }
     if (const auto* switch_stmt = dynamic_cast<const SwitchStmt*>(&stmt)) {
-        return expressionUsesName(*switch_stmt->condition, name) ||
-               statementUsesName(*switch_stmt->body, name);
+        return expressionUsesSymbol(*switch_stmt->condition, id) ||
+               statementUsesSymbol(*switch_stmt->body, id);
     }
     if (const auto* case_stmt = dynamic_cast<const CaseStmt*>(&stmt)) {
-        return expressionUsesName(*case_stmt->value, name);
+        return expressionUsesSymbol(*case_stmt->value, id);
     }
     if (const auto* return_stmt = dynamic_cast<const ReturnStmt*>(&stmt)) {
-        return return_stmt->value && expressionUsesName(*return_stmt->value, name);
+        return return_stmt->value && expressionUsesSymbol(*return_stmt->value, id);
     }
     if (const auto* declaration = dynamic_cast<const VarDeclStmt*>(&stmt)) {
-        return declaration->initializer && expressionUsesName(*declaration->initializer, name);
+        return declaration->initializer && expressionUsesSymbol(*declaration->initializer, id);
     }
     if (const auto* expression = dynamic_cast<const ExpressionStmt*>(&stmt)) {
-        return expressionUsesName(*expression->expression, name);
+        return expressionUsesSymbol(*expression->expression, id);
     }
     if (const auto* plot = dynamic_cast<const PlotStmt*>(&stmt)) {
-        return expressionUsesName(*plot->x, name) || expressionUsesName(*plot->y, name);
+        return expressionUsesSymbol(*plot->x, id) || expressionUsesSymbol(*plot->y, id);
     }
     if (const auto* color = dynamic_cast<const SetColorStmt*>(&stmt)) {
-        return expressionUsesName(*color->color_value, name);
+        return expressionUsesSymbol(*color->color_value, id);
     }
     if (const auto* mode = dynamic_cast<const CmodeStmt*>(&stmt)) {
-        return expressionUsesName(*mode->options_value, name);
+        return expressionUsesSymbol(*mode->options_value, id);
     }
     return false;
 }
@@ -109,6 +109,21 @@ bool containsBreak(const Stmt& stmt) {
         return containsBreak(*loop->body);
     } else if (const auto* switch_stmt = dynamic_cast<const SwitchStmt*>(&stmt)) {
         return containsBreak(*switch_stmt->body);
+    }
+    return false;
+}
+
+bool containsReturn(const Stmt& stmt) {
+    if (dynamic_cast<const ReturnStmt*>(&stmt)) return true;
+    if (const auto* block = dynamic_cast<const BlockStmt*>(&stmt)) {
+        for (const auto& child : block->statements) if (containsReturn(*child)) return true;
+    } else if (const auto* conditional = dynamic_cast<const IfStmt*>(&stmt)) {
+        return containsReturn(*conditional->thenBranch) ||
+               (conditional->elseBranch && containsReturn(*conditional->elseBranch));
+    } else if (const auto* loop = dynamic_cast<const WhileStmt*>(&stmt)) {
+        return containsReturn(*loop->body);
+    } else if (const auto* switch_stmt = dynamic_cast<const SwitchStmt*>(&stmt)) {
+        return containsReturn(*switch_stmt->body);
     }
     return false;
 }
@@ -171,22 +186,25 @@ void Optimizer::visit(BlockStmt& block) {
         }
         
         // 1. Check for Initializer: `word i = N;`
-        std::string loop_var_name;
+        SymbolId loop_var_id;
         LiteralExpr* init_val = nullptr;
 
         if (auto* decl_init = dynamic_cast<VarDeclStmt*>(as_block->statements[0].get())) {
             // Case 1: for (word i = N; ...)
-            if (!decl_init->initializer) continue; // Not an optimizable pattern
+            if (!decl_init->initializer) {
+                current_stmt->accept(*this);
+                optimized_statements.push_back(std::move(current_stmt));
+                continue;
+            }
             init_val = dynamic_cast<LiteralExpr*>(decl_init->initializer.get()); 
-            loop_var_name = decl_init->token.lexeme;
+            loop_var_id = decl_init->symbol_id;
         } else if (auto* expr_init_stmt = dynamic_cast<ExpressionStmt*>(as_block->statements[0].get())) {
-            // Case 2: i = N;
-            auto* assign_init = dynamic_cast<AssignExpr*>(expr_init_stmt->expression.get());
-            if (!assign_init) continue;
-            auto* assign_target = dynamic_cast<VariableExpr*>(assign_init->name.get());
-            if (!assign_target) continue;
-            init_val = dynamic_cast<LiteralExpr*>(assign_init->value.get());
-            loop_var_name = assign_target->token.lexeme;
+            // Assignment-based loops cannot be proven safe without tracking
+            // uses outside this block, so leave them as ordinary loops.
+            (void)expr_init_stmt;
+            current_stmt->accept(*this);
+            optimized_statements.push_back(std::move(current_stmt));
+            continue;
         } else {
             // Initializer is neither a declaration nor an expression, so it can't match.
             continue; // This should not be reachable with a valid for-loop
@@ -215,7 +233,7 @@ void Optimizer::visit(BlockStmt& block) {
         long condition_value = 0;
         if (!condition || !cond_left || !cond_right ||
             !parseIntegerLiteral(*cond_right, condition_value) ||
-            cond_left->token.lexeme != loop_var_name ||
+            cond_left->symbol_id != loop_var_id ||
             condition->token.type != TokenType::GREATER || condition_value != 0) {
             current_stmt->accept(*this);
             optimized_statements.push_back(std::move(current_stmt));
@@ -237,9 +255,9 @@ void Optimizer::visit(BlockStmt& block) {
         auto* sub_right = assign_val ? dynamic_cast<LiteralExpr*>(assign_val->right.get()) : nullptr;
 
         long decrement_value = 0;
-        if (!assign_target || assign_target->token.lexeme != loop_var_name ||
+        if (!assign_target || assign_target->symbol_id != loop_var_id ||
             !assign_val || assign_val->token.type != TokenType::MINUS ||
-            !sub_left || sub_left->token.lexeme != loop_var_name ||
+            !sub_left || sub_left->symbol_id != loop_var_id ||
             !sub_right || !parseIntegerLiteral(*sub_right, decrement_value) || decrement_value != 1) {
             current_stmt->accept(*this);
             optimized_statements.push_back(std::move(current_stmt));
@@ -253,19 +271,20 @@ void Optimizer::visit(BlockStmt& block) {
         // aliases, calls, nested uses, and post-loop observations.
         bool variable_used_in_body = false;
         for (std::size_t body_index = 0; body_index + 1 < loop_body_block->statements.size(); ++body_index) {
-            if (statementUsesName(*loop_body_block->statements[body_index], loop_var_name)) {
+            if (statementUsesSymbol(*loop_body_block->statements[body_index], loop_var_id)) {
                 variable_used_in_body = true;
                 break;
             }
         }
         bool variable_used_after_loop = false;
         for (std::size_t following = i + 1; following < block.statements.size(); ++following) {
-            if (statementUsesName(*block.statements[following], loop_var_name)) {
+            if (statementUsesSymbol(*block.statements[following], loop_var_id)) {
                 variable_used_after_loop = true;
                 break;
             }
         }
-        if (variable_used_in_body || variable_used_after_loop || containsBreak(*loop->body)) {
+        if (variable_used_in_body || variable_used_after_loop ||
+            containsBreak(*loop->body) || containsReturn(*loop->body)) {
             current_stmt->accept(*this);
             optimized_statements.push_back(std::move(current_stmt));
             continue;

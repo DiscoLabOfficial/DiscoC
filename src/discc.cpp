@@ -59,6 +59,7 @@ int main(int argc, char* argv[]) {
     bool emit_asm = false;
 	bool emit_ast = false;
 	bool emit_ir = false;
+    bool warn_on_cache_overflow = true;
     TargetKind target = TargetKind::GSU;
 
     for (int i = 1; i < argc; ++i) {
@@ -88,7 +89,7 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
         } else if (arg == "-Wno-cache-overflow") {
-            // This flag will be read later from the parser's config object.
+            warn_on_cache_overflow = false;
         } else {
             if (!in_filepath.empty()) {
                 std::cerr << "Error: Only one input file can be specified." << std::endl;
@@ -124,33 +125,28 @@ int main(int argc, char* argv[]) {
         auto tokens = lexer.scanTokens();
         Parser parser(tokens);
         parser.getConfigForUpdate().target = target;
-        // Now, handle the flag again for the actual parser instance
-        for (int i = 1; i < argc; ++i) {
-             if (std::string(argv[i]) == "-Wno-cache-overflow") {
-                parser.getConfigForUpdate().warn_on_cache_overflow = false;
-            }
-        }
+        parser.getConfigForUpdate().warn_on_cache_overflow = warn_on_cache_overflow;
         auto program_ast = parser.parseProgram();
 
-        // 3. Optimization
+        // 3. Semantic analysis must precede transformations.  Optimizing an
+        // unchecked AST can erase the very expression that should diagnose an
+        // undeclared symbol or invalid operation.
+        DataSegmentManager data_manager;
+        Analyzer analyzer(data_manager);
+        analyzer.analyze(program_ast);
+
+        // 4. Optimization operates only on a fully resolved AST.
         Optimizer optimizer;
         optimizer.optimize(program_ast);
 
-        // 3.5: Handle AST Printing
         if (emit_ast) {
             std::cout << "Abstract Syntax Tree" << std::endl;
             ASTPrinter printer;
             for (const auto& stmt : program_ast) {
                 std::cout << printer.print(*stmt) << std::endl;
             }
-            // Exit successfully without running the rest of the compiler.
             return 0;
         }
-
-        // 4. Semantic Analysis (One Pass)
-        DataSegmentManager data_manager;
-        Analyzer analyzer(data_manager);
-        analyzer.analyze(program_ast);
 
         // Build and verify the target-independent IR/CFG before entering a
         // target backend. Object emission consumes this verified IR; assembly

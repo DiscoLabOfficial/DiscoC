@@ -1,0 +1,16 @@
+word classify(word value) {
+    if (value <= 10) {
+        return 1;
+    }
+    if (value >= 20) {
+        return 2;
+    }
+    if (value) {
+        return 3;
+    }
+    return 0;
+}
+
+void main() {
+    word result = classify(1);
+}

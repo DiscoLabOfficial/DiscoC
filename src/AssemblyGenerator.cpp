@@ -121,7 +121,6 @@ void AssemblyGenerator::visit(FunctionDeclStmt& stmt) {
     m_indent_level++;
     
     m_currentFunctionName = stmt.token.lexeme;
-	m_functionHasExplicitReturn = false;
     
     // FUNCTION PROLOGUE
     emit("push r11", "Save caller's link register");
@@ -135,8 +134,9 @@ void AssemblyGenerator::visit(FunctionDeclStmt& stmt) {
         s->accept(*this);
     }
 
-    // Emit an implicit function tail only if no explicit return occurred.
-    if (!m_functionHasExplicitReturn) {
+    // Semantic analysis computed this per function. A return in one branch
+    // must not suppress the fallthrough epilogue of another branch.
+    if (stmt.needs_implicit_return) {
         emit("move sp, r9", "Deallocate local variables");
 
         if (m_currentFunctionName == "main") {
@@ -155,7 +155,6 @@ void AssemblyGenerator::visit(FunctionDeclStmt& stmt) {
 }
 
 void AssemblyGenerator::visit(ReturnStmt& stmt) {
-	m_functionHasExplicitReturn = true;
     if (stmt.value) {
         stmt.value->accept(*this, nullptr);
         dereferenceIfNeeded(*stmt.value);
@@ -265,36 +264,80 @@ void AssemblyGenerator::visit(BinaryExpr& expr, const Type*) {
     std::string scratch_reg = m_isInPlottingContext ? "r3" : "r1";
     emit("pop " + scratch_reg, "Load RHS into " + scratch_reg);
 
+    const bool is_comparison = expr.token.type == TokenType::GREATER ||
+                               expr.token.type == TokenType::GREATER_EQUAL ||
+                               expr.token.type == TokenType::LESS ||
+                               expr.token.type == TokenType::LESS_EQUAL ||
+                               expr.token.type == TokenType::EQUAL_EQUAL ||
+                               expr.token.type == TokenType::BANG_EQUAL;
+    if (is_comparison) {
+        emit("cmp r0, " + scratch_reg);
+        if (m_emitting_condition) {
+            return;
+        }
+        const std::string true_label = newLabel();
+        const std::string end_label = newLabel();
+        const auto branch_true = [&](const std::string& opcode) {
+            emit(opcode + " " + true_label);
+            emit("nop");
+        };
+        switch (expr.token.type) {
+            case TokenType::GREATER: branch_true("bpl"); break;
+            case TokenType::LESS: branch_true("bmi"); break;
+            case TokenType::EQUAL_EQUAL: branch_true("beq"); break;
+            case TokenType::BANG_EQUAL: branch_true("bne"); break;
+            case TokenType::GREATER_EQUAL:
+                branch_true("beq");
+                branch_true("bpl");
+                break;
+            case TokenType::LESS_EQUAL:
+                branch_true("beq");
+                branch_true("bmi");
+                break;
+            default: break;
+        }
+        emit("iwt r0, #0");
+        emit("bra " + end_label);
+        emit("nop");
+        emit(true_label + ":");
+        emit("iwt r0, #1");
+        emit(end_label + ":");
+        return;
+    }
+
     std::string op;
     switch (expr.token.type) {
         case TokenType::PLUS:    op = "add r0, r0, " + scratch_reg; break;
         case TokenType::MINUS:   op = "sub r0, r0, " + scratch_reg; break;
         case TokenType::STAR:    op = "mult r0, r0, " + scratch_reg; break;
-        case TokenType::GREATER:
-        case TokenType::LESS:
-        case TokenType::EQUAL_EQUAL:
-        case TokenType::BANG_EQUAL:
-             op = "cmp r0, " + scratch_reg; break;
         default: throw CompilerError("Assembly generation for operator '" + expr.token.lexeme + "' not implemented.", expr.token.line_number, expr.token.col_number);
     }
     emit(op);
+
 }
 
 void AssemblyGenerator::visit(IfStmt& stmt) {
     std::string elseLabel = newLabel();
     std::string endLabel = newLabel();
 
+    m_emitting_condition = true;
     stmt.condition->accept(*this, nullptr);
-    auto* cond = dynamic_cast<BinaryExpr*>(stmt.condition.get());
-    if (!cond) throw CompilerError("If condition must be a binary expression for now.", stmt.condition->token.line_number, stmt.condition->token.col_number);
-    
-    std::string branch_op;
-    switch(cond->token.type) {
-        case TokenType::GREATER:     branch_op = "bmi"; break;
-        case TokenType::LESS:        branch_op = "bpl"; break;
-        case TokenType::EQUAL_EQUAL: branch_op = "bne"; break; // Branch if Not Equal
-        case TokenType::BANG_EQUAL:  branch_op = "beq"; break; // Branch if Equal
-        default: throw CompilerError("Unsupported operator in if condition.", cond->token.line_number, cond->token.col_number);
+    m_emitting_condition = false;
+    std::string branch_op = "beq";
+    if (const auto* cond = dynamic_cast<const BinaryExpr*>(stmt.condition.get())) {
+        switch (cond->token.type) {
+            case TokenType::GREATER: branch_op = "bmi"; break;
+            case TokenType::GREATER_EQUAL: branch_op = "bmi"; break;
+            case TokenType::LESS: branch_op = "bpl"; break;
+            case TokenType::LESS_EQUAL: branch_op = "bpl"; break;
+            case TokenType::EQUAL_EQUAL: branch_op = "bne"; break;
+            case TokenType::BANG_EQUAL: branch_op = "beq"; break;
+            default: break;
+        }
+    } else {
+        dereferenceIfNeeded(*stmt.condition);
+        emit("iwt r1, #0", "Compare generic condition with zero");
+        emit("cmp r0, r1");
     }
     
     emit(branch_op + " " + (stmt.elseBranch ? elseLabel : endLabel));
@@ -428,41 +471,40 @@ void AssemblyGenerator::visit(DereferenceExpr& expr, const Type*) {
     }
 }
 
-void AssemblyGenerator::visit(SubscriptExpr&, const Type*) { emit("; SubscriptExpr not fully implemented in ASM gen"); }
-void AssemblyGenerator::visit(MemberAccessExpr&, const Type*) { emit("; MemberAccessExpr not fully implemented in ASM gen"); }
+void AssemblyGenerator::visit(SubscriptExpr& expr, const Type*) {
+    throw CompilerError("Textual assembly emission does not yet support subscript expressions.",
+                        expr.token.line_number, expr.token.col_number);
+}
+void AssemblyGenerator::visit(MemberAccessExpr& expr, const Type*) {
+    throw CompilerError("Textual assembly emission does not yet support struct member access.",
+                        expr.token.line_number, expr.token.col_number);
+}
 void AssemblyGenerator::visit(WhileStmt& stmt) {
     std::string startLabel = newLabel();
     std::string endLabel   = newLabel();
 
     emit(startLabel + ":", "while begin");
 
-    // Evaluate condition
+    // Comparison expressions leave flags for the condition branch; other
+    // integer expressions use ordinary truthiness.
+    m_emitting_condition = true;
     stmt.condition->accept(*this, nullptr);
-
-    // For now, mirror IfStmt constraints: condition must be a BinaryExpr.
-    auto* cond = dynamic_cast<BinaryExpr*>(stmt.condition.get());
-    if (!cond) {
-        throw CompilerError(
-            "While condition must be a binary expression for now.",
-            stmt.condition->token.line_number,
-            stmt.condition->token.col_number
-        );
-    }
-
-    // Condition uses: cmp r0, <scratch>
-    // Branch on NOT(condition) to exit loop.
-    std::string branch_op;
-    switch (cond->token.type) {
-        case TokenType::GREATER:     branch_op = "bmi"; break;
-        case TokenType::LESS:        branch_op = "bpl"; break;
-        case TokenType::EQUAL_EQUAL: branch_op = "bne"; break; // not (==)
-        case TokenType::BANG_EQUAL:  branch_op = "beq"; break; // not (!=)
-        default:
-            throw CompilerError(
-                "Unsupported operator in while condition.",
-                cond->token.line_number,
-                cond->token.col_number
-            );
+    m_emitting_condition = false;
+    std::string branch_op = "beq";
+    if (const auto* cond = dynamic_cast<const BinaryExpr*>(stmt.condition.get())) {
+        switch (cond->token.type) {
+            case TokenType::GREATER:
+            case TokenType::GREATER_EQUAL: branch_op = "bmi"; break;
+            case TokenType::LESS:
+            case TokenType::LESS_EQUAL: branch_op = "bpl"; break;
+            case TokenType::EQUAL_EQUAL: branch_op = "bne"; break;
+            case TokenType::BANG_EQUAL: branch_op = "beq"; break;
+            default: break;
+        }
+    } else {
+        dereferenceIfNeeded(*stmt.condition);
+        emit("iwt r1, #0", "Compare generic condition with zero");
+        emit("cmp r0, r1");
     }
 
     emit(branch_op + " " + endLabel);
@@ -511,11 +553,15 @@ void AssemblyGenerator::visit(PlotEndStmt&) {
     emit("; --- Plotting context END ---");
 }
 
-void AssemblyGenerator::visit(CmodeStmt&) {
-    emit("; CmodeStmt not fully implemented in ASM gen");
+void AssemblyGenerator::visit(CmodeStmt& stmt) {
+    throw CompilerError("Textual assembly emission does not yet support cmode.",
+                        stmt.token.line_number, stmt.token.col_number);
 }
 
-void AssemblyGenerator::visit(RpixStmt&) { emit("; RpixStmt not fully implemented in ASM gen"); }
+void AssemblyGenerator::visit(RpixStmt& stmt) {
+    throw CompilerError("Textual assembly emission does not yet support rpix.",
+                        stmt.token.line_number, stmt.token.col_number);
+}
 void AssemblyGenerator::visit(HardwareLoopStmt& stmt) {
     // Mirrors the canonical backend's hardware-loop setup:
     //   IWT R12, #count
