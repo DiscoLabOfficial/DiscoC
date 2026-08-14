@@ -89,6 +89,11 @@ int main() {
         std::ifstream valid_input(valid_path, std::ios::binary);
         const std::vector<std::uint8_t> valid_bytes(
             std::istreambuf_iterator<char>(valid_input), {});
+        if (valid_bytes.size() < 12 || valid_bytes[5] != ObjectFile::CurrentFormatVersion ||
+            valid_bytes[8] != 0x00 || valid_bytes[9] != 0x80 ||
+            valid_bytes[10] != 0x00 || valid_bytes[11] != 0x00) {
+            throw std::runtime_error("object header is not serialized as little-endian bytes");
+        }
         const auto loaded_from_memory = ObjectFile::readBytes(valid_bytes);
         if (loaded_from_memory.code_section != valid.code_section ||
             loaded_from_memory.data_section != valid.data_section) {

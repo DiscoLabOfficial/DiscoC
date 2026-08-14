@@ -6,7 +6,9 @@ The format is intentionally small and implementation-owned. It is not ELF, SNES 
 
 ## Binary layout
 
-All integer fields are written in the host's little-endian representation by the current implementation. The format is serialized in this order:
+All multi-byte integer fields are serialized explicitly in little-endian byte
+order, independent of the host architecture. The current format version is
+3. The format is serialized in this order:
 
 | Field | Encoding |
 | --- | --- |
@@ -91,4 +93,8 @@ The linker's `.bin` output is the final linked GSU payload for the object set. I
 
 ## Compatibility and evolution
 
-The format currently has no checksum, alignment table, or section flags. The version byte is validated by `ObjectFile::read`; incompatible versions are rejected instead of being interpreted as a different layout. Changes to the serialization order or enum values require coordinated changes to `ObjectFile::write`, `ObjectFile::read`, `discld`, and `discas`.
+The format currently has no checksum, alignment table, or section flags. The
+version byte is validated by `ObjectFile::read`; incompatible versions are
+rejected instead of being interpreted as a different layout. Changes to the
+serialization order or enum values require coordinated changes to
+`ObjectFile::write`, `ObjectFile::read`, `discld`, and `discas`.
