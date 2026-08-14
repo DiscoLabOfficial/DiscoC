@@ -87,7 +87,7 @@ Local branch labels are resolved during assembly. External function and data ref
 
 ## Branch ranges
 
-Relative branches use an 8-bit signed displacement measured from the byte after the displacement field. Branch targets must be in the code section and within `-128..127` bytes of the branch continuation point. Out-of-range or undefined branch labels are assembler errors.
+Relative branches use an 8-bit signed displacement measured from the byte after the displacement field. Short branch targets remain limited to `-128..127` bytes, but `discas` automatically relaxes an out-of-range local branch to an absolute `IWT R15, target` plus `JMP R15` sequence. The linker resolves the relaxed local target relative to its input object. Undefined targets and non-code targets remain assembler errors.
 
 ## Editing generated assembly
 
@@ -112,6 +112,7 @@ Typical failures include:
 * invalid immediate or data ranges;
 * duplicate labels or exports;
 * undefined branch labels;
-* branch targets outside the signed displacement range.
+* branch targets that cannot be resolved;
+* malformed relaxed local-branch relocations;
 
 After assembling, link with `discld` to validate cross-object symbols and relocations.

@@ -94,7 +94,13 @@ The `AssemblyGenerator` remains available for human-readable assembly export. It
 
 ## Object and link stages
 
-Each compilation unit can produce a relocatable `.o` file. The object stores code, ROM data, exported symbols, and relocation records. `discld` verifies that all input objects use the same target configuration, concatenates code and data sections, resolves symbols, applies relocations, and writes the final payload.
+Each compilation unit can produce a relocatable `.o` file. The object stores
+code, ROM data, exported symbols, and relocation records. All multi-byte object
+fields use explicit little-endian encoding. `discld` verifies that all input
+objects use the same target configuration, concatenates code and data sections,
+resolves symbols, applies relocations, and writes the final payload. Local
+branches that exceed the short displacement range are relaxed by `discas` into
+object-relative absolute jumps.
 
 The linker currently lays out all code before all data. Symbol addresses are calculated from the configured code start address and the accumulated section offsets.
 
