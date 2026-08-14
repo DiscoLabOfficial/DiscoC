@@ -5,6 +5,7 @@
 #include <map>
 #include <fstream>
 #include <istream>
+#include <ostream>
 #include "TargetConfig.hpp"
 
 // The type of relocation required.
@@ -39,7 +40,7 @@ struct RelocationEntry {
 // Represents the entire contents of a .o file.
 class ObjectFile {
 public:
-    static constexpr std::uint8_t CurrentFormatVersion = 2;
+    static constexpr std::uint8_t CurrentFormatVersion = 3;
     static constexpr std::uint32_t MaxSectionBytes = 64u * 1024u * 1024u;
     static constexpr std::uint32_t MaxStringBytes = 4096u;
     static constexpr std::uint32_t MaxSymbolCount = 1'000'000u;
@@ -61,7 +62,11 @@ public:
 
 private:
     // Helpers for binary I/O
-    static void write_string(std::ofstream& out, const std::string& s);
+    static void write_u32_le(std::ostream& out, std::uint32_t value);
+    static std::uint32_t read_u32_le(std::istream& in, const char* field_name);
+    static void write_u8(std::ostream& out, std::uint8_t value);
+    static std::uint8_t read_u8(std::istream& in, const char* field_name);
+    static void write_string(std::ostream& out, const std::string& s);
     static std::string read_string(std::istream& in, const char* field_name);
     template<typename T>
     static void write_vec(std::ofstream& out, const std::vector<T>& vec);

@@ -147,8 +147,10 @@ public:
     ObjectFile assemble(const std::string& source) {
         m_lines = parse(source);
         firstPass();
+        relaxBranches();
         secondPass();
         resolveBranches();
+        addInternalSymbols();
         addExportedSymbols();
         return std::move(m_object);
     }
@@ -161,6 +163,10 @@ private:
     ObjectFile m_object;
     std::size_t m_code_size = 0;
     std::size_t m_data_size = 0;
+    std::set<int> m_relaxed_branch_lines;
+    std::map<int, std::size_t> m_code_offsets_by_line;
+
+    static constexpr char InternalSymbolPrefix = '\x01';
 
     [[noreturn]] void fail(const std::string& message, int line) const {
         throw CompilerError("Assembler: " + message, line, 1);
@@ -240,6 +246,8 @@ private:
     }
 
     void firstPass() {
+        m_symbols.clear();
+        m_code_offsets_by_line.clear();
         std::size_t code = 0;
         std::size_t data = 0;
         for (const auto& line : m_lines) {
@@ -255,6 +263,9 @@ private:
                 continue;
             }
             requireSection(line);
+            if (line.section == Section::Code) {
+                m_code_offsets_by_line[line.line_number] = code;
+            }
             if (line.operation == ".byte" || line.operation == ".word") {
                 if (line.operands.empty()) fail(line.operation + " expects at least one value.", line.line_number);
                 auto& offset = offsetFor(line.section, code, data);
@@ -266,6 +277,39 @@ private:
         }
         m_code_size = code;
         m_data_size = data;
+    }
+
+    void relaxBranches() {
+        static const std::set<std::string> branches = {
+            "bra", "bge", "blt", "bne", "beq", "bpl", "bmi",
+            "bcc", "bcs", "bvc", "bvs"};
+        for (;;) {
+            bool changed = false;
+            for (const auto& line : m_lines) {
+                if (line.section != Section::Code || line.operation.empty() ||
+                    branches.count(line.operation) == 0 || line.operands.size() != 1 ||
+                    m_relaxed_branch_lines.count(line.line_number) != 0) {
+                    continue;
+                }
+                const auto symbol = m_symbols.find(line.operands.front());
+                if (symbol == m_symbols.end()) {
+                    fail("undefined branch label '" + line.operands.front() + "'.", line.line_number);
+                }
+                if (symbol->second.section != SymbolSection::CODE) {
+                    fail("branch target must be in the code section.", line.line_number);
+                }
+                const auto source = m_code_offsets_by_line.at(line.line_number);
+                const auto distance = static_cast<std::int64_t>(symbol->second.offset) -
+                                      static_cast<std::int64_t>(source + 2);
+                if (distance < -128 || distance > 127) {
+                    changed = m_relaxed_branch_lines.insert(line.line_number).second || changed;
+                }
+            }
+            if (!changed) break;
+            // Recompute labels after every expansion. Earlier expansions can
+            // move a later branch target outside the short-branch range.
+            firstPass();
+        }
     }
 
     void secondPass() {
@@ -371,6 +415,33 @@ private:
         requireOperands(line, 1);
         if (line.section != Section::Code) fail("branches are only valid in .segment \"CODE\".", line.line_number);
         const auto patch = out ? out->size() : 0;
+        if (m_relaxed_branch_lines.count(line.line_number) != 0) {
+            if (line.operation == "bra") {
+                emitByte(out, 0xff); // IWT R15, absolute target
+                emitWord(out, 0);
+                if (out) m_object.relocation_table.push_back({
+                    std::string(1, InternalSymbolPrefix) + line.operands.front(),
+                    SymbolSection::CODE, static_cast<std::uint32_t>(patch),
+                    RelocationType::ADDR16_IWT});
+                emitByte(out, 0x9f); // JMP R15
+                return 4;
+            }
+
+            static const std::map<uint8_t, uint8_t> inverse = {
+                {0x06, 0x07}, {0x07, 0x06}, {0x08, 0x09}, {0x09, 0x08},
+                {0x0a, 0x0b}, {0x0b, 0x0a}, {0x0c, 0x0d}, {0x0d, 0x0c},
+                {0x0e, 0x0f}, {0x0f, 0x0e}};
+            emitByte(out, inverse.at(opcode));
+            emitByte(out, 4); // Skip the following IWT/JMP sequence.
+            emitByte(out, 0xff);
+            emitWord(out, 0);
+            if (out) m_object.relocation_table.push_back({
+                std::string(1, InternalSymbolPrefix) + line.operands.front(),
+                SymbolSection::CODE, static_cast<std::uint32_t>(patch + 2),
+                RelocationType::ADDR16_IWT});
+            emitByte(out, 0x9f);
+            return 6;
+        }
         emitByte(out, opcode);
         emitByte(out, 0);
         if (out) m_branch_fixups.push_back({patch + 1, line.operands.front(), line.line_number});
@@ -662,6 +733,18 @@ private:
             const auto symbol = m_symbols.find(name);
             if (symbol == m_symbols.end()) fail("exported symbol '" + name + "' is not defined.", 1);
             m_object.symbol_table.push_back({name, symbol->second.section, static_cast<uint32_t>(symbol->second.offset)});
+        }
+    }
+
+    void addInternalSymbols() {
+        std::set<std::string> added;
+        for (const auto& line : m_lines) {
+            if (m_relaxed_branch_lines.count(line.line_number) == 0) continue;
+            const auto symbol = m_symbols.find(line.operands.front());
+            if (symbol == m_symbols.end() || !added.insert(line.operands.front()).second) continue;
+            m_object.symbol_table.push_back({
+                std::string(1, InternalSymbolPrefix) + line.operands.front(),
+                SymbolSection::CODE, static_cast<std::uint32_t>(symbol->second.offset)});
         }
     }
 };

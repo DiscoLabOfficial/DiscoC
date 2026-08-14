@@ -289,14 +289,24 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
         }
     }
 
-    std::vector<std::set<std::size_t>> dominators(function.blocks.size());
+    const std::size_t dominator_words =
+        (function.blocks.size() + (sizeof(std::uint64_t) * 8u - 1u)) /
+        (sizeof(std::uint64_t) * 8u);
+    std::vector<std::vector<std::uint64_t>> dominators(
+        function.blocks.size(), std::vector<std::uint64_t>(dominator_words, 0));
+    const auto set_dominator = [&](std::vector<std::uint64_t>& bits, std::size_t index) {
+        bits[index / 64u] |= std::uint64_t{1} << (index % 64u);
+    };
+    const auto has_dominator = [&](const std::vector<std::uint64_t>& bits, std::size_t index) {
+        return (bits[index / 64u] & (std::uint64_t{1} << (index % 64u))) != 0;
+    };
     for (std::size_t index = 0; index < function.blocks.size(); ++index) {
         if (!reachable[index]) continue;
         if (index == function.entry.value) {
-            dominators[index].insert(index);
+            set_dominator(dominators[index], index);
         } else {
             for (std::size_t candidate = 0; candidate < function.blocks.size(); ++candidate) {
-                if (reachable[candidate]) dominators[index].insert(candidate);
+                if (reachable[candidate]) set_dominator(dominators[index], candidate);
             }
         }
     }
@@ -307,7 +317,7 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
         for (std::size_t index = 0; index < function.blocks.size(); ++index) {
             if (!reachable[index] || index == function.entry.value) continue;
 
-            std::set<std::size_t> intersection;
+            std::vector<std::uint64_t> intersection(dominator_words, 0);
             bool has_predecessor = false;
             for (const auto predecessor : predecessors[index]) {
                 if (!reachable[predecessor]) continue;
@@ -315,15 +325,12 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                     intersection = dominators[predecessor];
                     has_predecessor = true;
                 } else {
-                    std::set<std::size_t> next;
-                    std::set_intersection(intersection.begin(), intersection.end(),
-                                          dominators[predecessor].begin(),
-                                          dominators[predecessor].end(),
-                                          std::inserter(next, next.begin()));
-                    intersection = std::move(next);
+                    for (std::size_t word = 0; word < dominator_words; ++word) {
+                        intersection[word] &= dominators[predecessor][word];
+                    }
                 }
             }
-            intersection.insert(index);
+            set_dominator(intersection, index);
             if (intersection != dominators[index]) {
                 dominators[index] = std::move(intersection);
                 changed = true;
@@ -354,7 +361,7 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                     }
                 } else if (reachable[block_index] &&
                            (!reachable[definition.block] ||
-                            dominators[block_index].count(definition.block) == 0)) {
+                            !has_dominator(dominators[block_index], definition.block))) {
                     fail("IR verifier: value definition does not dominate its use.",
                          instruction.source);
                 }

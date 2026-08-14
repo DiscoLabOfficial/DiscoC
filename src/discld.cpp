@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <algorithm>
 #include "ObjectFile.hpp"
 #include "Parser.hpp"
 
@@ -66,6 +67,7 @@ int main(int argc, char* argv[]) {
             // Process CODE symbols
             for (const auto& sym : obj.symbol_table) {
                 if (sym.section == SymbolSection::CODE) {
+                    if (!sym.name.empty() && sym.name.front() == '\x01') continue;
                     if (final_addresses.count(sym.name)) {
                         throw std::runtime_error("Linker Error: Symbol '" + sym.name + "' defined multiple times.");
                     }
@@ -87,6 +89,7 @@ int main(int argc, char* argv[]) {
             // Process DATA symbols
             for (const auto& sym : obj.symbol_table) {
                 if (sym.section == SymbolSection::DATA) {
+                    if (!sym.name.empty() && sym.name.front() == '\x01') continue;
                     if (final_addresses.count(sym.name)) {
                         throw std::runtime_error("Linker Error: Symbol '" + sym.name + "' defined multiple times.");
                     }
@@ -106,10 +109,28 @@ int main(int argc, char* argv[]) {
 
         for (const auto& obj : objects) {
             for (const auto& reloc : obj.relocation_table) {
-                if (final_addresses.find(reloc.target_symbol_name) == final_addresses.end()) {
-                    throw std::runtime_error("Linker Error: Undefined symbol '" + reloc.target_symbol_name + "'.");
+                std::uint32_t target_addr = 0;
+                if (!reloc.target_symbol_name.empty() && reloc.target_symbol_name.front() == '\x01') {
+                    const auto local_name = reloc.target_symbol_name.substr(1);
+                    const auto local_symbol = std::find_if(
+                        obj.symbol_table.begin(), obj.symbol_table.end(),
+                        [&](const auto& symbol) {
+                            return symbol.name == reloc.target_symbol_name &&
+                                   symbol.section == SymbolSection::CODE;
+                        });
+                    if (local_symbol == obj.symbol_table.end()) {
+                        throw std::runtime_error("Linker Error: Undefined local symbol '" + local_name + "'.");
+                    }
+                    target_addr = checkedAddress(
+                        static_cast<std::uint64_t>(config.code_start_address) +
+                            current_code_base + local_symbol->offset,
+                        "local branch target address");
+                } else {
+                    if (final_addresses.find(reloc.target_symbol_name) == final_addresses.end()) {
+                        throw std::runtime_error("Linker Error: Undefined symbol '" + reloc.target_symbol_name + "'.");
+                    }
+                    target_addr = final_addresses.at(reloc.target_symbol_name);
                 }
-                uint32_t target_addr = final_addresses.at(reloc.target_symbol_name);
                 std::vector<uint8_t>& section_to_patch =
                     reloc.section_to_patch == SymbolSection::CODE ? final_code : final_data;
                 const auto section_base = reloc.section_to_patch == SymbolSection::CODE

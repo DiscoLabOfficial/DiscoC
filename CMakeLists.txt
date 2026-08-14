@@ -69,11 +69,7 @@ endif()
 
 
 # Source File Definitions
-set(COMPILER_SOURCES
-    src/discc.cpp
-    src/Lexer.cpp
-    src/Token.cpp
-    src/Parser.cpp
+set(COMPILER_CORE_SOURCES
     src/Analyzer.cpp
     src/Optimizer.cpp
     src/IR.cpp
@@ -81,42 +77,40 @@ set(COMPILER_SOURCES
     src/LinearScanAllocator.cpp
     src/AssemblyGenerator.cpp
     src/DataSegment.cpp
-    src/ObjectFile.cpp
     src/ASTPrinter.cpp
 )
 
-set(LINKER_SOURCES
-    src/discld.cpp
-    src/ObjectFile.cpp
-    src/Parser.cpp
-    src/Token.cpp
-)
+add_library(disco_object_core STATIC src/ObjectFile.cpp)
+add_library(disco_frontend_core STATIC src/Lexer.cpp src/Token.cpp src/Parser.cpp)
+add_library(disco_compiler_core STATIC ${COMPILER_CORE_SOURCES})
+add_library(disco_linker_core INTERFACE)
+add_library(disco_assembler_core STATIC src/Assembler.cpp)
 
-set(ASSEMBLER_SOURCES
-    src/discas.cpp
-    src/Assembler.cpp
-    src/ObjectFile.cpp
-)
+foreach(core_target IN ITEMS disco_object_core disco_frontend_core disco_compiler_core
+                            disco_assembler_core)
+    target_include_directories(${core_target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(${core_target} PUBLIC disco_common_warnings)
+endforeach()
 
-# Build Targets
-# Define the compiler, linker, and standalone assembler executables
-add_executable(discc ${COMPILER_SOURCES})
-add_executable(discld ${LINKER_SOURCES})
-add_executable(discas ${ASSEMBLER_SOURCES})
+target_include_directories(disco_linker_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(disco_linker_core INTERFACE disco_object_core)
+
+target_link_libraries(disco_compiler_core PUBLIC disco_frontend_core disco_object_core)
+target_link_libraries(disco_assembler_core PUBLIC disco_object_core)
+
+add_executable(discc src/discc.cpp)
+add_executable(discld src/discld.cpp)
+add_executable(discas src/discas.cpp)
+target_link_libraries(discc PRIVATE disco_compiler_core)
+target_link_libraries(discld PRIVATE disco_linker_core)
+target_link_libraries(discas PRIVATE disco_assembler_core)
 
 if(DISCO_BUILD_FUZZERS)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         message(FATAL_ERROR "DISCO_BUILD_FUZZERS requires a Clang compiler with libFuzzer support.")
     endif()
-    add_executable(disco_frontend_fuzzer
-        tests/FrontendFuzzer.cpp
-        src/Lexer.cpp
-        src/Token.cpp
-        src/Parser.cpp
-        src/Assembler.cpp
-        src/ObjectFile.cpp
-    )
-    target_include_directories(disco_frontend_fuzzer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    add_executable(disco_frontend_fuzzer tests/FrontendFuzzer.cpp)
+    target_link_libraries(disco_frontend_fuzzer PRIVATE disco_frontend_core disco_assembler_core)
     target_compile_options(disco_frontend_fuzzer PRIVATE -fsanitize=fuzzer,address,undefined)
     target_link_options(disco_frontend_fuzzer PRIVATE -fsanitize=fuzzer,address,undefined)
 endif()
@@ -124,12 +118,9 @@ endif()
 include(CTest)
 if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     enable_testing()
-    add_executable(disco_object_tests
-        tests/ObjectFileTests.cpp
-        src/ObjectFile.cpp
-    )
+    add_executable(disco_object_tests tests/ObjectFileTests.cpp)
     target_include_directories(disco_object_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(disco_object_tests PRIVATE disco_common_warnings)
+    target_link_libraries(disco_object_tests PRIVATE disco_object_core)
 
     add_executable(disco_ir_verifier_tests
         tests/IRVerifierTests.cpp
@@ -149,12 +140,9 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
 
     add_executable(disco_target_foundation_tests
         tests/TargetFoundationTests.cpp
-        src/Lexer.cpp
-        src/Parser.cpp
-        src/Token.cpp
     )
     target_include_directories(disco_target_foundation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(disco_target_foundation_tests PRIVATE disco_common_warnings)
+    target_link_libraries(disco_target_foundation_tests PRIVATE disco_frontend_core)
 
     function(add_toolchain_regression name case_name)
         add_test(
@@ -182,20 +170,13 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_toolchain_regression(switch_abi switch_abi)
     add_toolchain_regression(backend_equivalence backend_equivalence)
     add_toolchain_regression(data_relocation data_relocation)
+    add_toolchain_regression(branch_relaxation branch_relaxation)
     add_toolchain_regression(feature_examples feature_examples)
     add_toolchain_regression(spc700_target spc700_target)
 endif()
 
-# Link Dependencies & Apply Flags
-# Apply the common flags and include directories to both targets
-target_include_directories(discc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_include_directories(discld PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_include_directories(discas PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
-# Link our warning flags library to the targets
-target_link_libraries(discc PRIVATE disco_common_warnings)
-target_link_libraries(discld PRIVATE disco_common_warnings)
-target_link_libraries(discas PRIVATE disco_common_warnings)
+# Core libraries carry their include paths and warning policy to the tools and
+# tests that consume them.
 # Final Status Output
 cmake_print_variables(CMAKE_CXX_COMPILER_ID CMAKE_SYSTEM_NAME CMAKE_BUILD_TYPE)
 message(STATUS "Project configured successfully. Build with 'cmake --build .'")
