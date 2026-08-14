@@ -61,7 +61,7 @@ Every basic block must:
 4. Contain no instruction after its terminator.
 5. Refer only to valid value IDs and block IDs.
 
-The verifier also checks the shape of branch, switch, and return instructions. For a switch, the case-value count must match the non-default targets, and the default target is stored last when present.
+The verifier also checks the shape of branch, switch, and return instructions. For a switch, the case-value count must match the non-default targets, and the default target is stored last when present. Reachable-block dominance is computed with packed `uint64_t` bitsets so verifier memory scales with the number of blocks rather than the number of set-node allocations.
 
 Before a backend consumes a function, verification also ensures that value IDs
 have exactly one definition, form a contiguous sequence, and are used only
