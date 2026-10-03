@@ -2,6 +2,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include "CompilerError.hpp"
+#include "GsuMemoryMap.hpp"
 
 namespace {
 
@@ -21,7 +22,21 @@ std::vector<std::unique_ptr<Stmt>> Parser::parseProgram() {
             statements.push_back(globalDeclaration());
         }
     }
+    if (m_execution_memory_explicit) {
+        const auto expected = m_execution_memory == ExecutionMemory::Ram
+            ? GsuMemoryMap::Region::Ram : GsuMemoryMap::Region::Rom;
+        if (GsuMemoryMap::region(m_config.code_start_address) != expected) {
+            throw CompilerError("Code start address does not match selected execution memory.",
+                                m_execution_memory_line, m_execution_memory_column);
+        }
+    }
     return statements;
+}
+
+void Parser::updateDefaultCodeOrigin() {
+    if (m_code_origin_explicit) return;
+    m_config.code_start_address = m_execution_memory == ExecutionMemory::Ram
+        ? 0x708000u : (m_config.mapping == MemoryMapping::LoROM ? 0x008000u : 0x408000u);
 }
 
 const CompilerConfig& Parser::getConfig() const {
@@ -40,13 +55,33 @@ void Parser::parseDirective() {
         Token value = consume(TokenType::IDENTIFIER, "Expect mapping value (e.g., 'lorom' or 'hirom').");
         if (value.lexeme == "lorom") {
             m_config.mapping = MemoryMapping::LoROM;
-            m_config.code_start_address = 0x8000;
         } else if (value.lexeme == "hirom") {
             m_config.mapping = MemoryMapping::HiROM;
-            m_config.code_start_address = 0x408000;
         } else {
-            throw std::runtime_error("Parse Error: Unsupported memory mapping '" + value.lexeme + "'.");
+            throw CompilerError("Parse Error: Unsupported memory mapping '" + value.lexeme + "'.",
+                                value.line_number, value.col_number);
         }
+        updateDefaultCodeOrigin();
+    } else if (key.lexeme == "execution_memory") {
+        if (m_config.target != TargetKind::GSU) {
+            throw CompilerError("Execution memory selection is only supported for GSU.",
+                                key.line_number, key.col_number);
+        }
+        const Token value = peek();
+        if (value.lexeme == "ram" && value.type == TokenType::IDENTIFIER) {
+            advance();
+            m_execution_memory = ExecutionMemory::Ram;
+        } else if (value.lexeme == "rom" && value.type == TokenType::KEYWORD_ROM) {
+            advance();
+            m_execution_memory = ExecutionMemory::Rom;
+        } else {
+            throw CompilerError("Expect execution memory 'rom' or 'ram'.",
+                                value.line_number, value.col_number);
+        }
+        m_execution_memory_explicit = true;
+        m_execution_memory_line = value.line_number;
+        m_execution_memory_column = value.col_number;
+        updateDefaultCodeOrigin();
     } else if (key.lexeme == "code_start_address") {
         Token value = consume(TokenType::LITERAL_INTEGER, "Expect an integer literal for the start address.");
         const auto address = parseIntegerLiteral(value, "code start address");
@@ -55,8 +90,10 @@ void Parser::parseDirective() {
                                 value.line_number, value.col_number);
         }
         m_config.code_start_address = static_cast<std::uint32_t>(address);
+        m_code_origin_explicit = true;
     } else {
-        throw std::runtime_error("Parse Error: Unknown configuration key '" + key.lexeme + "'.");
+        throw CompilerError("Parse Error: Unknown configuration key '" + key.lexeme + "'.",
+                            key.line_number, key.col_number);
     }
     consume(TokenType::SEMICOLON, "Expect ';' after set directive.");
 }
@@ -106,7 +143,8 @@ Type Parser::parseType() {
 
     // After parsing keywords, ensure a base type was actually specified.
     if (type.base == BaseType::NONE) {
-        throw std::runtime_error("Parse Error: Expected a base type specifier (word, byte, or void).");
+        throw CompilerError("Parse Error: Expected a base type specifier (word, byte, or void).",
+                            peek().line_number, peek().col_number);
     }
 
     // If 'rom' wasn't specified, the default is RAM.
@@ -121,7 +159,8 @@ Type Parser::parseType() {
     
     // Finally, validate the combination.
     if (type.is_far && type.pointer_level == 0) {
-        throw std::runtime_error("Parse Error: The 'far' keyword can only be applied to pointer types.");
+        throw CompilerError("Parse Error: The 'far' keyword can only be applied to pointer types.",
+                            peek().line_number, peek().col_number);
     }
     
     return type;
@@ -133,7 +172,8 @@ std::unique_ptr<Stmt> Parser::globalDeclaration() {
     if (peek().type == TokenType::KEYWORD_ROM &&
         peekNext().type == TokenType::KEYWORD_CONST) {
         advance(); advance();
-        if(is_cached) throw std::runtime_error("Parse Error: 'cache' cannot be applied to 'rom const' data.");
+        if(is_cached) throw CompilerError("Parse Error: 'cache' cannot be applied to 'rom const' data.",
+                                          peek().line_number, peek().col_number);
         Type type = parseType();
         type.space = AddressSpace::ROM;
         validateValueType(type, peek(), "ROM data");
@@ -182,7 +222,8 @@ std::unique_ptr<Stmt> Parser::functionDeclaration(bool is_cached, Type returnTyp
     if (!check(TokenType::RPAREN)) {
         do {
             if (!isAtStartOfDeclaration()) {
-                throw std::runtime_error("Parse Error: Expect type specifier for parameter.");
+                throw CompilerError("Parse Error: Expect type specifier for parameter.",
+                                    peek().line_number, peek().col_number);
             }
             Type paramType = parseType();
             validateValueType(paramType, peek(), "function parameter");
@@ -204,7 +245,8 @@ std::unique_ptr<Stmt> Parser::functionDeclaration(bool is_cached, Type returnTyp
     if (auto* block = dynamic_cast<BlockStmt*>(body.get())) {
         return std::make_unique<FunctionDeclStmt>(name, is_cached, returnType, std::move(params), std::move(block->statements));
     }
-    throw std::runtime_error("Function body must be a block statement { ... }.");
+    throw CompilerError("Function body must be a block statement { ... }.",
+                        name.line_number, name.col_number);
 }
 
 std::unique_ptr<Stmt> Parser::structDeclaration() {
@@ -249,13 +291,15 @@ std::unique_ptr<Stmt> Parser::statement() {
     if (match({TokenType::KEYWORD_DRAW})) return drawStatement();
 
     if (isAtStartOfDeclaration()) {
-        if (is_cached) throw std::runtime_error("Parse Error: 'cache' cannot precede a variable declaration.");
+        if (is_cached) throw CompilerError("Parse Error: 'cache' cannot precede a variable declaration.",
+                                           peek().line_number, peek().col_number);
         Type type = parseType();
         Token name = consume(TokenType::IDENTIFIER, "Expect identifier for variable declaration.");
         return varDeclaration(type, name);
     }
 
-    if (is_cached) throw std::runtime_error("Parse Error: 'cache' can only be applied to a for or while loop.");
+    if (is_cached) throw CompilerError("Parse Error: 'cache' can only be applied to a for or while loop.",
+                                       peek().line_number, peek().col_number);
 
     auto expr = expression();
     consume(TokenType::SEMICOLON, "Expect ';' after expression.");
@@ -293,7 +337,10 @@ std::unique_ptr<Stmt> Parser::varDeclaration(Type type, Token name) {
     validateValueType(type, name, "variable declaration");
     std::unique_ptr<Expr> initializer = nullptr;
     if (match({TokenType::LBRACKET})) {
-        if (type.pointer_level > 0) throw std::runtime_error("Arrays of pointers not supported yet.");
+        if (type.pointer_level > 0) {
+            throw CompilerError("Arrays of pointers are not supported yet.",
+                                name.line_number, name.col_number);
+        }
         Token size_token = consume(TokenType::LITERAL_INTEGER, "Expect array size.");
         const auto array_size = parseIntegerLiteral(size_token, "array size");
         if (array_size <= 0 || array_size > MaxArrayElements) {

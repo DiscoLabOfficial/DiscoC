@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <cstdlib>
+#include <stdexcept>
 
 namespace {
 
@@ -17,6 +18,29 @@ IRInstruction binary(std::uint32_t result, std::uint32_t left, std::uint32_t rig
     instruction.opcode = IROpcode::Binary;
     instruction.result = IRValueId{result};
     instruction.operands = {IRValueId{left}, IRValueId{right}};
+    instruction.operation = "+";
+    return instruction;
+}
+
+IRInstruction load(std::uint32_t result, std::uint32_t address) {
+    IRInstruction instruction;
+    instruction.opcode = IROpcode::LoadIndirect;
+    instruction.result = IRValueId{result};
+    instruction.operands = {IRValueId{address}};
+    return instruction;
+}
+
+IRInstruction branch(std::uint32_t target) {
+    IRInstruction instruction;
+    instruction.opcode = IROpcode::Branch;
+    instruction.targets = {IRBlockId{target}};
+    return instruction;
+}
+
+IRInstruction ret(std::uint32_t value) {
+    IRInstruction instruction;
+    instruction.opcode = IROpcode::Return;
+    instruction.operands = {IRValueId{value}};
     return instruction;
 }
 
@@ -50,5 +74,40 @@ int main() {
     require(!third->has_register, "third value spills");
     require(fourth->has_register && fourth->physical_register == 7, "fourth value reuses R7");
     require(second->end < fourth->start, "intervals are ordered");
+
+    IRFunction reordered;
+    reordered.entry = IRBlockId{0};
+    reordered.blocks.push_back({IRBlockId{0}, "entry", {
+        branch(2)
+    }});
+    reordered.blocks.push_back({IRBlockId{1}, "use", {
+        binary(2, 1, 1),
+        ret(2)
+    }});
+    reordered.blocks.push_back({IRBlockId{2}, "definition", {
+        constant(1),
+        branch(1)
+    }});
+    reordered.value_count = 2;
+    allocator.run(reordered, {5});
+    require(allocator.find(IRValueId{1}) != nullptr, "RPO handles definitions in later physical blocks");
+
+    IRFunction observable;
+    observable.blocks.push_back({IRBlockId{0}, "entry", {
+        constant(1),
+        load(2, 1),
+        binary(3, 2, 1),
+        binary(4, 2, 1),
+        ret(4)
+    }});
+    observable.entry = IRBlockId{0};
+    observable.value_count = 4;
+    bool rejected_observable_spill = false;
+    try {
+        allocator.run(observable, {});
+    } catch (const std::runtime_error&) {
+        rejected_observable_spill = true;
+    }
+    require(rejected_observable_spill, "multi-use loads are not silently rematerialized");
     return 0;
 }

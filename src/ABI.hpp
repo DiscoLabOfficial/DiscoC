@@ -18,7 +18,9 @@ constexpr std::uint8_t ProgramCounterRegister = 15;
 
 constexpr std::size_t StackAlignment = 2;
 constexpr std::size_t ParameterSlotSize = 2;
-constexpr int FirstParameterOffset = 4;
+// PUSH stores before decrementing SP. FP therefore points to the empty slot
+// below saved R9 (FP+2) and saved R11 (FP+4).
+constexpr int FirstParameterOffset = 6;
 
 // R9 and R11 are saved by every non-entry function. Allocated value registers
 // are caller-saved and must be protected around calls when their values remain

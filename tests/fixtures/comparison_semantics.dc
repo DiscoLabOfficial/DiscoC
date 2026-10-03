@@ -1,0 +1,34 @@
+word signed_less(word a, word b) {
+    return a < b;
+}
+
+word signed_less_equal(word a, word b) {
+    return a <= b;
+}
+
+word signed_greater(word a, word b) {
+    return a > b;
+}
+
+word signed_greater_equal(word a, word b) {
+    return a >= b;
+}
+
+unsigned word unsigned_less(unsigned word a, unsigned word b) {
+    return a < b;
+}
+
+unsigned word unsigned_greater_equal(unsigned word a, unsigned word b) {
+    return a >= b;
+}
+
+void main() {
+    word a = 0;
+    word b = 0;
+    word result = (a < b) == (a >= b);
+    if (result != 0) {
+        while (a < b) {
+            a = a + 1;
+        }
+    }
+}

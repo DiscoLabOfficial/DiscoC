@@ -1,0 +1,11 @@
+void side_effect() {
+}
+
+void main() {
+    {
+        if (1) {
+            side_effect();
+        }
+        side_effect();
+    }
+}

@@ -1,0 +1,24 @@
+void main() {
+    word selector = 0;
+    switch (selector) {
+        case 0:
+            selector = selector + 1;
+            selector = selector + 1;
+            selector = selector + 1;
+            selector = selector + 1;
+            selector = selector + 1;
+            selector = selector + 1;
+            selector = selector + 1;
+            selector = selector + 1;
+            selector = selector + 1;
+            selector = selector + 1;
+            selector = selector + 1;
+            selector = selector + 1;
+            break;
+        case 1:
+            selector = selector + 1;
+            break;
+        default:
+            break;
+    }
+}

@@ -9,6 +9,16 @@
 #include "ABI.hpp"
 #include "Opcodes.hpp"
 
+namespace {
+
+struct NeedsLongBranch {};
+
+std::string internalBlockSymbol(const std::string& function, IRBlockId block) {
+    return std::string(1, '\x01') + function + "#" + std::to_string(block.value);
+}
+
+} // namespace
+
 IRCodeGenerator::IRCodeGenerator(
     const std::map<std::string, Analyzer::LocalSymbolTable>& all_local_symbols,
     const std::map<std::string, FunctionSymbol>& global_function_symbols,
@@ -43,9 +53,9 @@ void IRCodeGenerator::emitLiteral(std::int64_t value) {
 }
 
 void IRCodeGenerator::emitMove(std::uint8_t destination, std::uint8_t source) {
-    if (source != 0) {
-        emitByte(static_cast<std::uint8_t>(0x20 | source));
-    }
+    // TO alone only selects a destination. WITH is required even for R0
+    // to form an immediate register copy and clear the selection afterwards.
+    emitByte(static_cast<std::uint8_t>(0x20 | source));
     emitByte(static_cast<std::uint8_t>(0x10 | destination));
 }
 
@@ -296,7 +306,7 @@ void IRCodeGenerator::emitLoadIndirect(const IRInstruction& instruction) {
 
         if (instruction.type.space == AddressSpace::ROM) {
             emitMove(14, offset_reg);
-            if (instruction.type.base == BaseType::BYTE) {
+            if (usesByteStorage(instruction.type)) {
                 emitByte(static_cast<std::uint8_t>(OpCode::GETB));
             } else {
                 emitByte(static_cast<std::uint8_t>(OpCode::GETB));
@@ -304,7 +314,7 @@ void IRCodeGenerator::emitLoadIndirect(const IRInstruction& instruction) {
                 emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
                 emitByte(static_cast<std::uint8_t>(OpCode::GETB));
             }
-        } else if (instruction.type.base == BaseType::BYTE) {
+        } else if (usesByteStorage(instruction.type)) {
             emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
             emitByte(static_cast<std::uint8_t>(0x40 | offset_reg));
         } else {
@@ -314,7 +324,7 @@ void IRCodeGenerator::emitLoadIndirect(const IRInstruction& instruction) {
     }
     if (instruction.type.space == AddressSpace::ROM) {
         emitMove(14, 0);
-        if (instruction.type.base == BaseType::BYTE) {
+        if (usesByteStorage(instruction.type)) {
             emitByte(static_cast<std::uint8_t>(OpCode::GETB));
         } else {
             emitByte(static_cast<std::uint8_t>(OpCode::GETB));
@@ -324,7 +334,7 @@ void IRCodeGenerator::emitLoadIndirect(const IRInstruction& instruction) {
         }
         return;
     }
-    if (instruction.type.base == BaseType::BYTE) {
+    if (usesByteStorage(instruction.type)) {
         emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
     }
     emitByte(0x40);
@@ -386,21 +396,32 @@ void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
             fixups.push_back({patch_offset, label, instruction.source});
         };
 
+        const bool unsigned_comparison = instruction.type.is_unsigned;
+        const auto equal = static_cast<std::uint8_t>(OpCode::BEQ);
+        const auto not_equal = static_cast<std::uint8_t>(OpCode::BNE);
+        const auto less = static_cast<std::uint8_t>(
+            unsigned_comparison ? OpCode::BCC : OpCode::BLT);
+        const auto greater_equal = static_cast<std::uint8_t>(
+            unsigned_comparison ? OpCode::BCS : OpCode::BGE);
+        const auto false_label = new_label();
+
         if (instruction.operation == "==") {
-            emit_local_branch(static_cast<std::uint8_t>(OpCode::BEQ), true_label);
+            emit_local_branch(equal, true_label);
         } else if (instruction.operation == "!=") {
-            emit_local_branch(static_cast<std::uint8_t>(OpCode::BNE), true_label);
-        } else if (instruction.operation == ">") {
-            emit_local_branch(static_cast<std::uint8_t>(OpCode::BPL), true_label);
+            emit_local_branch(not_equal, true_label);
         } else if (instruction.operation == "<") {
-            emit_local_branch(static_cast<std::uint8_t>(OpCode::BMI), true_label);
-        } else if (instruction.operation == ">=") {
-            emit_local_branch(static_cast<std::uint8_t>(OpCode::BEQ), true_label);
-            emit_local_branch(static_cast<std::uint8_t>(OpCode::BPL), true_label);
+            emit_local_branch(less, true_label);
         } else if (instruction.operation == "<=") {
-            emit_local_branch(static_cast<std::uint8_t>(OpCode::BEQ), true_label);
-            emit_local_branch(static_cast<std::uint8_t>(OpCode::BMI), true_label);
+            emit_local_branch(less, true_label);
+            emit_local_branch(equal, true_label);
+        } else if (instruction.operation == ">") {
+            emit_local_branch(equal, false_label);
+            emit_local_branch(greater_equal, true_label);
+        } else if (instruction.operation == ">=") {
+            emit_local_branch(less, false_label);
+            emit_local_branch(greater_equal, true_label);
         }
+        labels[false_label] = m_object_file.code_section.size();
         emitLiteral(0);
         emit_local_branch(static_cast<std::uint8_t>(OpCode::BRA), end_label);
         labels[true_label] = m_object_file.code_section.size();
@@ -445,6 +466,9 @@ void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
     emitByte(static_cast<std::uint8_t>(OpCode::IWT) | 0x0F);
     emitWord(0);
     addRelocation(instruction.symbol, patch_offset, RelocationType::ADDR16_JAL);
+    // IWT R15 leaves the next opcode in the pipeline. LINK #4 returns after
+    // this delay slot, so caller cleanup must begin after the NOP.
+    emitByte(static_cast<std::uint8_t>(OpCode::NOP));
     if (instruction.operands.size() >
         std::numeric_limits<std::size_t>::max() / GSUAbi::ParameterSlotSize) {
         fail("IR codegen: call argument area is too large.", instruction.source);
@@ -460,7 +484,7 @@ void IRCodeGenerator::emitStoreIndirect(const IRInstruction& instruction) {
     }
     const auto address = instruction.operands[0];
     const auto value = instruction.operands[1];
-    const bool byte = instruction.type.base == BaseType::BYTE;
+    const bool byte = usesByteStorage(instruction.type);
 
     if (instruction.operation == "declare") {
         materialize(value);
@@ -496,6 +520,10 @@ void IRCodeGenerator::emitHardwareLoop(const IRInstruction& instruction) {
 void IRCodeGenerator::materialize(IRValueId value) {
     const auto& instruction = producer(value, Token(TokenType::UNKNOWN, "", 0, 0));
     const auto* location = m_register_allocator.find(value);
+    if (location != nullptr && !location->has_register && !location->rematerializable) {
+        fail("IR codegen: value with observable effects requires a spill slot.",
+             instruction.source);
+    }
     if (usesRegisterAllocation(value) &&
         m_materialized_values.count(value.value) != 0) {
         emitMove(0, location->physical_register);
@@ -551,6 +579,14 @@ void IRCodeGenerator::emitBranch(IRBlockId target, const Token& source) {
     if (target.isValid() && target.value == m_current_block_index + 1) {
         return;
     }
+    if (m_force_long_branches) {
+        emitByte(static_cast<std::uint8_t>(OpCode::IWT) | GSUAbi::ProgramCounterRegister);
+        const auto patch_offset = m_object_file.code_section.size();
+        emitWord(0);
+        emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+        m_branch_fixups.push_back({patch_offset, target, source, true});
+        return;
+    }
     emitByte(static_cast<std::uint8_t>(OpCode::BRA));
     const auto patch_offset = m_object_file.code_section.size();
     emitByte(0);
@@ -558,51 +594,72 @@ void IRCodeGenerator::emitBranch(IRBlockId target, const Token& source) {
     m_branch_fixups.push_back({patch_offset, target, source});
 }
 
+void IRCodeGenerator::emitBlockBranch(std::uint8_t opcode, IRBlockId target,
+                                      const Token& source) {
+    if (opcode == static_cast<std::uint8_t>(OpCode::BRA)) {
+        emitBranch(target, source);
+        return;
+    }
+    if (!m_force_long_branches) {
+        emitByte(opcode);
+        const auto patch_offset = m_object_file.code_section.size();
+        emitByte(0);
+        emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+        m_branch_fixups.push_back({patch_offset, target, source});
+        return;
+    }
+
+    static const std::map<std::uint8_t, std::uint8_t> inverse = {
+        {static_cast<std::uint8_t>(OpCode::BEQ), static_cast<std::uint8_t>(OpCode::BNE)},
+        {static_cast<std::uint8_t>(OpCode::BNE), static_cast<std::uint8_t>(OpCode::BEQ)},
+        {static_cast<std::uint8_t>(OpCode::BGE), static_cast<std::uint8_t>(OpCode::BLT)},
+        {static_cast<std::uint8_t>(OpCode::BLT), static_cast<std::uint8_t>(OpCode::BGE)},
+        {static_cast<std::uint8_t>(OpCode::BPL), static_cast<std::uint8_t>(OpCode::BMI)},
+        {static_cast<std::uint8_t>(OpCode::BMI), static_cast<std::uint8_t>(OpCode::BPL)},
+        {static_cast<std::uint8_t>(OpCode::BCC), static_cast<std::uint8_t>(OpCode::BCS)},
+        {static_cast<std::uint8_t>(OpCode::BCS), static_cast<std::uint8_t>(OpCode::BCC)}};
+    const auto inverse_opcode = inverse.find(opcode);
+    if (inverse_opcode == inverse.end()) {
+        fail("IR codegen: unsupported long conditional branch.", source);
+    }
+    emitByte(inverse_opcode->second);
+    emitByte(5);
+    emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+    emitByte(static_cast<std::uint8_t>(OpCode::IWT) | GSUAbi::ProgramCounterRegister);
+    const auto patch_offset = m_object_file.code_section.size();
+    emitWord(0);
+    emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+    m_branch_fixups.push_back({patch_offset, target, source, true});
+}
+
 void IRCodeGenerator::emitConditionalBranch(const IRInstruction& instruction) {
     if (instruction.operands.size() != 1 || instruction.targets.size() != 2) {
         fail("IR codegen: conditional branch shape is invalid.", instruction.source);
     }
-    const auto& condition = producer(instruction.operands.front(), instruction.source);
-    const bool is_comparison = condition.opcode == IROpcode::Binary &&
-                               (condition.operation == ">" || condition.operation == ">=" ||
-                                condition.operation == "<" || condition.operation == "<=" ||
-                                condition.operation == "==" || condition.operation == "!=");
-    if (is_comparison) {
-        materialize(condition.operands[1]);
-        emitPush(0);
-        materialize(condition.operands[0]);
-        emitPop(scratchRegister());
-        emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
-        emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
-        std::uint8_t false_opcode = static_cast<std::uint8_t>(OpCode::BNE);
-        if (condition.operation == ">" || condition.operation == ">=") {
-            false_opcode = static_cast<std::uint8_t>(OpCode::BMI);
-        } else if (condition.operation == "<" || condition.operation == "<=") {
-            false_opcode = static_cast<std::uint8_t>(OpCode::BPL);
-        } else if (condition.operation == "!=") {
-            false_opcode = static_cast<std::uint8_t>(OpCode::BEQ);
-        }
-        emitByte(false_opcode);
+    // Materialize every condition as 0 or 1. This keeps comparison semantics
+    // in one place and also makes nested comparisons ordinary values.
+    materialize(instruction.operands.front());
+    emitByte(static_cast<std::uint8_t>(OpCode::IWT) | scratchRegister());
+    emitWord(0);
+    emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
+    emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
+    if (m_force_long_branches) {
+        emitByte(static_cast<std::uint8_t>(OpCode::BNE));
+        emitByte(5);
+        emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+        emitByte(static_cast<std::uint8_t>(OpCode::IWT) | GSUAbi::ProgramCounterRegister);
+        const auto false_patch = m_object_file.code_section.size();
+        emitWord(0);
+        emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+        m_branch_fixups.push_back({false_patch, instruction.targets[1], instruction.source, true});
+    } else {
+        emitByte(static_cast<std::uint8_t>(OpCode::BEQ));
         const auto false_patch = m_object_file.code_section.size();
         emitByte(0);
         emitByte(static_cast<std::uint8_t>(OpCode::NOP));
         m_branch_fixups.push_back({false_patch, instruction.targets[1], instruction.source});
-        emitBranch(instruction.targets[0], instruction.source);
-        return;
     }
-
-    // Ordinary integer conditions use truthiness (non-zero is true).
-    materialize(instruction.operands.front());
-    emitMove(scratchRegister(), 0);
-    emitLiteral(0);
-    emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
-    emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
-    emitByte(static_cast<std::uint8_t>(OpCode::BNE));
-    const auto true_patch = m_object_file.code_section.size();
-    emitByte(0);
-    emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-    m_branch_fixups.push_back({true_patch, instruction.targets[0], instruction.source});
-    emitBranch(instruction.targets[1], instruction.source);
+    emitBranch(instruction.targets[0], instruction.source);
 }
 
 void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
@@ -640,18 +697,12 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
             emitLiteral(instruction.case_values[case_index]);
             emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
             emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
-            emitByte(static_cast<std::uint8_t>(OpCode::BEQ));
-            const auto patch_offset = m_object_file.code_section.size();
-            emitByte(0);
-            emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-            m_branch_fixups.push_back({patch_offset, instruction.targets[case_index], instruction.source});
+            emitBlockBranch(static_cast<std::uint8_t>(OpCode::BEQ),
+                            instruction.targets[case_index], instruction.source);
         }
         if (default_index < instruction.targets.size()) {
-            emitByte(static_cast<std::uint8_t>(OpCode::BRA));
-            const auto patch_offset = m_object_file.code_section.size();
-            emitByte(0);
-            emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-            m_branch_fixups.push_back({patch_offset, instruction.targets[default_index], instruction.source});
+            emitBlockBranch(static_cast<std::uint8_t>(OpCode::BRA),
+                            instruction.targets[default_index], instruction.source);
         }
         return;
     }
@@ -676,11 +727,7 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
         local_fixups.push_back({patch_offset, label, instruction.source});
     };
     const auto emit_block_branch = [&](std::uint8_t opcode, IRBlockId target) {
-        emitByte(opcode);
-        const auto patch_offset = m_object_file.code_section.size();
-        emitByte(0);
-        emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-        m_branch_fixups.push_back({patch_offset, target, instruction.source});
+        emitBlockBranch(opcode, target, instruction.source);
     };
 
     std::function<void(std::size_t, std::size_t, std::size_t)> emit_search;
@@ -691,11 +738,8 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
         emitLiteral(instruction.case_values[case_index]);
         emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
         emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
-        emitByte(static_cast<std::uint8_t>(OpCode::BEQ));
-        const auto equal_patch = m_object_file.code_section.size();
-        emitByte(0);
-        emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-        m_branch_fixups.push_back({equal_patch, instruction.targets[case_index], instruction.source});
+        emitBlockBranch(static_cast<std::uint8_t>(OpCode::BEQ),
+                        instruction.targets[case_index], instruction.source);
 
         const bool has_left = begin < middle;
         const bool has_right = middle + 1 < end;
@@ -837,17 +881,24 @@ void IRCodeGenerator::patchBranches() {
         if (target == m_block_addresses.end()) {
             fail("IR codegen: branch target was not emitted.", fixup.source);
         }
+        if (fixup.long_form) {
+            // Branch fixups point at the operand, but ADDR16_IWT relocations
+            // point at the opcode and patch its following two bytes.
+            addRelocation(internalBlockSymbol(m_current_function->name, fixup.target),
+                          fixup.patch_offset - 1, RelocationType::ADDR16_IWT);
+            continue;
+        }
         const auto next_instruction = static_cast<std::int64_t>(fixup.patch_offset) + 1;
         const auto distance = static_cast<std::int64_t>(target->second) - next_instruction;
         if (distance < -128 || distance > 127) {
-            fail("IR codegen: branch target is out of range.", fixup.source);
+            throw NeedsLongBranch{};
         }
         m_object_file.code_section.at(fixup.patch_offset) =
             static_cast<std::uint8_t>(static_cast<std::int8_t>(distance));
     }
 }
 
-ObjectFile IRCodeGenerator::generate(const IRModule& module) {
+ObjectFile IRCodeGenerator::generateInternal(const IRModule& module) {
     m_object_file = ObjectFile();
     m_object_file.config = m_config;
 
@@ -891,6 +942,10 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
             m_current_block_index = block_index;
             m_block_addresses[function.blocks[block_index].id.value] =
                 m_object_file.code_section.size();
+            m_object_file.symbol_table.push_back({
+                internalBlockSymbol(function.name, function.blocks[block_index].id),
+                SymbolSection::CODE,
+                static_cast<std::uint32_t>(m_object_file.code_section.size())});
             emitBlock(function.blocks[block_index]);
         }
         patchBranches();
@@ -904,4 +959,14 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
                                           entry.bytes.begin(), entry.bytes.end());
     }
     return m_object_file;
+}
+
+ObjectFile IRCodeGenerator::generate(const IRModule& module) {
+    m_force_long_branches = false;
+    try {
+        return generateInternal(module);
+    } catch (const NeedsLongBranch&) {
+        m_force_long_branches = true;
+        return generateInternal(module);
+    }
 }

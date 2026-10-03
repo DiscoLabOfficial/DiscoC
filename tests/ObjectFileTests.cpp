@@ -1,6 +1,7 @@
 #include "ObjectFile.hpp"
 
 #include <filesystem>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -21,6 +22,12 @@ void appendU32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
     bytes.push_back(static_cast<std::uint8_t>((value >> 8) & 0xff));
     bytes.push_back(static_cast<std::uint8_t>((value >> 16) & 0xff));
     bytes.push_back(static_cast<std::uint8_t>((value >> 24) & 0xff));
+}
+
+void appendString(std::vector<std::uint8_t>& bytes, const char* value) {
+    const auto length = static_cast<std::uint32_t>(std::strlen(value));
+    appendU32(bytes, length);
+    bytes.insert(bytes.end(), value, value + length);
 }
 
 std::vector<std::uint8_t> objectPrefix() {
@@ -98,6 +105,22 @@ int main() {
         if (loaded_from_memory.code_section != valid.code_section ||
             loaded_from_memory.data_section != valid.data_section) {
             throw std::runtime_error("valid object did not load from memory");
+        }
+
+        // This fixture is assembled byte by byte instead of being produced by
+        // ObjectFile::write, so a host-endian reader cannot hide behind a
+        // matching host-endian writer.
+        auto little_endian_fixture = objectPrefix();
+        appendU32(little_endian_fixture, 0); // code section
+        appendU32(little_endian_fixture, 0); // data section
+        appendU32(little_endian_fixture, 1); // symbol count
+        appendString(little_endian_fixture, "entry");
+        little_endian_fixture.push_back(0); // CODE
+        appendU32(little_endian_fixture, 0);
+        appendU32(little_endian_fixture, 0); // relocation count
+        const auto manual = ObjectFile::readBytes(little_endian_fixture);
+        if (manual.symbol_table.size() != 1 || manual.symbol_table.front().name != "entry") {
+            throw std::runtime_error("manual little-endian string fixture was not decoded");
         }
         valid_input.close();
 

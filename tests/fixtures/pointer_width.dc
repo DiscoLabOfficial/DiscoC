@@ -1,0 +1,13 @@
+void main() {
+    byte value = 42;
+    byte* p = &value;
+    byte** pp = &p;
+    word target = 42;
+    word* wp = &target;
+
+    p = &value;
+    pp = &p;
+    wp = &target;
+
+    byte loaded = *p;
+}

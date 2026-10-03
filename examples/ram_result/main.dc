@@ -1,0 +1,6 @@
+word add(word left, word right);
+
+void main() {
+    word* output = (word*)0x0100;
+    *output = add(30, 12);
+}
