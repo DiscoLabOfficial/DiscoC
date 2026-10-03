@@ -18,6 +18,19 @@ function(run_command)
     endif()
 endfunction()
 
+function(check_round_trip name source)
+    run_command("${DISCC}" "${source}" -o "${TEST_DIR}/${name}.o")
+    run_command("${DISCC}" --emit-asm "${source}" -o "${TEST_DIR}/${name}.s")
+    run_command("${DISCAS}" "${TEST_DIR}/${name}.s" -o "${TEST_DIR}/${name}-asm.o")
+    run_command("${DISCLD}" "${TEST_DIR}/${name}.o" -o "${TEST_DIR}/${name}.bin")
+    run_command("${DISCLD}" "${TEST_DIR}/${name}-asm.o" -o "${TEST_DIR}/${name}-asm.bin")
+    file(SHA256 "${TEST_DIR}/${name}.bin" direct_hash)
+    file(SHA256 "${TEST_DIR}/${name}-asm.bin" assembly_hash)
+    if(NOT direct_hash STREQUAL assembly_hash)
+        message(FATAL_ERROR "Canonical assembly round trip failed for ${name}")
+    endif()
+endfunction()
+
 function(run_expected_failure)
     execute_process(
         COMMAND ${ARGV}
@@ -105,10 +118,12 @@ elseif(CASE STREQUAL "language_diagnostics")
     run_expected_failure_contains(":2:5:" "${DISCC}" "${ROOT_DIR}/tests/fixtures/invalid_column.dc" -o "${TEST_DIR}/invalid-column.o")
     run_command("${DISCC}" "${ROOT_DIR}/tests/fixtures/valid_break.dc" -o "${TEST_DIR}/valid-break.o")
     run_command("${DISCC}" "${ROOT_DIR}/tests/fixtures/valid_repeated_prototype.dc" -o "${TEST_DIR}/valid-repeated-prototype.o")
-    run_expected_failure_contains("does not yet support subscript" "${DISCC}" --emit-asm "${ROOT_DIR}/tests/fixtures/asm_unsupported_subscript.dc" -o "${TEST_DIR}/unsupported-subscript.s")
+    # This was an AST-backend limitation. Canonical export must now support
+    # every construct accepted by object compilation, with identical bytes.
+    check_round_trip(subscript "${ROOT_DIR}/tests/fixtures/asm_unsupported_subscript.dc")
     run_command("${DISCC}" --emit-asm "${ROOT_DIR}/tests/fixtures/sibling_scopes.dc" -o "${TEST_DIR}/sibling-scopes.s")
     file(READ "${TEST_DIR}/sibling-scopes.s" sibling_asm)
-    if(NOT sibling_asm MATCHES "sub sp, sp, #4")
+    if(NOT sibling_asm MATCHES "sub #4")
         message(FATAL_ERROR "Sibling lexical scopes did not receive distinct stack slots")
     endif()
     run_command("${DISCC}" "${ROOT_DIR}/tests/fixtures/relational_and_truthiness.dc" -o "${TEST_DIR}/relational.o")
@@ -188,16 +203,21 @@ elseif(CASE STREQUAL "switch_abi")
     if(asm_output MATCHES "Save switch condition value")
         message(FATAL_ERROR "Assembly switch path still saves the selector for every case")
     endif()
-    if(NOT asm_output MATCHES "Constant switch selector")
-        message(FATAL_ERROR "Assembly switch constant-folding path was not used")
-    endif()
-    if(NOT asm_output MATCHES "push r11" OR NOT asm_output MATCHES "push r9" OR
-       NOT asm_output MATCHES "jal accumulate")
+    if(NOT asm_output MATCHES "with r11" OR NOT asm_output MATCHES "with r9" OR
+       NOT asm_output MATCHES "iwt r15, #accumulate")
         message(FATAL_ERROR "ABI prologue/call sequence is missing from assembly output")
     endif()
+    check_round_trip(switch-abi "${source}")
+    foreach(backend IN ITEMS "" "-asm")
+        run_command("${DISCLD}" "${TEST_DIR}/switch-abi${backend}.o" --init-runtime
+            -o "${TEST_DIR}/switch-entry${backend}.bin")
+        run_command("${GSU_RUNNER}" "${TEST_DIR}/switch-entry${backend}.bin" 0x8000
+            --initial-sp 0x7777 --initial-ram-bank 1
+            --word 0x701ffa 40 --word 0x701ff8 46 --register 10 0x1ffc)
+    endforeach()
 
 elseif(CASE STREQUAL "backend_equivalence")
-    foreach(name IN ITEMS math loop loop_opt plot test_casts ir_control_flow)
+    foreach(name IN ITEMS math loop loop_opt plot test_casts ir_control_flow ir_features ir_far switch_abi)
         set(source "${ROOT_DIR}/examples/${name}.dc")
         run_command("${DISCC}" "${source}" -o "${TEST_DIR}/${name}.o")
         run_command("${DISCC}" --emit-asm "${source}" -o "${TEST_DIR}/${name}.s")
@@ -244,9 +264,11 @@ elseif(CASE STREQUAL "pointer_width")
     if(pointer_store_count LESS 6)
         message(FATAL_ERROR "Pointer values were not consistently stored as words:\n${assembly}")
     endif()
-    if(NOT assembly MATCHES "moveb r0, \\(r0\\)")
+    if(NOT assembly MATCHES "ldb \\(r0\\)")
         message(FATAL_ERROR "Dereferencing byte* did not use an 8-bit load:\n${assembly}")
     endif()
+    check_round_trip(pointer-width "${source}")
+    run_command("${GSU_RUNNER}" "${TEST_DIR}/pointer-width-asm.bin" 0x8000 --word 0x1ff0 42)
 
 elseif(CASE STREQUAL "comparison_semantics")
     set(source "${ROOT_DIR}/tests/fixtures/comparison_semantics.dc")
@@ -264,11 +286,12 @@ elseif(CASE STREQUAL "optimizer_preservation")
     set(source "${ROOT_DIR}/tests/fixtures/optimizer_preservation.dc")
     run_command("${DISCC}" --emit-asm "${source}" -o "${TEST_DIR}/optimizer.s")
     file(READ "${TEST_DIR}/optimizer.s" assembly)
-    string(REGEX MATCHALL "jal[ \t]+side_effect" calls "${assembly}")
+    string(REGEX MATCHALL "iwt r15, #side_effect" calls "${assembly}")
     list(LENGTH calls call_count)
     if(call_count LESS 2)
         message(FATAL_ERROR "Optimizer dropped a statement when hardware-loop matching failed:\n${assembly}")
     endif()
+    check_round_trip(optimizer "${source}")
 
 elseif(CASE STREQUAL "ir_branch_relaxation")
     set(source "${ROOT_DIR}/tests/fixtures/long_ir_branch.dc")
@@ -497,6 +520,145 @@ elseif(CASE STREQUAL "gsu_execution_memory")
     file(WRITE "${TEST_DIR}/duplicate.s"
         ".define __DISCO_CODE_START_ADDRESS 0x708000\n.define __DISCO_CODE_START_ADDRESS 0x710000\n")
     run_expected_failure_contains("duplicate configuration" "${DISCAS}" "${TEST_DIR}/duplicate.s" -o "${TEST_DIR}/duplicate.o")
+
+elseif(CASE STREQUAL "gsu_runtime_loading")
+    foreach(unit IN ITEMS main math)
+        set(source "${ROOT_DIR}/tests/fixtures/gsu_call_${unit}.dc")
+        run_command("${DISCC}" "${source}" -o "${TEST_DIR}/${unit}.o")
+        run_command("${DISCC}" --emit-asm "${source}" -o "${TEST_DIR}/${unit}.s")
+        run_command("${DISCAS}" "${TEST_DIR}/${unit}.s" -o "${TEST_DIR}/${unit}-asm.o")
+    endforeach()
+    foreach(origin IN ITEMS 0x706000 0x700000 0x716000)
+        foreach(bank IN ITEMS 0 1)
+            math(EXPR poisoned_bank "1 - ${bank}")
+            math(EXPR result_bank "0x700000 + (${bank} * 65536)" OUTPUT_FORMAT HEXADECIMAL)
+            math(EXPR other_bank "0x700000 + (${poisoned_bank} * 65536)" OUTPUT_FORMAT HEXADECIMAL)
+            math(EXPR result_address "${result_bank} + 0x100" OUTPUT_FORMAT HEXADECIMAL)
+            math(EXPR nested_address "${result_bank} + 0x104" OUTPUT_FORMAT HEXADECIMAL)
+            math(EXPR untouched_address "${other_bank} + 0x100" OUTPUT_FORMAT HEXADECIMAL)
+            # At origin zero, the payload itself can occupy offset $100 in
+            # the other bank, so do not mistake its instruction bytes for data.
+            set(other_expectation)
+            if(NOT origin STREQUAL "0x700000")
+                set(other_expectation --word ${untouched_address} 0)
+            endif()
+            set(payload "${TEST_DIR}/runtime-${origin}-${bank}.bin")
+            set(listing "${payload}.s")
+            run_command("${DISCLD}" "${TEST_DIR}/main.o" "${TEST_DIR}/math.o"
+                --origin ${origin} --init-runtime --ram-bank ${bank}
+                --stack-pointer 0x2000 --emit-asm "${listing}" -o "${payload}")
+            # This deliberately large fixture occupies $0100 at origin zero.
+            # Its result writes then corrupt code in the same data bank, which
+            # the shared-storage model must detect rather than silently passing.
+            if(origin STREQUAL "0x700000" AND bank EQUAL 0)
+                run_expected_failure_contains("register 10" "${GSU_RUNNER}" "${payload}" ${origin}
+                    --initial-sp 0x7777 --initial-ram-bank ${poisoned_bank}
+                    --word ${result_address} 149 --word ${nested_address} 195 --register 10 0x1ffc)
+            else()
+                run_command("${GSU_RUNNER}" "${payload}" ${origin}
+                    --initial-sp 0x7777 --initial-ram-bank ${poisoned_bank}
+                    --word ${result_address} 149 --word ${nested_address} 195
+                    ${other_expectation} --register 10 0x1ffc)
+            endif()
+            file(READ "${payload}" startup LIMIT 12 HEX)
+            if(origin STREQUAL "0x700000")
+                set(entry "0c00")
+            else()
+                set(entry "0c60")
+            endif()
+            set(expected_startup "f00${bank}003edffa0020ff${entry}01")
+            if(NOT startup STREQUAL expected_startup)
+                message(FATAL_ERROR "Incorrect runtime startup: ${startup}, expected ${expected_startup}")
+            endif()
+            run_command("${DISCLD}" "${TEST_DIR}/main-asm.o" "${TEST_DIR}/math-asm.o"
+                --origin ${origin} --init-runtime --ram-bank ${bank}
+                -o "${payload}-asm.bin")
+            # Final exported assembly already contains the bootstrap and all
+            # resolved addresses: link it without injecting a second bootstrap.
+            run_command("${DISCAS}" "${listing}" -o "${payload}-final.o")
+            run_command("${DISCLD}" "${payload}-final.o" -o "${payload}-final.bin")
+            file(SHA256 "${payload}" expected_hash)
+            foreach(roundtrip IN ITEMS "${payload}-asm.bin" "${payload}-final.bin")
+                file(SHA256 "${roundtrip}" actual_hash)
+                if(NOT actual_hash STREQUAL expected_hash)
+                    message(FATAL_ERROR "Runtime/final assembly payload mismatch: ${roundtrip}")
+                endif()
+            endforeach()
+        endforeach()
+    endforeach()
+    # The existing no-bootstrap ABI leaves initialization to the host, and a
+    # fixed-origin payload copied to a different offset is not position independent.
+    run_command("${DISCLD}" "${TEST_DIR}/main.o" "${TEST_DIR}/math.o"
+        --origin 0x706000 -o "${TEST_DIR}/host.bin")
+    run_command("${GSU_RUNNER}" "${TEST_DIR}/host.bin" 0x706000 --initial-ram-bank 1
+        --word 0x710100 149 --word 0x700100 0)
+    run_expected_failure_contains("outside the linked payload" "${GSU_RUNNER}"
+        "${TEST_DIR}/host.bin" 0x705000 --word 0x710100 149)
+
+    function(reject_runtime diagnostic)
+        set(output "${TEST_DIR}/rejected.bin")
+        file(WRITE "${output}" "preserve-existing-output")
+        run_expected_failure_contains("${diagnostic}" "${DISCLD}"
+            "${TEST_DIR}/main.o" "${TEST_DIR}/math.o" ${ARGN} -o "${output}")
+        file(READ "${output}" unchanged)
+        if(NOT unchanged STREQUAL "preserve-existing-output")
+            message(FATAL_ERROR "Rejected runtime link changed existing output")
+        endif()
+    endfunction()
+    reject_runtime("outside supported ROM/RAM" --origin 0x7e6000)
+    reject_runtime("program-bank boundary" --origin 0x70fff8 --init-runtime)
+    reject_runtime("Runtime entry" --init-runtime --entry missing)
+    reject_runtime("Runtime options require" --ram-bank 1)
+    reject_runtime("even and within" --init-runtime --stack-pointer 9)
+    reject_runtime("even and within" --init-runtime --stack-pointer 0)
+    reject_runtime("out of range" --init-runtime --ram-bank 2)
+    reject_runtime("overlaps" --origin 0x702000 --init-runtime)
+    reject_runtime("overlaps" --origin 0x702001 --init-runtime)
+    reject_runtime("Invalid numeric" --origin -1)
+    reject_runtime("out of range" --origin 0x1000000)
+    reject_runtime("Unknown linker option" --unknown)
+    foreach(bad_entry IN ITEMS data_entry end_entry)
+        file(WRITE "${TEST_DIR}/${bad_entry}.s"
+            ".segment \"CODE\"\nstop\nnop\n.export end_entry\nend_entry:\n.segment \"DATA\"\n.export data_entry\ndata_entry:\n.byte 42\n")
+        run_command("${DISCAS}" "${TEST_DIR}/${bad_entry}.s" -o "${TEST_DIR}/${bad_entry}.o")
+        run_expected_failure_contains("Runtime entry" "${DISCLD}"
+            "${TEST_DIR}/${bad_entry}.o" --init-runtime --entry ${bad_entry}
+            -o "${TEST_DIR}/${bad_entry}.bin")
+        if(EXISTS "${TEST_DIR}/${bad_entry}.bin")
+            message(FATAL_ERROR "Invalid runtime entry created output")
+        endif()
+    endforeach()
+    # A user-facing two-file example has a stable public result buffer.
+    foreach(unit IN ITEMS main math)
+        run_command("${DISCC}" "${ROOT_DIR}/examples/ram_result/${unit}.dc"
+            -o "${TEST_DIR}/example-${unit}.o")
+    endforeach()
+    foreach(origin IN ITEMS 0x706000 0x700000)
+        foreach(bank IN ITEMS 0 1)
+            math(EXPR poisoned_bank "1 - ${bank}")
+            math(EXPR result_address "0x700100 + (${bank} * 65536)" OUTPUT_FORMAT HEXADECIMAL)
+            math(EXPR untouched_address "0x700100 + (${poisoned_bank} * 65536)" OUTPUT_FORMAT HEXADECIMAL)
+            set(example "${TEST_DIR}/example-${origin}-${bank}.bin")
+            run_command("${DISCLD}" "${TEST_DIR}/example-main.o" "${TEST_DIR}/example-math.o"
+                --origin ${origin} --init-runtime --ram-bank ${bank} -o "${example}")
+            file(SIZE "${example}" example_size)
+            if(origin STREQUAL "0x700000" AND example_size GREATER 256)
+                message(FATAL_ERROR "Zero-origin result example grew into its $0100 buffer")
+            endif()
+            run_command("${GSU_RUNNER}" "${example}" ${origin}
+                --initial-sp 0x7777 --initial-ram-bank ${poisoned_bank}
+                --word ${result_address} 42 --word ${untouched_address} 0 --register 10 0x1ffc)
+        endforeach()
+    endforeach()
+    file(SHA256 "${TEST_DIR}/main.o" input_hash)
+    run_expected_failure_contains("overwrite an input" "${DISCLD}"
+        "${TEST_DIR}/main.o" -o "${TEST_DIR}/main.o")
+    file(SHA256 "${TEST_DIR}/main.o" unchanged_hash)
+    if(NOT input_hash STREQUAL unchanged_hash)
+        message(FATAL_ERROR "Output alias overwrote an input object")
+    endif()
+    run_expected_failure_contains("must be different" "${DISCLD}"
+        "${TEST_DIR}/main.o" --emit-asm "${TEST_DIR}/same.bin" -o "${TEST_DIR}/same.bin")
 
 elseif(CASE STREQUAL "spc700_target")
     set(source "${ROOT_DIR}/tests/fixtures/spc700_foundation.dc")

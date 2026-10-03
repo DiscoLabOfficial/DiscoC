@@ -116,8 +116,13 @@ be relocated to an inaccessible address or a different bank by a near relocation
 All placement/relocation checks run before the output file is opened, so a
 rejected link does not create or truncate the output.
 
-This validation does not initialize `PBR`, `ROMBR`, `RAMBR`, bus access, or the
-stack, and does not infer the address space of arbitrary runtime pointers.
+By default this validation does not initialize `PBR`, `ROMBR`, `RAMBR`, bus
+access, or the stack, and does not infer the address space of arbitrary runtime
+pointers. `--init-runtime` optionally prepends RAMBR/R10 setup and an entry jump;
+its bytes count toward the bank limit and shift all CODE/DATA symbol addresses
+and relocation patch locations. `--origin` overrides the effective origin of
+all input objects without changing object serialization or the format version.
+See [GSU loading](gsu-loading.md) for the startup contract.
 RAM execution requires copying the payload to cartridge RAM and matching the
 configured program bank/PC. ROM-qualified accesses still require ROM-resident
 data and the appropriate ROM bank; copying bytes to RAM does not turn ROM-buffer

@@ -150,7 +150,7 @@ int main(int argc, char* argv[]) {
 
         // Build and verify the target-independent IR/CFG before entering a
         // target backend. Object emission consumes this verified IR; assembly
-        // export remains available as a textual inspection path.
+        // export consumes the same encoded object as binary output.
         IRLowerer ir_lowerer;
         IRModule ir_module = ir_lowerer.lower(program_ast);
         IRVerifier::verify(ir_module);
@@ -168,28 +168,23 @@ int main(int argc, char* argv[]) {
         }
 
         // 5. Backend (Code Generation or Assembly Emission)
+        IRCodeGenerator code_generator(analyzer.getAllLocalSymbols(),
+            analyzer.getFunctionSymbols(), data_manager, parser.getConfig());
+        ObjectFile obj = code_generator.generate(ir_module);
         if (emit_asm) {
             std::cout << "Emitting Assembly: " << in_filepath << " -> " << out_filepath << std::endl;
-            AssemblyGenerator asm_gen(analyzer.getFunctionSymbols(),
-                                      analyzer.getAllLocalSymbols(),
-                                      data_manager, parser.getConfig());
-            std::string asm_output = asm_gen.generate(program_ast);
+            const std::string asm_output = AssemblyGenerator(obj).generate();
             
             std::ofstream outFile(out_filepath);
             if (!outFile) {
                 throw std::runtime_error("Failed to open assembly file for writing: " + out_filepath);
             }
             outFile << asm_output;
+            outFile.flush();
+            if (!outFile) throw std::runtime_error("Failed to write assembly output: " + out_filepath);
 
         } else {
             std::cout << "Compiling to Object: " << in_filepath << " -> " << out_filepath << std::endl;
-            IRCodeGenerator code_generator(
-                analyzer.getAllLocalSymbols(),
-                analyzer.getFunctionSymbols(),
-                data_manager,
-				parser.getConfig()
-            );
-            ObjectFile obj = code_generator.generate(ir_module);
             obj.write(out_filepath);
         }
 

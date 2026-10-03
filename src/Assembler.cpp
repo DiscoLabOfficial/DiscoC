@@ -440,9 +440,14 @@ private:
             if (value < -32768 || value > 65535) fail("word immediate is out of range.", line.line_number);
             emitWord(out, static_cast<uint16_t>(value));
         } else {
-            if (!isIdentifier(withoutHash(operand))) fail("invalid symbolic immediate '" + operand + "'.", line.line_number);
+            auto name = withoutHash(operand);
+            if (name.size() > 6 && name.compare(0, 5, "lo24(") == 0 && name.back() == ')') {
+                name = name.substr(5, name.size() - 6);
+                relocation = RelocationType::ADDR24_OFFSET;
+            }
+            if (!isIdentifier(name)) fail("invalid symbolic immediate '" + operand + "'.", line.line_number);
             emitWord(out, 0);
-            if (out) m_object.relocation_table.push_back({withoutHash(operand), symbolSection(line.section), static_cast<uint32_t>(patch), relocation});
+            if (out) m_object.relocation_table.push_back({name, symbolSection(line.section), static_cast<uint32_t>(patch), relocation});
         }
     }
 
@@ -632,8 +637,16 @@ private:
             requireOperands(line, 2);
             const int reg = requireRegister(line.operands[0], line);
             if (op == "ibt") {
+                const auto patch = out ? out->size() : 0;
                 emitByte(out, static_cast<uint8_t>(0xa0 + reg));
-                emitByte(out, requireByte(withoutHash(line.operands[1]), line));
+                const auto operand = withoutHash(line.operands[1]);
+                if (!operand.empty() && operand.front() == '^') {
+                    const auto name = operand.substr(1);
+                    if (!isIdentifier(name)) fail("invalid bank relocation symbol.", line.line_number);
+                    emitByte(out, 0);
+                    if (out) m_object.relocation_table.push_back({name, symbolSection(line.section),
+                        static_cast<uint32_t>(patch), RelocationType::ADDR24_BANK});
+                } else emitByte(out, requireByte(operand, line));
                 return 2;
             }
             emitImmediateWord(line, out, reg, line.operands[1], RelocationType::ADDR16_IWT);
@@ -688,9 +701,15 @@ private:
             fail("unsupported MOVE operand form.", line.line_number);
         }
         if (op == "stw" || op == "stb" || op == "ldw" || op == "ldb") {
-            requireOperands(line, 2);
             const bool store = op == "stw" || op == "stb";
             const bool byte = op == "stb" || op == "ldb";
+            if (line.operands.size() == 1) {
+                const int memory = requireMemoryRegister(line.operands.front(), line);
+                if (byte) emitByte(out, 0x3d);
+                emitByte(out, static_cast<uint8_t>((store ? 0x30 : 0x40) + memory));
+                return byte ? 2 : 1;
+            }
+            requireOperands(line, 2);
             const int memory = store ? requireMemoryRegister(line.operands[0], line) : requireMemoryRegister(line.operands[1], line);
             const int reg = store ? requireRegister(line.operands[1], line) : requireRegister(line.operands[0], line);
             if (reg != 0) emitByte(out, static_cast<uint8_t>(0x20 + reg));
@@ -774,6 +793,20 @@ private:
 
     void addInternalSymbols() {
         std::set<std::string> added;
+        // Absolute references to non-exported code labels must remain private
+        // per object, just like the targets introduced by branch relaxation.
+        for (auto& relocation : m_object.relocation_table) {
+            const auto symbol = m_symbols.find(relocation.target_symbol_name);
+            if (symbol == m_symbols.end() || m_exports.count(symbol->first) != 0) continue;
+            if (symbol->second.section != SymbolSection::CODE) {
+                fail("absolute references to local DATA labels require .export.", 1);
+            }
+            const auto name = symbol->first;
+            relocation.target_symbol_name = std::string(1, InternalSymbolPrefix) + name;
+            if (added.insert(name).second) m_object.symbol_table.push_back({
+                relocation.target_symbol_name, SymbolSection::CODE,
+                static_cast<uint32_t>(symbol->second.offset)});
+        }
         for (const auto& line : m_lines) {
             if (m_relaxed_branch_lines.count(line.line_number) == 0) continue;
             const auto symbol = m_symbols.find(line.operands.front());

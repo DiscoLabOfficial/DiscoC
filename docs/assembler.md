@@ -16,7 +16,24 @@ Direct object compilation uses the verified IR backend:
 discc program.dc -o program.o
 ```
 
-The assembler workflow is useful when inspecting or hand-editing emitted assembly. The textual backend and assembler are separate from the canonical IR binary path.
+The exporter decodes the same canonical IR backend object used by direct
+compilation. It does not implement a second AST backend. Unedited output,
+assembled and linked with identical options, must produce identical payload
+bytes. Some uncommon opcode/prefix combinations are preserved as explicit
+`.byte` encodings to avoid changing their expansion.
+
+For an exact **post-link** export:
+
+```bash
+discld program.o --emit-asm final.s -o program.bin
+discas final.s -o final.o
+discld final.o -o roundtrip.bin
+```
+
+`roundtrip.bin` matches `program.bin` byte for byte. The linked listing contains
+numeric addresses and is fixed-origin; do not change its origin or inject a
+second bootstrap on the round trip. See [GSU loading](gsu-loading.md).
+This is DiscoC assembly, not directly consumable WLA-DX source.
 
 ## Command-line interface
 
@@ -70,7 +87,9 @@ the assembler defaults to LoROM and `$00:8000`. For RAM execution, use:
 An explicit origin takes precedence over the mapping's default origin in either
 definition order. Duplicate, unknown, malformed, or out-of-range configuration
 definitions are errors. `discld` validates the resulting GSU address and rejects
-objects with incompatible mapping/origin configurations.
+objects with incompatible mapping/origin configurations, unless `--origin`
+explicitly overrides the origins for the whole link. Mapping/target mismatches
+remain errors.
 
 Numeric literals support decimal, hexadecimal with `$` or `0x`-style forms accepted by the compiler output, binary with `%`, and signed values where the instruction or data directive allows them.
 
@@ -97,9 +116,21 @@ When an instruction references a symbol that is not a numeric literal, `discas` 
 ```asm
 iwt r0, #global_data
 jal helper
+ibt r1, #^global_data
+iwt r2, #lo24(global_data)
 ```
 
 Local branch labels are resolved during assembly. External function and data references remain for `discld`, which resolves them after all input objects have been laid out.
+
+`#^symbol` records a 24-bit bank relocation and `#lo24(symbol)` records its low
+16-bit counterpart; these are restricted symbolic operand forms, not a general
+expression language. Absolute references to non-exported CODE labels become
+object-private symbols. DATA labels used by absolute references must be exported.
+
+The native single-operand forms `ldw (r0)` / `stw (r0)` (and `ldb` / `stb`) use
+the current destination/source selectors. Existing two-operand convenience
+forms remain accepted. Exported canonical code preserves explicit `WITH`, `TO`,
+and `FROM` selectors rather than silently adding register-copy expansions.
 
 ## Branch ranges
 

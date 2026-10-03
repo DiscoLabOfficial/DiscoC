@@ -36,11 +36,12 @@ Lexer -> Parser -> AST -> Analyzer -> Optimizer
                          linked target payload
 ```
 
-The compiler also exposes two inspection or alternate-emission paths:
+The compiler also exposes inspection and alternate-emission paths:
 
 * `discc --emit-ast` prints the optimized abstract syntax tree.
 * `discc --emit-ir` prints the verified IR and its basic blocks.
-* `discc --emit-asm` writes textual GSU assembly. That assembly can be passed to `discas` to create a relocatable object file.
+* `discc --emit-asm` exports the canonical backend's encoded GSU object as textual assembly. That assembly can be passed to `discas` to create a relocatable object with equivalent bytes and references.
+* `discld --emit-asm final.s` exports the linked payload with numeric, resolved addresses, including any requested startup code.
 
 The linked `.bin` is a GSU payload. It is not a complete SNES ROM image: it does not provide a SNES header, host-side startup integration, cartridge metadata, or other ROM-level resources.
 
@@ -96,9 +97,14 @@ Comparisons are materialized as `0` or `1` values before they are consumed by
 control flow. Signed relations use the GSU signed branch conditions and
 unsigned relations use carry conditions, so `>`, `>=`, `<`, and `<=` remain
 distinct at equality and sign-bit boundaries. This also makes nested
-comparisons ordinary expressions in both backends.
+comparisons ordinary expressions in direct and assembly workflows.
 
-The `AssemblyGenerator` remains available for human-readable assembly export. It is useful for inspection and for the `discas` workflow, but it is a separate textual backend and should not be treated as the canonical implementation of every high-level feature.
+`AssemblyGenerator` borrows the encoded `ObjectFile` and decodes its instruction
+stream; it no longer lowers AST expressions independently. Symbols and
+relocations are preserved in compiler exports. Uncommon encodings use explicit
+`.byte` directives rather than potentially different instruction expansions.
+Reassembling an unedited export and linking with the same settings must preserve
+the complete payload byte for byte.
 
 ## Object and link stages
 
@@ -172,6 +178,11 @@ the documented ROM/RAM windows, limits the combined code/data to one program
 bank, and validates relocation address widths and near-target banks before
 writing output. Mapping labels supply compatibility metadata and default
 origins; they do not implement cartridge ROM construction or bank switching.
+`discld --origin` overrides input origins consistently before layout/relocation;
+target and mapping compatibility are still required. Optional `--init-runtime`
+prepends RAMBR/R10 setup and an entry jump, rebasing all sections and relocations.
+The default remains host-owned startup with no added bytes. See
+[gsu-loading.md](gsu-loading.md) for RAM bank, stack, and entry requirements.
 See [object-format.md](object-format.md#gsu-address-and-bank-validation) for the
 placement contract and host-initialization requirements.
 
@@ -206,7 +217,7 @@ Execution memory is represented by the full origin already stored in each
 object, not by a third LoROM/HiROM mapping value or a new object format version.
 The assembly emitter preserves mapping and origin through reserved `.define`
 metadata understood by `discas`. RAM selection does not generate a loader:
-the SNES host must copy the payload, initialize GSU registers/bus access, and
+the SNES host must copy the payload, configure GSU program registers/bus access, and
 keep the stack and writable data away from the code. The flat payload layout
 does not provide separate ROM storage for `rom const` data in a RAM build.
 
@@ -222,7 +233,8 @@ This separation is intentional: the AST and IR are compiler-phase data, while `O
 ## Current boundaries
 
 The execution regressions use a bounded instruction-level model of the GSU
-prefetch pipeline, register selectors, stack memory, comparisons, calls, and
+prefetch pipeline, register selectors, two RAM banks, RAM instruction fetch,
+RAMB, stack memory, comparisons, calls, and
 branches. Hand-encoded checks validate the model, and linked payloads validate
 both the IR backend and assembly path. Unsupported opcodes, invalid program
 reads, mismatched expectations, and instruction-limit exhaustion fail tests.
@@ -231,7 +243,7 @@ graphics, or interrupts; emulator and hardware validation remain necessary.
 
 The project is pre-release compiler infrastructure. Register allocation is
 still conservative and uses rematerialization rather than explicit spill slots
-when register pressure exceeds the current pool. The assembly-export path also
-has narrower feature coverage than the IR binary backend for some advanced
-constructs. These limitations should be considered when using `--emit-asm` as
-a source of hand-edited assembly.
+when register pressure exceeds the current pool. Assembly output uses DiscoC's
+assembler dialect, not WLA-DX. Fixed-origin linked exports cannot be moved to an
+arbitrary execution offset without relinking; native WLA-DX export and
+position-independent loading are separate future features.

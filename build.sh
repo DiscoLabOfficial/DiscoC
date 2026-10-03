@@ -107,7 +107,8 @@ else
     targets=(discc discld discas)
     if [[ $run_tests == 1 ]]; then
         targets+=(disco_object_tests disco_ir_verifier_tests disco_linear_scan_tests
-                  disco_target_foundation_tests disco_gsu_execution_tests disco_gsu_mapping_tests)
+                  disco_target_foundation_tests disco_gsu_execution_tests disco_gsu_mapping_tests
+                  disco_assembly_export_tests)
     fi
     # Recursive lookup uses only Bash arrays, not Bash 4 associative arrays or eval.
     resolve_sources() {

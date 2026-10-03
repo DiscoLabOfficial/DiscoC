@@ -123,7 +123,8 @@ No tools are installed automatically and no build directories are deleted.
         $targets = @('discc', 'discld', 'discas')
         if ($Test) {
             $targets += @('disco_object_tests', 'disco_ir_verifier_tests', 'disco_linear_scan_tests',
-                'disco_target_foundation_tests', 'disco_gsu_execution_tests', 'disco_gsu_mapping_tests')
+                'disco_target_foundation_tests', 'disco_gsu_execution_tests', 'disco_gsu_mapping_tests',
+                'disco_assembly_export_tests')
         }
         $flags = @('-std=c++23', '-Wall', '-Wextra', '-Wpedantic', '-I', "$PSScriptRoot/src")
         switch ($Configuration) {

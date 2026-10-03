@@ -1,7 +1,7 @@
 # Ordered groups: @group expands an earlier group. Shared by all build paths.
-object src/ObjectFile.cpp
+object src/ObjectFile.cpp src/AssemblyGenerator.cpp
 frontend src/Lexer.cpp src/Token.cpp src/Parser.cpp
-compiler src/Analyzer.cpp src/Optimizer.cpp src/IR.cpp src/IRCodeGenerator.cpp src/LinearScanAllocator.cpp src/AssemblyGenerator.cpp src/DataSegment.cpp src/ASTPrinter.cpp
+compiler src/Analyzer.cpp src/Optimizer.cpp src/IR.cpp src/IRCodeGenerator.cpp src/LinearScanAllocator.cpp src/DataSegment.cpp src/ASTPrinter.cpp
 assembler src/Assembler.cpp
 discc src/discc.cpp @compiler @frontend @object
 discld src/discld.cpp @object
@@ -12,3 +12,4 @@ disco_linear_scan_tests tests/LinearScanAllocatorTests.cpp src/LinearScanAllocat
 disco_target_foundation_tests tests/TargetFoundationTests.cpp @frontend
 disco_gsu_execution_tests tests/GSUExecutionTests.cpp
 disco_gsu_mapping_tests tests/GsuMemoryMapTests.cpp @object
+disco_assembly_export_tests tests/AssemblyExportTests.cpp @assembler @object

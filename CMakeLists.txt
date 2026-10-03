@@ -142,6 +142,9 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_executable(disco_gsu_mapping_tests tests/GsuMemoryMapTests.cpp)
     target_link_libraries(disco_gsu_mapping_tests PRIVATE disco_object_core)
 
+    add_executable(disco_assembly_export_tests tests/AssemblyExportTests.cpp)
+    target_link_libraries(disco_assembly_export_tests PRIVATE disco_assembler_core)
+
     function(add_toolchain_regression name case_name)
         add_test(
             NAME ${name}
@@ -164,6 +167,7 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_test(NAME target_foundation COMMAND disco_target_foundation_tests)
     add_test(NAME gsu_execution_model COMMAND disco_gsu_execution_tests --self-test)
     add_test(NAME gsu_memory_map COMMAND disco_gsu_mapping_tests)
+    add_test(NAME assembly_export COMMAND disco_assembly_export_tests)
     include(tests/toolchain-cases.cmake)
 endif()
 

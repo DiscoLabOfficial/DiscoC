@@ -1,0 +1,3 @@
+word add(word left, word right) {
+    return left + right;
+}

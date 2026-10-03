@@ -124,6 +124,11 @@ The shared source manifest is `cmake/build-sources.txt`; the shared regression
 registry is `tests/toolchain-cases.cmake`. Add new core source files and regression
 cases there so all build paths stay synchronized.
 
+`AssemblyGenerator.cpp` belongs to the shared object group: both `discc` and
+`discld` use it for canonical/final assembly export. Hand-maintained `g++`
+commands must include it when linking either tool; the supplied helpers read
+the manifest automatically.
+
 GSU execution regressions verify payload results and stack behavior using a
 bounded instruction model, not a complete SNES emulator. See [testing.md](testing.md).
 

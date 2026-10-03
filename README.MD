@@ -143,6 +143,11 @@ The DiscoC toolchain uses a two-step compile-and-link process.
 
 **2. Assemble emitted assembly (optional):** Use `--emit-asm` followed by `discas` when you want to inspect or hand-edit the assembly before linking.
 
+This export comes from the same verified IR backend as direct object generation.
+Without edits, assembling and linking it with the same options produces identical
+payload bytes. For the **final linked** instructions and resolved addresses, use
+`discld --emit-asm final.s` when linking.
+
 ```bash
 ./discc ../main.dc --emit-asm -o main.s
 ./discas main.s -o main.o
@@ -181,6 +186,22 @@ and is separate from the ROM/RAM execution choice. RAM execution requires a
 host-side loader and GSU initialization; it does not automatically relocate
 ROM-qualified data into usable RAM storage. See [target configuration](docs/architecture.md#target-configuration).
 
+Alternatively, choose the execution origin at link time, without changing source
+directives:
+
+```bash
+./discld main.o math.o --origin 0x706000 --init-runtime \
+  --ram-bank 0 --stack-pointer 0x2000 --emit-asm final.s -o payload.bin
+```
+
+Copy this payload to `$70:6000`, set `PBR=$70` and `R15=$6000`, and grant the
+required GSU bus access. The optional bootstrap selects data/stack bank `$70`,
+initializes `R10`, and jumps to `main`. Without `--init-runtime`, initialization
+remains the host's responsibility. The binary is **fixed-origin**, not
+position-independent; ROM `.incbin` storage placement does not relocate it.
+See [GSU loading and startup](docs/gsu-loading.md) for the full contract and a
+RAM-result example. Native WLA-DX output is not currently supported.
+
 ## Project Roadmap
 
 This project is not as actively developed. You can view our roadmap and upcoming features in the `ROADMAP.md` file.
@@ -195,6 +216,7 @@ Detailed design and format documentation is available in the [`docs/`](docs/) di
 * [`testing.md`](docs/testing.md) — CTest regressions, sanitizer checks, and optional fuzzing.
 * [`building.md`](docs/building.md) — Windows/Linux/macOS build helpers and direct compiler options.
 * [`assembler.md`](docs/assembler.md) — the `discas` input language and supported assembly workflow.
+* [`gsu-loading.md`](docs/gsu-loading.md) — execution origins, RAM/stack initialization, and final assembly export.
 * [`spc700-target.md`](docs/spc700-target.md) — SPC-700 target model, ABI proposal, and initial language subset.
 
 ## License
