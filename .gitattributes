@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+*.sh text eol=lf
+Makefile text eol=lf
+cmake/build-sources.txt text eol=lf

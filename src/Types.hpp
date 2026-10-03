@@ -36,6 +36,12 @@ struct Type {
     AddressSpace space = AddressSpace::NONE; // Default to NONE
 };
 
+// Storage width describes the value being stored, not the pointee type. A
+// pointer is always a 16-bit address on the GSU, including byte* and byte**.
+inline bool usesByteStorage(const Type& type) {
+    return type.pointer_level == 0 && type.sizeInBytes == 1;
+}
+
 // Information stored about a declared variable.
 struct Symbol {
     Type type;

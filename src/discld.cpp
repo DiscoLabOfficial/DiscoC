@@ -8,6 +8,7 @@
 #include <algorithm>
 #include "ObjectFile.hpp"
 #include "Parser.hpp"
+#include "GsuMemoryMap.hpp"
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -54,6 +55,19 @@ int main(int argc, char* argv[]) {
             if (objects[index].config != config) {
                 throw std::runtime_error(
                     "Input objects use incompatible target configurations.");
+            }
+        }
+
+        if (config.target == TargetKind::GSU) {
+            GsuMemoryMap::validatePayload(config.code_start_address, 0, 0);
+            std::uint64_t code_bytes = 0;
+            std::uint64_t data_bytes = 0;
+            for (const auto& object : objects) {
+                // Each successful iteration leaves both totals <= 64 KiB;
+                // individual sections are bounded by ObjectFile::read.
+                code_bytes += object.code_section.size();
+                data_bytes += object.data_section.size();
+                GsuMemoryMap::validatePayload(config.code_start_address, code_bytes, data_bytes);
             }
         }
 
@@ -131,6 +145,22 @@ int main(int argc, char* argv[]) {
                     }
                     target_addr = final_addresses.at(reloc.target_symbol_name);
                 }
+                if (target_addr > 0xffffffu) {
+                    throw std::runtime_error("Relocation target exceeds the 24-bit address range.");
+                }
+                if (config.target == TargetKind::GSU) {
+                    if (reloc.type == RelocationType::ADDR16_JAL ||
+                        reloc.type == RelocationType::ADDR16_IWT) {
+                        GsuMemoryMap::validateNearTarget(config.code_start_address, target_addr);
+                    } else {
+                        // ADDR24_OFFSET is paired with a bank relocation and
+                        // may intentionally represent a full 24-bit address.
+                        GsuMemoryMap::validateAddress(target_addr);
+                    }
+                } else if ((reloc.type == RelocationType::ADDR16_JAL ||
+                            reloc.type == RelocationType::ADDR16_IWT) && target_addr > 0xffffu) {
+                    throw std::runtime_error("Relocation target exceeds the 16-bit address range.");
+                }
                 std::vector<uint8_t>& section_to_patch =
                     reloc.section_to_patch == SymbolSection::CODE ? final_code : final_data;
                 const auto section_base = reloc.section_to_patch == SymbolSection::CODE
@@ -165,8 +195,10 @@ int main(int argc, char* argv[]) {
         std::ofstream outFile(out_filepath, std::ios::out | std::ios::binary);
         if (!outFile) throw std::runtime_error("Failed to open output file for writing: " + out_filepath);
         outFile.write(reinterpret_cast<const char*>(final_rom.data()), final_rom.size());
+        outFile.flush();
+        if (!outFile) throw std::runtime_error("Failed to write linked payload: " + out_filepath);
         
-        std::cout << "Successfully linked ROM. Total size: " << final_rom.size() << " bytes." << std::endl;
+        std::cout << "Successfully linked payload. Total size: " << final_rom.size() << " bytes." << std::endl;
 
     } catch (const std::runtime_error& e) {
         std::cerr << "\nLinker Error: " << e.what() << std::endl;

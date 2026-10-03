@@ -1,0 +1,34 @@
+word add(word left, word right);
+word subtract(word left, word right);
+word nested(word left, word right);
+word zero_args();
+word identity(word value);
+void no_result(word* output);
+word three_arguments(word first, word second, word third);
+word byte_argument(byte value);
+
+void main() {
+    word* output = (word*)0x100;
+    *output = add(46, 103);
+    output = (word*)0x102;
+    *output = subtract(103, 46);
+    output = (word*)0x104;
+    *output = nested(46, 103);
+    output = (word*)0x106;
+    *output = zero_args();
+    output = (word*)0x108;
+    *output = identity(149);
+    output = (word*)0x10a;
+    *output = add(identity(46), identity(103));
+    output = (word*)0x10c;
+    no_result(output);
+    output = (word*)0x10e;
+    *output = identity(0);
+    output = (word*)0x110;
+    *output = three_arguments(46, 103, 7);
+    output = (word*)0x112;
+    *output = byte_argument(-1);
+    output = (word*)0x114;
+    *output = byte_argument(47);
+    identity(1);
+}

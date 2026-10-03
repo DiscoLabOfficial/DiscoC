@@ -105,8 +105,11 @@ bool isLegalBinaryOperation(const std::string& operation) {
 bool sameValueType(const Type& left, const Type& right) {
     return left.base == right.base &&
            left.structName == right.structName &&
+           left.is_unsigned == right.is_unsigned &&
            left.pointer_level == right.pointer_level &&
-           (left.pointer_level == 0 || left.is_far == right.is_far);
+           left.array_size == right.array_size &&
+           (left.pointer_level == 0 ||
+            (left.is_far == right.is_far && left.space == right.space));
 }
 
 } // namespace
@@ -560,6 +563,7 @@ IRValueId IRLowerer::lowerExpression(Expr& expr) {
 IRValueId IRLowerer::lowerAddress(Expr& expr) {
     Type address_type = expr.result_type;
     address_type.pointer_level += 1;
+    address_type.sizeInBytes = 2;
 
     if (auto* variable = dynamic_cast<VariableExpr*>(&expr)) {
         return emitValue(IROpcode::Address, address_type, expr.token, {}, {},

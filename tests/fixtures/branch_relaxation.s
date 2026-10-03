@@ -19,3 +19,4 @@ main:
     .byte 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
 far_label:
     stop
+    nop

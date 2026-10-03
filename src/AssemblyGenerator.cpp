@@ -27,14 +27,20 @@ bool statementAlwaysTerminates(const Stmt& statement) {
 AssemblyGenerator::AssemblyGenerator(
     const std::map<std::string, FunctionSymbol>& global_function_symbols,
     const std::map<std::string, Analyzer::LocalSymbolTable>& all_local_symbols,
-    const DataSegmentManager& data_manager
+    const DataSegmentManager& data_manager,
+    CompilerConfig config
 ) : m_global_function_symbols(global_function_symbols),
     m_all_local_symbols(all_local_symbols),
-    m_data_manager(data_manager) {}
+    m_data_manager(data_manager),
+    m_config(config) {}
 
 std::string AssemblyGenerator::generate(const std::vector<std::unique_ptr<Stmt>>& program) {
     emit(".setcpu \"GSU\"");
     emit(".include \"casfx.inc\"");
+    // Preserve placement through the textual path without emitting bytes.
+    emit(std::string(".define __DISCO_MEMORY_MAPPING ") +
+         (m_config.mapping == MemoryMapping::LoROM ? "lorom" : "hirom"));
+    emit(".define __DISCO_CODE_START_ADDRESS " + std::to_string(m_config.code_start_address));
     emit("");
 
     // Data Segment
@@ -178,6 +184,7 @@ void AssemblyGenerator::visit(VarDeclStmt& stmt) {
     // Allocation is handled in the function prologue. We only handle initialization here.
     if (stmt.initializer) {
         stmt.initializer->accept(*this, &stmt.type);
+        dereferenceIfNeeded(*stmt.initializer);
 
         std::string scratch_reg = m_isInPlottingContext ? "r3" : "r1";
         emit("move " + scratch_reg + ", r0", "Value to be stored is now in " + scratch_reg);
@@ -187,7 +194,7 @@ void AssemblyGenerator::visit(VarDeclStmt& stmt) {
         var_expr.symbol_id = stmt.symbol_id;
         var_expr.accept(*this, nullptr); // Leaves address of the variable in R0
 
-        if (stmt.type.base == BaseType::BYTE) {
+        if (usesByteStorage(stmt.type)) {
              emit("stb (r0), " + scratch_reg, "Initialize variable");
         } else {
              emit("stw (r0), " + scratch_reg, "Initialize variable");
@@ -209,6 +216,7 @@ void AssemblyGenerator::visit(CallExpr& expr, const Type*) {
     
     // 2. The call
     emit("jal " + callee_var->token.lexeme);
+    emit("nop", "Call delay slot; LINK returns after this instruction");
 
     // 3. Caller stack cleanup
     if (expr.arguments.size() >
@@ -272,30 +280,39 @@ void AssemblyGenerator::visit(BinaryExpr& expr, const Type*) {
                                expr.token.type == TokenType::BANG_EQUAL;
     if (is_comparison) {
         emit("cmp r0, " + scratch_reg);
-        if (m_emitting_condition) {
-            return;
-        }
+        const std::string false_label = newLabel();
         const std::string true_label = newLabel();
         const std::string end_label = newLabel();
         const auto branch_true = [&](const std::string& opcode) {
             emit(opcode + " " + true_label);
             emit("nop");
         };
+        const auto branch_false = [&](const std::string& opcode) {
+            emit(opcode + " " + false_label);
+            emit("nop");
+        };
+        const bool unsigned_comparison = expr.result_type.is_unsigned;
+        const std::string less = unsigned_comparison ? "bcc" : "blt";
+        const std::string greater_equal = unsigned_comparison ? "bcs" : "bge";
         switch (expr.token.type) {
-            case TokenType::GREATER: branch_true("bpl"); break;
-            case TokenType::LESS: branch_true("bmi"); break;
+            case TokenType::GREATER:
+                branch_false("beq");
+                branch_true(greater_equal);
+                break;
+            case TokenType::LESS: branch_true(less); break;
             case TokenType::EQUAL_EQUAL: branch_true("beq"); break;
             case TokenType::BANG_EQUAL: branch_true("bne"); break;
             case TokenType::GREATER_EQUAL:
-                branch_true("beq");
-                branch_true("bpl");
+                branch_false(less);
+                branch_true(greater_equal);
                 break;
             case TokenType::LESS_EQUAL:
+                branch_true(less);
                 branch_true("beq");
-                branch_true("bmi");
                 break;
             default: break;
         }
+        emit(false_label + ":");
         emit("iwt r0, #0");
         emit("bra " + end_label);
         emit("nop");
@@ -320,27 +337,12 @@ void AssemblyGenerator::visit(IfStmt& stmt) {
     std::string elseLabel = newLabel();
     std::string endLabel = newLabel();
 
-    m_emitting_condition = true;
     stmt.condition->accept(*this, nullptr);
-    m_emitting_condition = false;
-    std::string branch_op = "beq";
-    if (const auto* cond = dynamic_cast<const BinaryExpr*>(stmt.condition.get())) {
-        switch (cond->token.type) {
-            case TokenType::GREATER: branch_op = "bmi"; break;
-            case TokenType::GREATER_EQUAL: branch_op = "bmi"; break;
-            case TokenType::LESS: branch_op = "bpl"; break;
-            case TokenType::LESS_EQUAL: branch_op = "bpl"; break;
-            case TokenType::EQUAL_EQUAL: branch_op = "bne"; break;
-            case TokenType::BANG_EQUAL: branch_op = "beq"; break;
-            default: break;
-        }
-    } else {
-        dereferenceIfNeeded(*stmt.condition);
-        emit("iwt r1, #0", "Compare generic condition with zero");
-        emit("cmp r0, r1");
-    }
+    dereferenceIfNeeded(*stmt.condition);
+    emit("iwt r1, #0", "Compare condition value with zero");
+    emit("cmp r0, r1");
     
-    emit(branch_op + " " + (stmt.elseBranch ? elseLabel : endLabel));
+    emit("beq " + (stmt.elseBranch ? elseLabel : endLabel));
     emit("nop"); // Fill the branch delay slot
 
     m_indent_level++;
@@ -395,7 +397,7 @@ void AssemblyGenerator::dereferenceIfNeeded(Expr& expr, bool is_for_assignment) 
         return;
     }
     if (!is_for_assignment) {
-        if (expr.result_type.base == BaseType::BYTE) {
+        if (usesByteStorage(expr.result_type)) {
              emit("moveb r0, (r0)", "Dereference byte pointer");
         } else {
              emit("movew r0, (r0)", "Dereference word pointer");
@@ -417,7 +419,7 @@ void AssemblyGenerator::visit(AssignExpr& expr, const Type*) {
     std::string scratch_reg = m_isInPlottingContext ? "r3" : "r1";
     emit("pop " + scratch_reg, "Load L-value address into " + scratch_reg);
     
-    if (expr.result_type.base == BaseType::BYTE) {
+    if (usesByteStorage(expr.result_type)) {
         emit("moveb (" + scratch_reg + "), r0");
     } else {
         emit("movew (" + scratch_reg + "), r0");
@@ -461,14 +463,8 @@ void AssemblyGenerator::visit(AddressOfExpr& expr, const Type*) {
 void AssemblyGenerator::visit(DereferenceExpr& expr, const Type*) {
     expr.right->accept(*this, nullptr);
     dereferenceIfNeeded(*expr.right, false); // This gets the value of the pointer itself into R0
-    
-    // Now R0 holds an address. We need to load from that address.
-    if (expr.result_type.base == BaseType::BYTE) {
-        emit("moveb r0, (r0)", "Dereference byte pointer");
-    }
-    else {
-        emit("movew r0, (r0)", "Dereference word pointer");
-    }
+    // Like VariableExpr, leave the lvalue address in R0. Rvalue consumers
+    // load it through dereferenceIfNeeded; assignments must keep the address.
 }
 
 void AssemblyGenerator::visit(SubscriptExpr& expr, const Type*) {
@@ -485,29 +481,13 @@ void AssemblyGenerator::visit(WhileStmt& stmt) {
 
     emit(startLabel + ":", "while begin");
 
-    // Comparison expressions leave flags for the condition branch; other
-    // integer expressions use ordinary truthiness.
-    m_emitting_condition = true;
+    // Every condition is materialized as a boolean value before it is tested.
     stmt.condition->accept(*this, nullptr);
-    m_emitting_condition = false;
-    std::string branch_op = "beq";
-    if (const auto* cond = dynamic_cast<const BinaryExpr*>(stmt.condition.get())) {
-        switch (cond->token.type) {
-            case TokenType::GREATER:
-            case TokenType::GREATER_EQUAL: branch_op = "bmi"; break;
-            case TokenType::LESS:
-            case TokenType::LESS_EQUAL: branch_op = "bpl"; break;
-            case TokenType::EQUAL_EQUAL: branch_op = "bne"; break;
-            case TokenType::BANG_EQUAL: branch_op = "beq"; break;
-            default: break;
-        }
-    } else {
-        dereferenceIfNeeded(*stmt.condition);
-        emit("iwt r1, #0", "Compare generic condition with zero");
-        emit("cmp r0, r1");
-    }
+    dereferenceIfNeeded(*stmt.condition);
+    emit("iwt r1, #0", "Compare condition value with zero");
+    emit("cmp r0, r1");
 
-    emit(branch_op + " " + endLabel);
+    emit("beq " + endLabel);
     emit("nop"); // fill branch delay slot
 
     // Body

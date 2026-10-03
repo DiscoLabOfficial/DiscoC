@@ -116,7 +116,9 @@ bool parseNumber(const std::string& text, std::int64_t& value) {
     try {
         std::size_t consumed = 0;
         const auto parsed = std::stoll(token, &consumed, base);
-        if (consumed != token.size()) return false;
+        // The sign was removed above. Reject a second embedded sign before
+        // negation so malformed input cannot negate INT64_MIN.
+        if (consumed != token.size() || parsed < 0) return false;
         value = negative ? -parsed : parsed;
         return true;
     } catch (const std::exception&) {
@@ -161,6 +163,8 @@ private:
     std::set<std::string> m_exports;
     std::vector<BranchFixup> m_branch_fixups;
     ObjectFile m_object;
+    CompilerConfig m_config;
+    std::set<std::string> m_config_definitions;
     std::size_t m_code_size = 0;
     std::size_t m_data_size = 0;
     std::set<int> m_relaxed_branch_lines;
@@ -183,6 +187,35 @@ private:
 
     static std::size_t currentOffset(Section section, std::size_t code, std::size_t data) {
         return section == Section::Code ? code : data;
+    }
+
+    void parseConfigDefinition(const std::string& rest, int line_number) {
+        std::istringstream definition(rest);
+        std::string name, value, extra;
+        if (!(definition >> name >> value) || (definition >> extra)) {
+            fail(".define expects one reserved configuration name and value.", line_number);
+        }
+        if (name != "__DISCO_MEMORY_MAPPING" && name != "__DISCO_CODE_START_ADDRESS") {
+            fail("unsupported .define name '" + name + "'.", line_number);
+        }
+        if (!m_config_definitions.insert(name).second) {
+            fail("duplicate configuration definition '" + name + "'.", line_number);
+        }
+        if (name == "__DISCO_MEMORY_MAPPING") {
+            if (value == "lorom") m_config.mapping = MemoryMapping::LoROM;
+            else if (value == "hirom") m_config.mapping = MemoryMapping::HiROM;
+            else fail("memory mapping must be lorom or hirom.", line_number);
+            if (m_config_definitions.count("__DISCO_CODE_START_ADDRESS") == 0) {
+                m_config.code_start_address = m_config.mapping == MemoryMapping::LoROM
+                    ? 0x008000u : 0x408000u;
+            }
+        } else {
+            std::int64_t address = 0;
+            if (!parseNumber(value, address) || address < 0 || address > 0xFFFFFF) {
+                fail("code start address must fit in 24 bits.", line_number);
+            }
+            m_config.code_start_address = static_cast<std::uint32_t>(address);
+        }
     }
 
     std::vector<ParsedLine> parse(const std::string& source) {
@@ -220,6 +253,7 @@ private:
             line.operation = lower(line.operation);
             std::string rest;
             std::getline(statement, rest);
+            if (line.operation == ".define") parseConfigDefinition(rest, line_number);
             line.operands = splitOperands(rest);
             lines.push_back(line);
 
@@ -253,7 +287,7 @@ private:
         for (const auto& line : m_lines) {
             defineLabel(line, code, data);
             if (line.operation.empty() || line.operation == ".segment" || line.operation == ".export" ||
-                line.operation == ".setcpu" || line.operation == ".include") {
+                line.operation == ".setcpu" || line.operation == ".include" || line.operation == ".define") {
                 if (line.operation == ".export") {
                     for (const auto& operand : line.operands) {
                         if (!isIdentifier(operand)) fail("invalid export name '" + operand + "'.", line.line_number);
@@ -314,12 +348,13 @@ private:
 
     void secondPass() {
         m_object = ObjectFile();
+        m_object.config = m_config;
         m_object.code_section.reserve(m_code_size);
         m_object.data_section.reserve(m_data_size);
 
         for (const auto& line : m_lines) {
             if (line.operation.empty() || line.operation == ".segment" || line.operation == ".export" ||
-                line.operation == ".setcpu" || line.operation == ".include") continue;
+                line.operation == ".setcpu" || line.operation == ".include" || line.operation == ".define") continue;
             requireSection(line);
             if (line.operation == ".byte" || line.operation == ".word") {
                 encodeData(line);
@@ -423,7 +458,7 @@ private:
                     std::string(1, InternalSymbolPrefix) + line.operands.front(),
                     SymbolSection::CODE, static_cast<std::uint32_t>(patch),
                     RelocationType::ADDR16_IWT});
-                emitByte(out, 0x9f); // JMP R15
+                emitByte(out, 0x01); // IWT R15 delay slot (0x9f is FMULT, not JMP).
                 return 4;
             }
 
@@ -432,15 +467,16 @@ private:
                 {0x0a, 0x0b}, {0x0b, 0x0a}, {0x0c, 0x0d}, {0x0d, 0x0c},
                 {0x0e, 0x0f}, {0x0f, 0x0e}};
             emitByte(out, inverse.at(opcode));
-            emitByte(out, 4); // Skip the following IWT/JMP sequence.
+            emitByte(out, 5); // Skip NOP + IWT + its NOP delay slot.
+            emitByte(out, 0x01); // Branch delay slot must not contain IWT.
             emitByte(out, 0xff);
             emitWord(out, 0);
             if (out) m_object.relocation_table.push_back({
                 std::string(1, InternalSymbolPrefix) + line.operands.front(),
-                SymbolSection::CODE, static_cast<std::uint32_t>(patch + 2),
+                SymbolSection::CODE, static_cast<std::uint32_t>(patch + 3),
                 RelocationType::ADDR16_IWT});
-            emitByte(out, 0x9f);
-            return 6;
+            emitByte(out, 0x01);
+            return 7;
         }
         emitByte(out, opcode);
         emitByte(out, 0);
@@ -486,11 +522,11 @@ private:
             const int dest = requireRegister(line.operands[0], line);
             std::int64_t parsed_immediate = 0;
             if (parseNumber(line.operands[1], parsed_immediate)) {
-                if (dest != 0 && dest != 10) emitByte(out, static_cast<uint8_t>(0x20 + dest));
+                if (dest != 0) emitByte(out, static_cast<uint8_t>(0x20 + dest));
                 if (parsed_immediate < 0 || parsed_immediate > 15 || op == "cmp") fail("invalid two-operand immediate arithmetic form.", line.line_number);
                 emitByte(out, 0x3e);
                 emitByte(out, static_cast<uint8_t>(base + parsed_immediate));
-                return 2 + ((dest != 0 && dest != 10) ? 1 : 0);
+                return 2 + (dest != 0 ? 1 : 0);
             }
             const int source = requireRegister(line.operands[1], line);
             if (dest != 0) emitByte(out, static_cast<uint8_t>(0x20 + dest));
@@ -612,9 +648,9 @@ private:
             const int source_memory = parseMemoryRegister(line.operands[1]);
             if (destination >= 0 && source >= 0) {
                 if (op != "move") fail("MOVEB/MOVEW register-to-register form is unsupported.", line.line_number);
-                if (source != 0) emitByte(out, static_cast<uint8_t>(0x20 + source));
+                emitByte(out, static_cast<uint8_t>(0x20 + source));
                 emitByte(out, static_cast<uint8_t>(0x10 + destination));
-                return source == 0 ? 1 : 2;
+                return 2;
             }
             if (destination >= 0 && source_memory >= 0) {
                 if (!byte && op == "move") {

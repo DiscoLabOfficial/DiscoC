@@ -172,7 +172,7 @@ int main(int argc, char* argv[]) {
             std::cout << "Emitting Assembly: " << in_filepath << " -> " << out_filepath << std::endl;
             AssemblyGenerator asm_gen(analyzer.getFunctionSymbols(),
                                       analyzer.getAllLocalSymbols(),
-                                      data_manager);
+                                      data_manager, parser.getConfig());
             std::string asm_output = asm_gen.generate(program_ast);
             
             std::ofstream outFile(out_filepath);

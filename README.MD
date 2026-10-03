@@ -74,7 +74,29 @@ word add(word a, word b) {
 
 ## Building from Source
 
-This project uses C++23 and CMake.
+This project uses C++23. Build helpers are available for Windows, Linux, and
+macOS, with CMake/Make/Ninja and direct GCC/Clang options.
+
+```powershell
+# Windows: build and run the test suite
+.\build.cmd -Test
+
+# Windows: build directly with g++, without configuring CMake
+.\build.cmd -Backend Direct -Compiler g++
+```
+
+```bash
+# Linux/macOS: build and run the test suite
+bash build.sh --test
+
+# Alternatively, use Make or compile directly with GCC/Clang
+make test
+bash build.sh --backend direct --compiler clang++
+```
+
+See [Building DiscoC](docs/building.md) for prerequisites, compiler selection,
+output paths, static linking, direct-build tests, and DOS cross-compilation.
+The following manual CMake workflow remains supported:
 
 ```bash
 # 1. Clone the repository
@@ -91,6 +113,19 @@ cmake --build .
 ```
 
 After a successful build, the `discc`, `discas`, and `discld` executables will be located in the `build/Debug` or `build` directory.
+
+For MinGW on Windows, select its generator explicitly from a terminal where
+the MinGW compiler and `mingw32-make` are available:
+
+```powershell
+cmake -S . -B build-mingw -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build build-mingw --parallel
+ctest --test-dir build-mingw --output-on-failure
+```
+
+Use a fresh build directory when changing generators. The execution tests
+check linked GSU payload results and stack behavior; they do not replace
+testing a complete ROM on an emulator or console.
 
 ## Usage
 
@@ -131,6 +166,21 @@ The DiscoC toolchain uses a two-step compile-and-link process.
 
 The resulting `my_game.bin` is a linked SuperFX/GSU payload, not a complete runnable SNES ROM. It must still be placed into a valid ROM image with the appropriate SNES header, mapping configuration, startup integration, and host-side resources before it can be executed by an emulator or console.
 
+### GSU execution placement
+
+LoROM with ROM execution at `$00:8000` is the default. To select cartridge RAM
+execution, add the same directive to each `.dc` translation unit:
+
+```c
+set execution_memory = ram; // Default RAM origin: $70:8000
+```
+
+An explicit `set code_start_address = 0x710000;` overrides the default origin.
+HiROM remains available via `set memory_mapping = hirom;`; it is not the default
+and is separate from the ROM/RAM execution choice. RAM execution requires a
+host-side loader and GSU initialization; it does not automatically relocate
+ROM-qualified data into usable RAM storage. See [target configuration](docs/architecture.md#target-configuration).
+
 ## Project Roadmap
 
 This project is not as actively developed. You can view our roadmap and upcoming features in the `ROADMAP.md` file.
@@ -143,6 +193,7 @@ Detailed design and format documentation is available in the [`docs/`](docs/) di
 * [`ir-cfg.md`](docs/ir-cfg.md) — the typed intermediate representation and control-flow graph model.
 * [`object-format.md`](docs/object-format.md) — relocatable object-file layout and linker behavior.
 * [`testing.md`](docs/testing.md) — CTest regressions, sanitizer checks, and optional fuzzing.
+* [`building.md`](docs/building.md) — Windows/Linux/macOS build helpers and direct compiler options.
 * [`assembler.md`](docs/assembler.md) — the `discas` input language and supported assembly workflow.
 * [`spc700-target.md`](docs/spc700-target.md) — SPC-700 target model, ABI proposal, and initial language subset.
 

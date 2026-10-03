@@ -6,13 +6,15 @@
 #include "AST.hpp"
 #include "Analyzer.hpp"
 #include "DataSegment.hpp"
+#include "TargetConfig.hpp"
 
 class AssemblyGenerator : public Visitor {
 public:
     AssemblyGenerator(
         const std::map<std::string, FunctionSymbol>& global_function_symbols,
         const std::map<std::string, Analyzer::LocalSymbolTable>& all_local_symbols,
-        const DataSegmentManager& data_manager
+        const DataSegmentManager& data_manager,
+        CompilerConfig config = {}
     );
 
     std::string generate(const std::vector<std::unique_ptr<Stmt>>& program);
@@ -62,6 +64,7 @@ private:
     const std::map<std::string, FunctionSymbol>& m_global_function_symbols;
     const std::map<std::string, Analyzer::LocalSymbolTable>& m_all_local_symbols;
     const DataSegmentManager& m_data_manager;
+    const CompilerConfig m_config;
     std::stringstream m_out;
     int m_indent_level = 0;
     int m_label_counter = 0;
@@ -72,5 +75,4 @@ private:
 	Analyzer::LocalSymbolTable m_symbolTable;
     int m_stackOffset = 0;
     bool m_isInPlottingContext = false;
-	bool m_emitting_condition = false;
 };

@@ -1,0 +1,33 @@
+word add(word left, word right) {
+    return left + right;
+}
+
+word subtract(word left, word right) {
+    return left - right;
+}
+
+word nested(word left, word right) {
+    word saved = left;
+    word sum = add(left, right);
+    return sum + saved;
+}
+
+word zero_args() {
+    return 149;
+}
+
+word identity(word value) {
+    return value;
+}
+
+void no_result(word* output) {
+    *output = 149;
+}
+
+word three_arguments(word first, word second, word third) {
+    return first + (second + third);
+}
+
+word byte_argument(byte value) {
+    return (word)value;
+}

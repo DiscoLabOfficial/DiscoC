@@ -271,7 +271,7 @@ void Analyzer::visit(FunctionDeclStmt& stmt) {
     beginScope();
 
     // STEP 1: Process parameters. They have POSITIVE offsets from the frame pointer.
-    // The layout is: [FP+4]=Param1, [FP+2]=ReturnAddr, [FP]=Old_FP
+    // Empty descending stack: [FP+2]=Old_FP, [FP+4]=ReturnAddr, [FP+6]=Param1.
     int paramOffset = GSUAbi::FirstParameterOffset;
     for (auto& param : stmt.params) {
         if (m_scopes.back().count(param.name.lexeme)) {
@@ -333,7 +333,15 @@ void Analyzer::visit(FunctionDeclStmt& stmt) {
             total_local_size += var_size;
         }
     }
-    stmt.total_local_alloc_size = total_local_size;
+    // The next PUSH writes at SP before decrementing it. Keep an empty word
+    // below the lowest local so expression temporaries cannot overwrite it.
+    constexpr int max_local_storage = 65528;
+    if (total_local_size > max_local_storage) {
+        throw CompilerError("Local stack frame exceeds the 16-bit GSU address space.",
+                            stmt.token.line_number, stmt.token.col_number);
+    }
+    stmt.total_local_alloc_size = total_local_size > 0
+        ? total_local_size + static_cast<int>(GSUAbi::ParameterSlotSize) : 0;
     
     // Reset the pointer for the next function.
     m_current_function_locals = nullptr;
@@ -595,7 +603,8 @@ void Analyzer::visit(AddressOfExpr& expr, const Type*) {
     Type rightType = expr.right->result_type;
     if (dynamic_cast<VariableExpr*>(expr.right.get()) || dynamic_cast<SubscriptExpr*>(expr.right.get()) || dynamic_cast<MemberAccessExpr*>(expr.right.get())) {
         Type resultType = rightType;
-        resultType.pointer_level++; 
+        resultType.pointer_level++;
+        resultType.sizeInBytes = 2;
         expr.result_type = resultType;
     } else {
         throw CompilerError("Address-of operator '&' can only be applied to an l-value (e.g., a variable or array element).", expr.token.line_number, expr.token.col_number);
@@ -609,7 +618,12 @@ void Analyzer::visit(DereferenceExpr& expr, const Type*) {
     }
     Type resultType = expr.right->result_type;
     resultType.pointer_level--;
-    if (resultType.pointer_level == 0) resultType.is_far = false;
+    if (resultType.pointer_level == 0) {
+        resultType.is_far = false;
+        normalizeType(resultType, expr.token);
+    } else {
+        resultType.sizeInBytes = 2;
+    }
     expr.result_type = resultType;
 }
 
@@ -640,7 +654,12 @@ void Analyzer::visit(SubscriptExpr& expr, const Type*) {
         resultType.array_size = 0;
     } else {
         resultType.pointer_level--;
-        if (resultType.pointer_level == 0) resultType.is_far = false;
+        if (resultType.pointer_level == 0) {
+            resultType.is_far = false;
+            normalizeType(resultType, expr.token);
+        } else {
+            resultType.sizeInBytes = 2;
+        }
     }
     expr.result_type = resultType;
 }

@@ -207,7 +207,9 @@ void Optimizer::visit(BlockStmt& block) {
             continue;
         } else {
             // Initializer is neither a declaration nor an expression, so it can't match.
-            continue; // This should not be reachable with a valid for-loop
+            current_stmt->accept(*this);
+            optimized_statements.push_back(std::move(current_stmt));
+            continue;
         }
 
         long init_count = 0;

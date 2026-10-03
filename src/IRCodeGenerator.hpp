@@ -30,6 +30,7 @@ private:
         std::size_t patch_offset = 0;
         IRBlockId target;
         Token source = {TokenType::UNKNOWN, "", 0, 0};
+        bool long_form = false;
     };
 
     struct LocalBranchFixup {
@@ -53,6 +54,7 @@ private:
     void emitBlock(const IRBasicBlock& block);
     void emitInstruction(const IRInstruction& instruction);
     void emitBranch(IRBlockId target, const Token& source);
+    void emitBlockBranch(std::uint8_t opcode, IRBlockId target, const Token& source);
     void emitConditionalBranch(const IRInstruction& instruction);
     void emitSwitch(const IRInstruction& instruction);
     void patchBranches();
@@ -77,6 +79,7 @@ private:
     void saveLiveRegistersForCall(const IRInstruction& instruction,
                                   std::vector<std::uint8_t>& saved_registers);
     void restoreRegistersAfterCall(const std::vector<std::uint8_t>& saved_registers);
+    ObjectFile generateInternal(const IRModule& module);
 
     const std::map<std::string, Analyzer::LocalSymbolTable>& m_all_local_symbols;
     const std::map<std::string, FunctionSymbol>& m_global_function_symbols;
@@ -96,4 +99,5 @@ private:
     std::size_t m_current_instruction_position = 0;
     std::size_t m_emission_position = 0;
     bool m_isInPlottingContext = false;
+    bool m_force_long_branches = false;
 };

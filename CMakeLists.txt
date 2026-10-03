@@ -29,21 +29,6 @@ if(APPLE)
   add_link_options(-stdlib=libc++)
 endif()
 
-# Platform & Compiler-Specific Flags
-# Set the standard compiler flags for each build type.
-# CMake will automatically use these for all targets. This is the most compatible method.
-set(CMAKE_CXX_FLAGS_DEBUG          "-g -O0")
-set(CMAKE_CXX_FLAGS_RELEASE        "-O3 -DNDEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
-
-# For MSVC, the flags are different. CMake knows to use these when the compiler is MSVC.
-if(MSVC)
-    set(CMAKE_CXX_FLAGS_DEBUG          "/Od /Zi /RTC1")
-    set(CMAKE_CXX_FLAGS_RELEASE        "/O2 /DNDEBUG")
-    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Zi /DNDEBUG")
-endif()
-
-
 # We create an INTERFACE library to hold our common WARNING flags.
 # This is a clean, modern way to apply settings to multiple targets.
 add_library(disco_common_warnings INTERFACE)
@@ -63,33 +48,50 @@ else()
         -Wall                         # All warnings
         -Wextra                       # Extra warnings
         -Wpedantic                    # Strict ISO C++ compliance warnings
-        -fPIC                         # Generate Position-Independent Code (good practice)
     )
 endif()
 
 
-# Source File Definitions
-set(COMPILER_CORE_SOURCES
-    src/Analyzer.cpp
-    src/Optimizer.cpp
-    src/IR.cpp
-    src/IRCodeGenerator.cpp
-    src/LinearScanAllocator.cpp
-    src/AssemblyGenerator.cpp
-    src/DataSegment.cpp
-    src/ASTPrinter.cpp
-)
+add_library(disco_platform_options INTERFACE)
+if(MSVC)
+    target_compile_options(disco_platform_options INTERFACE
+        "$<$<CONFIG:Debug>:/Od>"
+        "$<$<CONFIG:Debug>:/Zi>"
+        "$<$<CONFIG:Debug>:/RTC1>"
+        "$<$<CONFIG:Release>:/O2>"
+        "$<$<CONFIG:Release>:/DNDEBUG>"
+        "$<$<CONFIG:RelWithDebInfo>:/O2>"
+        "$<$<CONFIG:RelWithDebInfo>:/Zi>"
+        "$<$<CONFIG:RelWithDebInfo>:/DNDEBUG>"
+    )
+else()
+    target_compile_options(disco_platform_options INTERFACE
+        "$<$<CONFIG:Debug>:-g>"
+        "$<$<CONFIG:Debug>:-O0>"
+        "$<$<CONFIG:Release>:-O3>"
+        "$<$<CONFIG:Release>:-DNDEBUG>"
+        "$<$<CONFIG:RelWithDebInfo>:-O2>"
+        "$<$<CONFIG:RelWithDebInfo>:-g>"
+        "$<$<CONFIG:RelWithDebInfo>:-DNDEBUG>"
+    )
+    if(NOT DISCO_DOS_BUILD)
+        target_compile_options(disco_platform_options INTERFACE -fPIC)
+    endif()
+endif()
 
-add_library(disco_object_core STATIC src/ObjectFile.cpp)
-add_library(disco_frontend_core STATIC src/Lexer.cpp src/Token.cpp src/Parser.cpp)
-add_library(disco_compiler_core STATIC ${COMPILER_CORE_SOURCES})
+# Source File Definitions
+include(cmake/BuildSources.cmake)
+
+add_library(disco_object_core STATIC ${DISCO_SOURCES_object})
+add_library(disco_frontend_core STATIC ${DISCO_SOURCES_frontend})
+add_library(disco_compiler_core STATIC ${DISCO_SOURCES_compiler})
 add_library(disco_linker_core INTERFACE)
-add_library(disco_assembler_core STATIC src/Assembler.cpp)
+add_library(disco_assembler_core STATIC ${DISCO_SOURCES_assembler})
 
 foreach(core_target IN ITEMS disco_object_core disco_frontend_core disco_compiler_core
                             disco_assembler_core)
     target_include_directories(${core_target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(${core_target} PUBLIC disco_common_warnings)
+    target_link_libraries(${core_target} PUBLIC disco_common_warnings disco_platform_options)
 endforeach()
 
 target_include_directories(disco_linker_core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -122,27 +124,23 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     target_include_directories(disco_object_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(disco_object_tests PRIVATE disco_object_core)
 
-    add_executable(disco_ir_verifier_tests
-        tests/IRVerifierTests.cpp
-        src/IR.cpp
-        src/Token.cpp
-    )
+    add_executable(disco_ir_verifier_tests ${DISCO_SOURCES_disco_ir_verifier_tests})
     target_include_directories(disco_ir_verifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(disco_ir_verifier_tests PRIVATE disco_common_warnings)
+    target_link_libraries(disco_ir_verifier_tests PRIVATE disco_common_warnings disco_platform_options)
 
-    add_executable(disco_linear_scan_tests
-        tests/LinearScanAllocatorTests.cpp
-        src/LinearScanAllocator.cpp
-        src/Token.cpp
-    )
+    add_executable(disco_linear_scan_tests ${DISCO_SOURCES_disco_linear_scan_tests})
     target_include_directories(disco_linear_scan_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_link_libraries(disco_linear_scan_tests PRIVATE disco_common_warnings)
+    target_link_libraries(disco_linear_scan_tests PRIVATE disco_common_warnings disco_platform_options)
 
-    add_executable(disco_target_foundation_tests
-        tests/TargetFoundationTests.cpp
-    )
+    add_executable(disco_target_foundation_tests tests/TargetFoundationTests.cpp)
     target_include_directories(disco_target_foundation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(disco_target_foundation_tests PRIVATE disco_frontend_core)
+
+    add_executable(disco_gsu_execution_tests ${DISCO_SOURCES_disco_gsu_execution_tests})
+    target_link_libraries(disco_gsu_execution_tests PRIVATE disco_common_warnings disco_platform_options)
+
+    add_executable(disco_gsu_mapping_tests tests/GsuMemoryMapTests.cpp)
+    target_link_libraries(disco_gsu_mapping_tests PRIVATE disco_object_core)
 
     function(add_toolchain_regression name case_name)
         add_test(
@@ -154,6 +152,8 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
                 -DDISCC=$<TARGET_FILE:discc>
                 -DDISCAS=$<TARGET_FILE:discas>
                 -DDISCLD=$<TARGET_FILE:discld>
+                -DGSU_RUNNER=$<TARGET_FILE:disco_gsu_execution_tests>
+                -DGSU_MAPPING_TESTER=$<TARGET_FILE:disco_gsu_mapping_tests>
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_toolchain_regression.cmake
         )
     endfunction()
@@ -162,17 +162,9 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_test(NAME ir_verifier COMMAND disco_ir_verifier_tests)
     add_test(NAME linear_scan_allocator COMMAND disco_linear_scan_tests)
     add_test(NAME target_foundation COMMAND disco_target_foundation_tests)
-    add_toolchain_regression(ir_and_cfg ir_and_cfg)
-    add_toolchain_regression(shadowing shadowing)
-    add_toolchain_regression(diagnostics diagnostics)
-    add_toolchain_regression(language_diagnostics language_diagnostics)
-    add_toolchain_regression(multifile multifile)
-    add_toolchain_regression(switch_abi switch_abi)
-    add_toolchain_regression(backend_equivalence backend_equivalence)
-    add_toolchain_regression(data_relocation data_relocation)
-    add_toolchain_regression(branch_relaxation branch_relaxation)
-    add_toolchain_regression(feature_examples feature_examples)
-    add_toolchain_regression(spc700_target spc700_target)
+    add_test(NAME gsu_execution_model COMMAND disco_gsu_execution_tests --self-test)
+    add_test(NAME gsu_memory_map COMMAND disco_gsu_mapping_tests)
+    include(tests/toolchain-cases.cmake)
 endif()
 
 # Core libraries carry their include paths and warning policy to the tools and

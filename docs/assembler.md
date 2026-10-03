@@ -52,9 +52,25 @@ The assembler recognizes:
 * `.byte` and `.word` numeric data directives;
 * labels in code and data sections;
 * `.setcpu` lines as accepted metadata directives;
+* `.define __DISCO_MEMORY_MAPPING lorom` (or `hirom`);
+* `.define __DISCO_CODE_START_ADDRESS <24-bit address>`;
 * semicolon comments.
 
 Labels must be unique within the input file. Exported labels become object-file symbols. Non-exported labels can still be used for local branches and local assembly references.
+
+The two reserved `.define` names preserve compiler placement configuration;
+they emit no bytes and do not implement general macro expansion. Without them,
+the assembler defaults to LoROM and `$00:8000`. For RAM execution, use:
+
+```asm
+.define __DISCO_MEMORY_MAPPING lorom
+.define __DISCO_CODE_START_ADDRESS $708000
+```
+
+An explicit origin takes precedence over the mapping's default origin in either
+definition order. Duplicate, unknown, malformed, or out-of-range configuration
+definitions are errors. `discld` validates the resulting GSU address and rejects
+objects with incompatible mapping/origin configurations.
 
 Numeric literals support decimal, hexadecimal with `$` or `0x`-style forms accepted by the compiler output, binary with `%`, and signed values where the instruction or data directive allows them.
 
@@ -87,7 +103,18 @@ Local branch labels are resolved during assembly. External function and data ref
 
 ## Branch ranges
 
-Relative branches use an 8-bit signed displacement measured from the byte after the displacement field. Short branch targets remain limited to `-128..127` bytes, but `discas` automatically relaxes an out-of-range local branch to an absolute `IWT R15, target` plus `JMP R15` sequence. The linker resolves the relaxed local target relative to its input object. Undefined targets and non-code targets remain assembler errors.
+Relative branches use an 8-bit signed displacement measured from the byte after
+the displacement field. Short branch targets remain limited to `-128..127`
+bytes, but `discas` automatically relaxes an out-of-range local branch to
+`IWT R15, target; NOP`. Conditional relaxation emits an inverted short branch,
+its `NOP` delay slot, and the absolute jump with its own `NOP` delay slot. The
+linker resolves the relaxed local target relative to its input object.
+Undefined targets and non-code targets remain assembler errors.
+
+`jal` expands to `LINK #4; IWT R15, target`, and `ret` expands to `JMP R11`.
+When writing assembly, explicitly place `nop` after these pseudo-instructions
+to fill the GSU delay slot, as compiler-generated assembly does. The assembler
+does not insert additional delay slots for raw control-transfer instructions.
 
 ## Editing generated assembly
 

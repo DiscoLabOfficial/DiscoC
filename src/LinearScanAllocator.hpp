@@ -9,14 +9,16 @@
 
 struct LinearScanLocation {
     bool has_register = false;
+    bool rematerializable = false;
     std::uint8_t physical_register = 0;
     std::size_t start = 0;
     std::size_t end = 0;
 };
 
 // Assigns non-overlapping IR value intervals to a fixed set of physical GSU
-// registers. Values without a register are intentionally left available for
-// rematerialization by the backend until explicit spill slots are introduced.
+// registers. Values without a register may only be rematerialized when their
+// defining expression is pure and repeatable. Observable values fail
+// explicitly until a real spill-slot implementation is available.
 class LinearScanAllocator {
 public:
     void run(const IRFunction& function,

@@ -51,9 +51,7 @@ std::uint64_t ObjectFile::remaining_bytes(std::istream& in) {
 }
 
 std::string ObjectFile::read_string(std::istream& in, const char* field_name) {
-    uint32_t len;
-    in.read(reinterpret_cast<char*>(&len), sizeof(len));
-    if (!in) throw std::runtime_error(std::string("Object file: truncated ") + field_name + " length.");
+    const auto len = read_u32_le(in, field_name);
     if (len > MaxStringBytes || static_cast<std::uint64_t>(len) > remaining_bytes(in)) {
         throw std::runtime_error(std::string("Object file: invalid ") + field_name + " length.");
     }

@@ -18,6 +18,14 @@ private:
     const std::vector<Token>& m_tokens;
     std::size_t m_current = 0;
     CompilerConfig m_config;
+    enum class ExecutionMemory { Rom, Ram };
+    ExecutionMemory m_execution_memory = ExecutionMemory::Rom;
+    bool m_execution_memory_explicit = false;
+    bool m_code_origin_explicit = false;
+    int m_execution_memory_line = 1;
+    int m_execution_memory_column = 1;
+
+    void updateDefaultCodeOrigin();
 
     void parseDirective();
     Type parseType();

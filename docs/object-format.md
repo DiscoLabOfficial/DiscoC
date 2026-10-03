@@ -13,7 +13,7 @@ order, independent of the host architecture. The current format version is
 | Field | Encoding |
 | --- | --- |
 | Magic | 5 ASCII bytes: `DISCO` |
-| Format version | `uint8_t`: currently `2` |
+| Format version | `uint8_t`: currently `3` |
 | Target | `uint8_t`: `0` = GSU, `1` = SPC700 |
 | Memory mapping | `uint8_t`: `0` = LoROM, `1` = HiROM |
 | Code start address | `uint32_t` |
@@ -76,6 +76,53 @@ The section value in a relocation identifies the section containing the placehol
 For 16-bit address relocations, the linker patches the two bytes after the opcode placeholder. For bank relocations, it patches the byte after the opcode. For offset relocations, it patches the two-byte address field.
 
 Undefined symbols and duplicate definitions are linker errors. Objects with incompatible target configurations are rejected before output is written.
+
+### GSU address and bank validation
+
+`code_start_address` is a **GSU execution address**, not a byte offset inside a
+SNES ROM file. The default is `$00:8000`; explicit origins such as `$40:0000`,
+`$70:8000`, and `$71:0000` are supported. The linker accepts the documented
+GSU-visible windows:
+
+| Region | GSU addresses |
+| --- | --- |
+| Game ROM | `$00-$3F:$8000-$FFFF` |
+| Game ROM mirror | `$40-$5F:$0000-$FFFF` |
+| Game Pak RAM | `$70-$71:$0000-$FFFF` |
+
+LoROM/ROM execution remains the default. `set execution_memory = ram;` selects
+`$70:8000` unless `code_start_address` is specified explicitly; it does not
+change the cartridge mapping. The full origin carries this selection through
+the existing version-3 object format. Both direct compilation and emitted
+assembly preserve mapping and origin.
+
+The reference is the [Super FX tutorial's GSU memory map](https://en.wikibooks.org/wiki/Super_NES_Programming/Super_FX_tutorial#From_Super_FX_Point_of_View).
+Lower-half ROM mirrors and SNES-CPU-only regions are intentionally outside the
+supported placement contract. The RAM window describes addressability, not a
+guarantee that a particular cartridge contains 128 KiB of RAM.
+
+The combined code **and** data must fit from the origin through the end of one
+64 KiB program bank. A payload whose last byte is `$xx:FFFF` is accepted, but
+one more byte is rejected. This check includes all objects, not just individual
+sections. The linker does not insert bank padding or generate bank-switching
+code. `LoROM`/`HiROM` remain compatibility metadata and default-origin choices,
+not commands to change the GSU's hardware address map or create a cartridge ROM.
+
+`ADDR16_JAL` and `ADDR16_IWT` targets must be in the origin's bank; high-bank
+origins are valid and encode the target's low 16 bits **after** validation.
+`ADDR24_BANK` and `ADDR24_OFFSET` targets must fit 24 bits and identify a supported
+GSU region. A one-past-section label is legal in the object format, but cannot
+be relocated to an inaccessible address or a different bank by a near relocation.
+All placement/relocation checks run before the output file is opened, so a
+rejected link does not create or truncate the output.
+
+This validation does not initialize `PBR`, `ROMBR`, `RAMBR`, bus access, or the
+stack, and does not infer the address space of arbitrary runtime pointers.
+RAM execution requires copying the payload to cartridge RAM and matching the
+configured program bank/PC. ROM-qualified accesses still require ROM-resident
+data and the appropriate ROM bank; copying bytes to RAM does not turn ROM-buffer
+reads into RAM loads. Separate placement of RAM code and ROM constants is not
+implemented by the current flat code-then-data layout.
 
 ## ROM data
 
