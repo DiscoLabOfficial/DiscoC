@@ -333,7 +333,36 @@ void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+void checkGraphicsAddressBoundaries() {
+    struct Screen { std::uint8_t mode, base, last_y; };
+    // 8bpp bitmap and OBJ configurations ending at the last cartridge RAM
+    // byte. Check logical colors and independent raw bitplane expectations.
+    const Screen screens[] = {{0x23, 80, 191}, {0x27, 64, 255}};
+    for (const auto& screen : screens) {
+        std::vector<std::uint8_t> ram(128 * 1024, 0);
+        GSUGraphicsModel graphics(ram);
+        graphics.configure(screen.mode, screen.base);
+        graphics.options(1);
+        graphics.color(255);
+        graphics.plot(255, screen.last_y);
+        require(graphics.read(255, screen.last_y) == 255 &&
+                ram.back() == 1 && ram.front() == 0,
+                "Graphics address calculation missed the last RAM bitplane byte");
+
+        GSUGraphicsModel outside(ram);
+        outside.configure(screen.mode, static_cast<std::uint8_t>(screen.base + 1));
+        bool rejected = false;
+        try {
+            outside.read(255, screen.last_y);
+        } catch (const std::out_of_range&) {
+            rejected = true;
+        }
+        require(rejected, "Graphics read outside cartridge RAM was not rejected");
+    }
+}
+
 void selfTest() {
+    checkGraphicsAddressBoundaries();
     Machine copy({0xf0, 149, 0, 0x20, 0x11, 0, 1}, 0x8000);
     copy.run();
     require(copy.reg(1) == 149, "WITH R0 / TO R1 did not copy R0");

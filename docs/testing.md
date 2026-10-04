@@ -81,6 +81,11 @@ GSU regressions. Both CTest and direct-build runners include this test.
 Alias checks cover signedness/width, const/volatile and near/far metadata,
 inactive declarations, name conflicts, and alias-count/pointer-depth boundaries.
 
+Nesting fixtures retain the 128-entry parser and 256-depth expression limits,
+including accepted/rejected cases at the parser boundary. MSVC tools and tests
+reserve an 8 MiB stack so Debug exception unwinding can report excessive
+nesting safely; the input limits and negative-test coverage are not relaxed.
+
 ## Near/far execution regressions
 
 Eight `pointer_*` groups cover the data-pointer contract:

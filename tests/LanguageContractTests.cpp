@@ -324,6 +324,11 @@ void checkPlotAndResourceLimits() {
     expectDiagnostic("void main() { word n = -true; }", "Unary arithmetic requires");
     expectDiagnostic("void main() { " + std::string(1000, '!') + "true; }", "Parser nesting exceeds");
     expectDiagnostic("void main() { " + std::string(1000, '(') + "1" + std::string(1000, ')') + "; }", "Parser nesting exceeds");
+    // Each grouping enters assignment and unary. Exercise both sides of the
+    // unchanged 128-entry limit, including the native MSVC Debug build.
+    analyze("word f() { return " + std::string(63, '(') + "42" + std::string(63, ')') + "; }",
+        [](const Program&, const Analyzer&, const DataSegmentManager&, const IRModule&) {});
+    expectDiagnostic("void main() { " + std::string(64, '(') + "1" + std::string(64, ')') + "; }", "Parser nesting exceeds");
     expectDiagnostic("void main() { " + std::string(1000, '{') + std::string(1000, '}') + " }", "Parser nesting exceeds");
     std::string chain = "1";
     for (int index = 0; index < 1000; ++index) chain += " + 1";

@@ -63,7 +63,9 @@ private:
             const unsigned height = mode_ & 0x20 ? 192 : mode_ & 4 ? 160 : 128;
             tile = (x / 8) * (height / 8) + y / 8;
         }
-        return static_cast<std::size_t>(base_) * 1024 + tile * depth() * 8 + (y & 7) * 2;
+        const auto tile_offset = static_cast<std::size_t>(tile) * depth() * 8;
+        const auto row_offset = static_cast<std::size_t>(y & 7) * 2;
+        return static_cast<std::size_t>(base_) * 1024 + tile_offset + row_offset;
     }
     void flush(Cache& cache) {
         if (!cache.pending) return;

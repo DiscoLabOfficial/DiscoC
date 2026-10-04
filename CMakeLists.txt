@@ -59,6 +59,10 @@ endif()
 
 add_library(disco_platform_options INTERFACE)
 if(MSVC)
+    # Bounded parser recursion and exception unwinding need more than MSVC's
+    # default 1 MiB in Debug. Apply the same reserve to tools and their tests;
+    # parser/AST nesting limits remain unchanged.
+    target_link_options(disco_platform_options INTERFACE /STACK:8388608)
     target_compile_options(disco_platform_options INTERFACE
         "$<$<CONFIG:Debug>:/Od>"
         "$<$<CONFIG:Debug>:/Zi>"
