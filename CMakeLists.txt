@@ -21,7 +21,12 @@ endif()
 
 set(CMAKE_CXX_STANDARD ${CXX_STANDARD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF) # Use -std=c++23 instead of -std=gnu++23
+set(CMAKE_CXX_EXTENSIONS OFF)
+if(DISCO_DOS_BUILD AND DJGPP)
+    # DJGPP libc hides getcwd/stat under __STRICT_ANSI__, even in C++.
+    # Keep the DOS C++14 baseline, but expose its required filesystem APIs.
+    set(CMAKE_CXX_EXTENSIONS ON)
+endif()
 
 if(APPLE)
   # Usually default on macOS, but keeping explicit avoids surprises.

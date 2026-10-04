@@ -152,6 +152,9 @@ bash build.sh --backend ninja --dos \
 ```
 
 The supplied toolchain describes the Linux-hosted DJGPP binaries under `.djgpp`.
+With `DISCO_DOS_BUILD=ON`, DJGPP uses GNU C++14: its libc hides required
+filesystem APIs such as `getcwd` and `stat` in strict ISO mode. Native builds
+remain strict C++23, and DOS builds do not build or run host-native tests.
 The PowerShell example requires a toolchain file appropriate for the Windows host;
 the helper does not download or translate cross-compilers. Other cross-builds
 can supply a toolchain without enabling the DOS configuration.

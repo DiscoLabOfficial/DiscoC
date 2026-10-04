@@ -1,3 +1,5 @@
+cmake_minimum_required(VERSION 3.15)
+
 if(NOT DEFINED CASE OR NOT DEFINED ROOT_DIR OR NOT DEFINED TEST_DIR OR
    NOT DEFINED DISCC OR NOT DEFINED DISCAS OR NOT DEFINED DISCLD)
     message(FATAL_ERROR "Regression test arguments are incomplete")
