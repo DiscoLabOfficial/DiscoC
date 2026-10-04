@@ -1,0 +1,2 @@
+// error: @cfg requires exactly one target name
+@cfg(unknown) void main() {}

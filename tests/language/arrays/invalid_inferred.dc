@@ -1,0 +1,2 @@
+// error: Inferred array extent
+word values[];

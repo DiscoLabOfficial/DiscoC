@@ -1,0 +1,3 @@
+// target: gsu
+// error: require a plotting context
+void main() { plot.x = 1; }

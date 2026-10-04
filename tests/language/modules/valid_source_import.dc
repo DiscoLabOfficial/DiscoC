@@ -1,0 +1,14 @@
+import "source/api.dc";
+import "source/./api.dc";
+static_assert(PUBLIC == 3);
+static_assert(ENABLED && ready);
+static_assert(boundary == (unsigned word)65535);
+static_assert(sizeof(Item) == 4);
+static_assert(alignof(Item) == 2);
+static_assert(ACTIVE == 2);
+static_assert(sizeof(values) == 6);
+static_assert(sizeof(text) == 3);
+void main() {
+    Item item;
+    item.value = add(values[0], values[1]);
+}

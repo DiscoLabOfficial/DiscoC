@@ -1,0 +1,42 @@
+struct Pair { word a; word b; };
+word select(volatile word* counter) { (*counter)++; return 0; }
+void main() {
+    word count = 0;
+    for (word i = 0; i < 6; i++) {
+        switch (i) { case 2: continue; default: count += i; }
+    }
+    *(word*)0x100 = count;
+    word i = 0;
+    while (i < 3) { ++i; if (i == 2) continue; count++; }
+    *(word*)0x102 = count;
+    struct Pair pair;
+    struct Pair* pointer = &pair;
+    pointer->a = 149;
+    pointer->b = 46;
+    *(word*)0x104 = pointer->a + pointer->b;
+    word* empty = null;
+    far word* far_empty = null;
+    far word* left = (far word*)0x700200;
+    far word* right = (far word*)0x710200;
+    *(word*)0x106 = (word)(empty == null);
+    *(word*)0x108 = (word)(left != right);
+    *(word*)0x10a = (word)(far_empty == null);
+    *(word*)0x10c = (word)(left == left);
+    unsigned word address = (unsigned word)pointer;
+    struct Pair* recovered = (struct Pair*)address;
+    *(word*)0x10e = recovered->a;
+    volatile word* port = (volatile word*)0x110;
+    *port = 0;
+    word values[1];
+    values[select(port)] = 10;
+    values[select(port)] += 5;
+    *(word*)0x112 = values[0];
+    byte wrapping = 127;
+    word previous = wrapping++;
+    *(word*)0x114 = wrapping;
+    *(word*)0x116 = previous;
+    word* narrow_null = (word*)far_empty;
+    far word* wide_null = (far word*)empty;
+    *(word*)0x118 = (word)(narrow_null == null);
+    *(word*)0x11a = (word)(wide_null == null);
+}

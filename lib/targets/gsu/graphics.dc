@@ -1,0 +1,20 @@
+module DiscoGSUGraphics;
+import "graphics.dci";
+
+@target(gsu) void dc_gsu_plot_pixel(i16 x, i16 y, i16 color_value) {
+    plot {
+        set_color(color_value);
+        plot(x, y);
+    }
+}
+
+@target(gsu) void dc_gsu_fill_rect(i16 x, i16 y, i16 width, i16 height, i16 color_value) {
+    plot {
+        set_color(color_value);
+        for (i16 row = 0; row < height; row++) {
+            for (i16 column = 0; column < width; column++) plot(x + column, y + row);
+        }
+    }
+}
+
+@target(gsu) void dc_gsu_flush_pixels() { flush_pixels(); }

@@ -1,0 +1,1 @@
+void main() { byte b = (byte)300; word w = b; unsigned word u = (unsigned word)w; bool yes = (bool)u; }

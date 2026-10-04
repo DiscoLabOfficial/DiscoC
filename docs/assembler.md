@@ -64,18 +64,20 @@ main:
 
 The assembler recognizes:
 
-* `.segment "CODE"` and `.segment "DATA"`;
+* `.segment "CODE"`, `.segment "DATA"`, and `.segment "RAM"` (RAM initialization bytes, no instructions);
 * `.export symbol`;
 * `.byte` and `.word` numeric data directives;
-* labels in code and data sections;
+* exported or private labels in CODE, DATA, and RAM;
 * `.setcpu` lines as accepted metadata directives;
 * `.define __DISCO_MEMORY_MAPPING lorom` (or `hirom`);
 * `.define __DISCO_CODE_START_ADDRESS <24-bit address>`;
+* `.define __DISCO_DATA_ALIGNMENT N` (power of two 1..128);
+* `.define __DISCO_RAM_ALIGNMENT N` (power of two 1..128, default 2);
 * semicolon comments.
 
 Labels must be unique within the input file. Exported labels become object-file symbols. Non-exported labels can still be used for local branches and local assembly references.
 
-The two reserved `.define` names preserve compiler placement configuration;
+The reserved `.define` names preserve placement/alignment configuration;
 they emit no bytes and do not implement general macro expansion. Without them,
 the assembler defaults to LoROM and `$00:8000`. For RAM execution, use:
 
@@ -118,14 +120,19 @@ iwt r0, #global_data
 jal helper
 ibt r1, #^global_data
 iwt r2, #lo24(global_data)
+iwt r0, #ram(frame_counter)
 ```
 
 Local branch labels are resolved during assembly. External function and data references remain for `discld`, which resolves them after all input objects have been laid out.
 
 `#^symbol` records a 24-bit bank relocation and `#lo24(symbol)` records its low
 16-bit counterpart; these are restricted symbolic operand forms, not a general
-expression language. Absolute references to non-exported CODE labels become
-object-private symbols. DATA labels used by absolute references must be exported.
+expression language. `#ram(symbol)` selects a near-RAM relocation independently
+of the program bank. Absolute references to non-exported CODE/DATA/RAM labels
+become object-private symbols; only exported names are visible across objects.
+RAM images require generated startup or explicit host-owned initialization at
+link time. Compiler exports retain their images/private references; final
+linked exports contain resolved startup/addresses, not a second RAM image.
 
 The native single-operand forms `ldw (r0)` / `stw (r0)` (and `ldb` / `stb`) use
 the current destination/source selectors. Existing two-operand convenience
@@ -151,7 +158,7 @@ does not insert additional delay slots for raw control-transfer instructions.
 
 When hand-editing `.s` files:
 
-1. Keep both `.segment` directives.
+1. Keep the required CODE/DATA/RAM `.segment` directives.
 2. Export every symbol that must be visible to another object or to the linker.
 3. Keep branch targets in the code section.
 4. Use valid GSU register and operand forms.

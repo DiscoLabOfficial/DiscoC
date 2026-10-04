@@ -1,0 +1,17 @@
+module FixedPointExample;
+import "../../lib/core/fixed.dci";
+import "../../lib/core/memory.dci";
+
+void main() {
+    q8_8 positions[2] = {384, -192}; // 1.5 and -0.75, as signed raw bits
+    q8_8 two = dc_q8_8_from_int(2);
+    q8_8 scaled = dc_q8_8_mul(positions[0], two);
+    q8_8 divided = dc_q8_8_div(positions[1], two);
+    *(i16*)0x100 = scaled;                         // 768 = 3.0
+    *(i16*)0x102 = divided;                        // -96 = -0.375
+    *(i16*)0x104 = dc_q8_8_to_int(divided);         // 0, truncation toward zero
+    *(i16*)0x106 = dc_q12_4_mul(dc_q12_4_from_int(3), 24); // 72 = 4.5
+
+    u8 bytes[4] = {0, 128, 255, 42};
+    dc_memcpy((u8*)0x110, &bytes[0], 4);
+}

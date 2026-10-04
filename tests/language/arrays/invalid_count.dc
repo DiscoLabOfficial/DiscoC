@@ -1,0 +1,2 @@
+// error: initializer count
+word values[1] = {1, 2};

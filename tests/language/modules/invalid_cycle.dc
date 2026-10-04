@@ -1,0 +1,2 @@
+// error: Cyclic interface import
+import "cycle_a.dci";

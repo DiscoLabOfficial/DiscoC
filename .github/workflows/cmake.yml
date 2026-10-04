@@ -90,6 +90,8 @@ jobs:
         run: |
           cmake -S . -B build-dos -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DDISCO_DOS_BUILD=ON \
+            -DBUILD_TESTING=OFF \
             -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/cmake/dos-djgpp.cmake
 
       - name: Build (DOS)

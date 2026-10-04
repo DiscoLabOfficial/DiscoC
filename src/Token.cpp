@@ -12,6 +12,17 @@ void Token::print() const {
 std::string to_string(TokenType type) {
     switch (type) {
         case TokenType::KEYWORD_STRUCT: return "KEYWORD_STRUCT";
+        case TokenType::KEYWORD_CONST: return "KEYWORD_CONST";
+        case TokenType::KEYWORD_TYPE: return "KEYWORD_TYPE";
+        case TokenType::KEYWORD_VOLATILE: return "KEYWORD_VOLATILE";
+        case TokenType::KEYWORD_RAM: return "KEYWORD_RAM";
+        case TokenType::KEYWORD_BOOL: return "KEYWORD_BOOL";
+        case TokenType::KEYWORD_TRUE: return "KEYWORD_TRUE";
+        case TokenType::KEYWORD_FALSE: return "KEYWORD_FALSE";
+        case TokenType::KEYWORD_INTERNAL: return "KEYWORD_INTERNAL";
+        case TokenType::KEYWORD_EXPORT: return "KEYWORD_EXPORT";
+        case TokenType::KEYWORD_EXTERN: return "KEYWORD_EXTERN";
+        case TokenType::KEYWORD_ROM: return "KEYWORD_ROM";
         case TokenType::KEYWORD_FAR: return "KEYWORD_FAR";
         case TokenType::KEYWORD_SET: return "KEYWORD_SET";
         case TokenType::KEYWORD_UNSIGNED: return "KEYWORD_UNSIGNED";
@@ -32,12 +43,22 @@ std::string to_string(TokenType type) {
         case TokenType::RBRACKET: return "RBRACKET";
         case TokenType::SEMICOLON: return "SEMICOLON";
         case TokenType::DOT: return "DOT";
+        case TokenType::AT_SIGN: return "AT_SIGN";
         case TokenType::COMMA: return "COMMA";
         case TokenType::EQUAL: return "EQUAL";
         case TokenType::PLUS: return "PLUS";
         case TokenType::MINUS: return "MINUS";
         case TokenType::STAR: return "STAR";
         case TokenType::SLASH: return "SLASH";
+        case TokenType::PERCENT: return "PERCENT";
+        case TokenType::PIPE: return "PIPE";
+        case TokenType::CARET: return "CARET";
+        case TokenType::TILDE: return "TILDE";
+        case TokenType::SHIFT_LEFT: return "SHIFT_LEFT";
+        case TokenType::SHIFT_RIGHT: return "SHIFT_RIGHT";
+        case TokenType::AND_AND: return "AND_AND";
+        case TokenType::OR_OR: return "OR_OR";
+        case TokenType::BANG: return "BANG";
         case TokenType::GREATER: return "GREATER";
         case TokenType::GREATER_EQUAL: return "GREATER_EQUAL";
         case TokenType::LESS: return "LESS";

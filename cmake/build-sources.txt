@@ -1,15 +1,20 @@
 # Ordered groups: @group expands an earlier group. Shared by all build paths.
 object src/ObjectFile.cpp src/AssemblyGenerator.cpp
-frontend src/Lexer.cpp src/Token.cpp src/Parser.cpp
-compiler src/Analyzer.cpp src/Optimizer.cpp src/IR.cpp src/IRCodeGenerator.cpp src/LinearScanAllocator.cpp src/DataSegment.cpp src/ASTPrinter.cpp
+project src/ManifestParser.cpp src/ProjectManifest.cpp src/ProjectPaths.cpp
+linker src/LinkerDriver.cpp
+frontend src/ModuleLoader.cpp src/ModuleInterface.cpp src/Lexer.cpp src/Token.cpp src/Parser.cpp
+compiler src/LanguageWarnings.cpp src/ConstantEvaluator.cpp src/Analyzer.cpp src/Optimizer.cpp src/IR.cpp src/IRCodeGenerator.cpp src/IRPointerCodeGenerator.cpp src/IRIntegerCodeGenerator.cpp src/LinearScanAllocator.cpp src/DataSegment.cpp src/ASTPrinter.cpp
 assembler src/Assembler.cpp
-discc src/discc.cpp @compiler @frontend @object
-discld src/discld.cpp @object
+discc src/discc.cpp src/CompilerDriver.cpp src/ProjectBuild.cpp @compiler @frontend @object @project @linker
+discld src/discld.cpp @object @project @linker
 discas src/discas.cpp @assembler @object
 disco_object_tests tests/ObjectFileTests.cpp @object
 disco_ir_verifier_tests tests/IRVerifierTests.cpp src/IR.cpp src/Token.cpp
 disco_linear_scan_tests tests/LinearScanAllocatorTests.cpp src/LinearScanAllocator.cpp src/Token.cpp
-disco_target_foundation_tests tests/TargetFoundationTests.cpp @frontend
+disco_target_foundation_tests tests/TargetFoundationTests.cpp @frontend @project
+disco_language_contract_tests tests/LanguageContractTests.cpp @compiler @frontend @object @project
+disco_project_manifest_tests tests/ProjectManifestTests.cpp @project
+disco_module_loader_tests tests/ModuleLoaderTests.cpp @compiler @frontend @object @project
 disco_gsu_execution_tests tests/GSUExecutionTests.cpp
 disco_gsu_mapping_tests tests/GsuMemoryMapTests.cpp @object
 disco_assembly_export_tests tests/AssemblyExportTests.cpp @assembler @object

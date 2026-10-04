@@ -13,13 +13,15 @@ enum class RelocationType : uint8_t {
     ADDR16_JAL,     // A 16-bit address for a JAL pseudo-op (IWT R15)
     ADDR16_IWT,     // A 16-bit address for a general IWT instruction
     ADDR24_BANK,    // The 8-bit bank byte of a 24-bit far address
-    ADDR24_OFFSET   // The 16-bit offset of a 24-bit far address
+    ADDR24_OFFSET,  // The 16-bit offset of a 24-bit far address
+    ADDR16_RAM     // RAM static-storage offset, independent of the program bank
 };
 
 // Which section the symbol or relocation belongs to.
 enum class SymbolSection : uint8_t {
     CODE,
-    DATA
+    DATA,
+    RAM
 };
 
 // Represents a symbol defined in this object file.
@@ -40,7 +42,7 @@ struct RelocationEntry {
 // Represents the entire contents of a .o file.
 class ObjectFile {
 public:
-    static constexpr std::uint8_t CurrentFormatVersion = 3;
+    static constexpr std::uint8_t CurrentFormatVersion = 6;
     static constexpr std::uint32_t MaxSectionBytes = 64u * 1024u * 1024u;
     static constexpr std::uint32_t MaxStringBytes = 4096u;
     static constexpr std::uint32_t MaxSymbolCount = 1'000'000u;
@@ -51,9 +53,12 @@ public:
     // Data members
     std::vector<uint8_t> code_section;
     std::vector<uint8_t> data_section;
+    std::vector<uint8_t> ram_section; // Initial image of separately allocated static RAM, not payload DATA.
     std::vector<SymbolEntry> symbol_table;
     std::vector<RelocationEntry> relocation_table;
     CompilerConfig config;
+    std::uint8_t data_alignment = 1; // Version 3 objects implicitly use packed DATA.
+    std::uint8_t ram_alignment = 2; // Versions <=5 use word-aligned RAM.
     
     // Serialization / Deserialization
     void write(const std::string& path);

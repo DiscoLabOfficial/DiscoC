@@ -1,0 +1,24 @@
+type Count = u16;
+type Counter = Count;
+type ReadOnly = const i16*;
+struct Pair { i8 a; u8 b; i16 c; u16 d; };
+type Pair = struct Pair;
+static_assert(sizeof(u8) == 1);
+static_assert(sizeof(i8) == 1);
+static_assert(sizeof(u16) == 2);
+static_assert(sizeof(i16) == 2);
+static_assert(sizeof(Pair) == 8);
+rom const u8 table[] = {1, 2, 255};
+void main() {
+    u8 unsigned_byte = 255;
+    i8 signed_byte = -128;
+    Count count = 65535;
+    i16 signed_word = -32768;
+    ReadOnly pointer = (const i16*)0x100;
+    Pair pair;
+    pair.a = signed_byte;
+    pair.b = unsigned_byte;
+    pair.c = signed_word;
+    pair.d = count;
+    pointer;
+}

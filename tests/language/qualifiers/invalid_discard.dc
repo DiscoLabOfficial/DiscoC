@@ -1,0 +1,2 @@
+// error: discard const
+void main() { const word* p = null; word* q = (word*)p; }

@@ -1,0 +1,2 @@
+// error: @cfg requires exactly one target name
+@cfg(gsu, spc700) void main() {}

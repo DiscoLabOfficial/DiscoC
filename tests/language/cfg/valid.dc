@@ -1,0 +1,8 @@
+@cfg(gsu) @target(gsu) i16 selected() { plot { plot(1, 2); } return 149; }
+@cfg(spc700) @target(spc700) i16 selected() { return 42; }
+@cfg(gsu) constexpr word EXPECTED = 149;
+@cfg(spc700) constexpr word EXPECTED = 42;
+@cfg(gsu) type Value = i16;
+@cfg(spc700) type Value = u16;
+static_assert(sizeof(Value) == 2);
+void main() { i16 value = selected(); }

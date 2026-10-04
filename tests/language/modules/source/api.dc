@@ -1,0 +1,13 @@
+constexpr internal word PRIVATE = 2;
+constexpr word PUBLIC = PRIVATE + 1;
+constexpr bool ENABLED = PRIVATE == 2;
+const bool ready = true;
+const unsigned word boundary = 65535;
+@align(PRIVATE)
+struct Item { byte bytes[PRIVATE]; word value; };
+type Item = struct Item;
+enum Flag { ACTIVE = PRIVATE };
+word values[] = {1, 2, 3};
+rom const byte text[] = "OK";
+internal word hidden(word value) { return value; }
+word add(word a, word b) { return hidden(a) + b; }

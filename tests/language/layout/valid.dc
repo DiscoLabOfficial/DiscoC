@@ -1,0 +1,1 @@
+@packed struct Bytes { byte a; byte b; byte c; }; @align(8) struct State { word v; byte b; }; static_assert(sizeof(struct Bytes) == 3); static_assert(alignof(struct Bytes) == 1); static_assert(sizeof(struct State) == 8); static_assert(offsetof(struct State, b) == 2);

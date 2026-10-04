@@ -13,7 +13,8 @@ function(run_checked)
 endfunction()
 foreach(test IN ITEMS disco_object_tests disco_ir_verifier_tests
                       disco_linear_scan_tests disco_target_foundation_tests disco_gsu_mapping_tests
-                      disco_assembly_export_tests)
+                      disco_assembly_export_tests disco_language_contract_tests disco_project_manifest_tests
+                      disco_module_loader_tests)
     message(STATUS "Running ${test}")
     run_checked("${BIN_DIR}/${test}${EXE_SUFFIX}")
 endforeach()

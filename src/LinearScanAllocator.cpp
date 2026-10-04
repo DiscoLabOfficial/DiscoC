@@ -160,6 +160,9 @@ void LinearScanAllocator::run(
 
     std::vector<ActiveInterval> active;
     for (const auto& interval : ordered) {
+        // A far value is a pair, not a scalar register. The backend owns an
+        // aligned four-byte frame slot for it, including observable results.
+        if (isFarPointer(definitions.at(interval.value)->type)) continue;
         for (std::size_t index = 0; index < active.size();) {
             if (active[index].end < interval.start) {
                 free_registers.push_back(active[index].physical_register);

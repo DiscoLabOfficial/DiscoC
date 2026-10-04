@@ -1,0 +1,2 @@
+// error: Unknown offsetof member
+struct S { word a; }; static_assert(offsetof(struct S, missing) == 0);

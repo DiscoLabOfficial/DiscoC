@@ -1,0 +1,2 @@
+// spc-error: lacks capability 'far-data'
+void main() { far word* pointer = null; }

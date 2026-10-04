@@ -15,6 +15,14 @@ static const std::map<std::string, TokenType> keywords = {
     {"far",    TokenType::KEYWORD_FAR},
     {"set",    TokenType::KEYWORD_SET},
     {"const",  TokenType::KEYWORD_CONST},
+    {"volatile", TokenType::KEYWORD_VOLATILE},
+    {"ram", TokenType::KEYWORD_RAM},
+    {"bool", TokenType::KEYWORD_BOOL},
+    {"true", TokenType::KEYWORD_TRUE},
+    {"false", TokenType::KEYWORD_FALSE},
+    {"internal", TokenType::KEYWORD_INTERNAL},
+    {"export", TokenType::KEYWORD_EXPORT},
+    {"extern", TokenType::KEYWORD_EXTERN},
     {"rom",      TokenType::KEYWORD_ROM},
     {"draw",   TokenType::KEYWORD_DRAW},
     {"at",     TokenType::KEYWORD_AT},
@@ -36,6 +44,18 @@ static const std::map<std::string, TokenType> keywords = {
     {"void",   TokenType::KEYWORD_VOID},
     {"return", TokenType::KEYWORD_RETURN},
     {"cache",  TokenType::KEYWORD_CACHE},
+    {"constexpr", TokenType::KEYWORD_CONSTEXPR},
+    {"enum", TokenType::KEYWORD_ENUM},
+    {"null", TokenType::KEYWORD_NULL},
+    {"module", TokenType::KEYWORD_MODULE},
+    {"import", TokenType::KEYWORD_IMPORT},
+    {"type", TokenType::KEYWORD_TYPE},
+    {"continue", TokenType::KEYWORD_CONTINUE},
+    {"fallthrough", TokenType::KEYWORD_FALLTHROUGH},
+    {"sizeof", TokenType::KEYWORD_SIZEOF},
+    {"alignof", TokenType::KEYWORD_ALIGNOF},
+    {"offsetof", TokenType::KEYWORD_OFFSETOF},
+    {"static_assert", TokenType::KEYWORD_STATIC_ASSERT},
 };
 
 bool Lexer::match(char expected) {
@@ -157,10 +177,54 @@ void Lexer::identifier() {
     addToken(type);
 }
 
+void Lexer::quotedLiteral(char quote) {
+    std::string decoded;
+    while (!isAtEnd() && peek() != quote) {
+        auto character = static_cast<unsigned char>(advance());
+        if (character == '\n' || character == '\r')
+            throw CompilerError("Newline in quoted literal.", m_token_line, m_token_col);
+        if (character == '\\') {
+            if (isAtEnd()) break;
+            const char escape = advance();
+            switch (escape) {
+                case 'n': character = '\n'; break;
+                case 'r': character = '\r'; break;
+                case 't': character = '\t'; break;
+                case '0': character = 0; break;
+                case '\\': character = '\\'; break;
+                case '\'': character = '\''; break;
+                case '"': character = '"'; break;
+                case 'x': {
+                    unsigned value = 0;
+                    for (int digit = 0; digit < 2; ++digit) {
+                        const char hex = peek();
+                        if (!isHexDigit(hex)) throw CompilerError("Hex escape requires exactly two digits.", m_token_line, m_token_col);
+                        advance();
+                        value = value * 16u + static_cast<unsigned>(hex <= '9' ? hex - '0' : hex <= 'F' ? hex - 'A' + 10 : hex - 'a' + 10);
+                    }
+                    character = static_cast<unsigned char>(value);
+                    break;
+                }
+                default: throw CompilerError("Unsupported escape sequence.", m_token_line, m_token_col);
+            }
+        } else if (character >= 128) throw CompilerError("Text literals use ASCII; encode other bytes with hex escapes.", m_token_line, m_token_col);
+        if (decoded.size() >= 65534) throw CompilerError("Quoted literal exceeds 65534 bytes.", m_token_line, m_token_col);
+        decoded.push_back(static_cast<char>(character));
+    }
+    if (isAtEnd()) throw CompilerError("Unterminated quoted literal.", m_token_line, m_token_col);
+    advance();
+    if (quote == '\'') {
+        if (decoded.size() != 1) throw CompilerError("Character literal must contain exactly one byte.", m_token_line, m_token_col);
+        m_tokens.emplace_back(TokenType::LITERAL_CHARACTER, std::to_string(static_cast<unsigned char>(decoded.front())), m_token_line, m_token_col);
+    } else m_tokens.emplace_back(TokenType::LITERAL_STRING, std::move(decoded), m_token_line, m_token_col);
+}
+
 void Lexer::scanToken() {
     char c = advance();
     switch (c) {
         // Single-character tokens (no change here)
+        case '"': quotedLiteral('"'); break;
+        case '\'': quotedLiteral('\''); break;
         case '(': addToken(TokenType::LPAREN); break;
         case ')': addToken(TokenType::RPAREN); break;
         case '{': addToken(TokenType::LBRACE); break;
@@ -169,16 +233,21 @@ void Lexer::scanToken() {
         case ':': addToken(TokenType::COLON); break;
         case ',': addToken(TokenType::COMMA); break;
         case '.': addToken(TokenType::DOT); break;
-		case '&': addToken(TokenType::AMPERSAND); break;
+        case '@': addToken(TokenType::AT_SIGN); break;
+		case '&': addToken(match('&') ? TokenType::AND_AND : match('=') ? TokenType::AND_EQUAL : TokenType::AMPERSAND); break;
+        case '|': addToken(match('|') ? TokenType::OR_OR : match('=') ? TokenType::OR_EQUAL : TokenType::PIPE); break;
+        case '^': addToken(match('=') ? TokenType::XOR_EQUAL : TokenType::CARET); break;
+        case '~': addToken(TokenType::TILDE); break;
+        case '%': addToken(match('=') ? TokenType::PERCENT_EQUAL : TokenType::PERCENT); break;
 		case '[': addToken(TokenType::LBRACKET); break;
 		case ']': addToken(TokenType::RBRACKET); break;
         case '=': addToken(match('=') ? TokenType::EQUAL_EQUAL : TokenType::EQUAL); break;
-        case '!': addToken(match('=') ? TokenType::BANG_EQUAL : TokenType::UNKNOWN); break;
-        case '<': addToken(match('=') ? TokenType::LESS_EQUAL : TokenType::LESS); break;
-        case '>': addToken(match('=') ? TokenType::GREATER_EQUAL : TokenType::GREATER); break;
-        case '+': addToken(TokenType::PLUS); break;
-        case '-': addToken(TokenType::MINUS); break;
-        case '*': addToken(TokenType::STAR); break;
+        case '!': addToken(match('=') ? TokenType::BANG_EQUAL : TokenType::BANG); break;
+        case '<': addToken(match('<') ? (match('=') ? TokenType::SHIFT_LEFT_EQUAL : TokenType::SHIFT_LEFT) : match('=') ? TokenType::LESS_EQUAL : TokenType::LESS); break;
+        case '>': addToken(match('>') ? (match('=') ? TokenType::SHIFT_RIGHT_EQUAL : TokenType::SHIFT_RIGHT) : match('=') ? TokenType::GREATER_EQUAL : TokenType::GREATER); break;
+        case '+': addToken(match('+') ? TokenType::PLUS_PLUS : match('=') ? TokenType::PLUS_EQUAL : TokenType::PLUS); break;
+        case '-': addToken(match('-') ? TokenType::MINUS_MINUS : match('>') ? TokenType::ARROW : match('=') ? TokenType::MINUS_EQUAL : TokenType::MINUS); break;
+        case '*': addToken(match('=') ? TokenType::STAR_EQUAL : TokenType::STAR); break;
         case '/':
             if (match('/')) {
                 // A single-line comment goes until the end of the line.
@@ -203,7 +272,7 @@ void Lexer::scanToken() {
                 advance(); // Consume '/'
             } else {
                 // If it's not a comment, it's a division operator.
-                addToken(TokenType::SLASH);
+                addToken(match('=') ? TokenType::SLASH_EQUAL : TokenType::SLASH);
             }
             break;
         

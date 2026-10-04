@@ -9,6 +9,11 @@ The helpers do not install dependencies, delete build directories, change your
 working directory, or modify persistent shell/security settings. Every failed
 compile, link, or test stops the build and returns a nonzero exit code.
 
+These scripts build the **toolchain's C++ executables**. To build a user's
+DiscoC program after that, use `discc build` with a `discoc.toml`
+[project manifest](project-manifest.md). The manifest driver calls the compiler
+and linker internally and does not require CMake, Make, or `discld` on `PATH`.
+
 ## Prerequisites
 
 - **Windows / MinGW:** a C++23-capable MinGW-w64 GCC installation and
@@ -147,6 +152,9 @@ bash build.sh --backend ninja --dos \
 ```
 
 The supplied toolchain describes the Linux-hosted DJGPP binaries under `.djgpp`.
+With `DISCO_DOS_BUILD=ON`, DJGPP uses GNU C++14: its libc hides required
+filesystem APIs such as `getcwd` and `stat` in strict ISO mode. Native builds
+remain strict C++23, and DOS builds do not build or run host-native tests.
 The PowerShell example requires a toolchain file appropriate for the Windows host;
 the helper does not download or translate cross-compilers. Other cross-builds
 can supply a toolchain without enabling the DOS configuration.

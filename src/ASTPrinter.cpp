@@ -28,8 +28,25 @@ void ASTPrinter::visit(MemberAccessExpr& expr, const Type*) {
     m_result = "(. " + printExpr(*expr.object) + " " + expr.token.lexeme + ")";
 }
 
+void ASTPrinter::visit(InitializerListExpr&, const Type*) { m_result = "(initializer-list)"; }
+void ASTPrinter::visit(StringExpr&, const Type*) { m_result = "(string)"; }
+void ASTPrinter::visit(NullExpr&, const Type*) { m_result = "null"; }
+void ASTPrinter::visit(UpdateExpr& expr, const Type*) { m_result = "(" + expr.token.lexeme + " " + printExpr(*expr.target) + " " + printExpr(*expr.value) + ")"; }
+void ASTPrinter::visit(ForStmt& stmt) {
+    const auto initializer = stmt.initializer ? print(*stmt.initializer) : "()";
+    const auto condition = printExpr(*stmt.condition);
+    const auto increment = stmt.increment ? printExpr(*stmt.increment) : "()";
+    m_result = "(for " + initializer + " " + condition + " " + increment + " " + print(*stmt.body) + ")";
+}
+void ASTPrinter::visit(ContinueStmt&) { m_result = "(continue)"; }
+void ASTPrinter::visit(FallthroughStmt&) { m_result = "(fallthrough)"; }
+void ASTPrinter::visit(EnumDeclStmt& stmt) { m_result = "(enum " + stmt.token.lexeme + ")"; }
+void ASTPrinter::visit(StaticAssertStmt& stmt) { m_result = "(static_assert " + printExpr(*stmt.condition) + ")"; }
+void ASTPrinter::visit(TypeAliasDeclStmt& stmt) { m_result = "(type " + stmt.token.lexeme + " " + to_string(stmt.resolved_type) + ")"; }
+void ASTPrinter::visit(LayoutQueryExpr& expr, const Type*) { m_result = "(" + expr.token.lexeme + " " + std::to_string(expr.constant_value) + ")"; }
 void ASTPrinter::visit(LiteralExpr& expr, const Type*) { m_result = expr.token.lexeme; }
 void ASTPrinter::visit(VariableExpr& expr, const Type*) { m_result = expr.token.lexeme; }
+void ASTPrinter::visit(PlotCoordinateExpr& expr, const Type*) { m_result = expr.is_y ? "plot.y" : "plot.x"; }
 void ASTPrinter::visit(UnaryExpr& expr, const Type*) { m_result = "(" + expr.token.lexeme + " " + printExpr(*expr.right) + ")"; }
 void ASTPrinter::visit(BinaryExpr& expr, const Type*) { m_result = "(" + expr.token.lexeme + " " + printExpr(*expr.left) + " " + printExpr(*expr.right) + ")"; }
 void ASTPrinter::visit(AssignExpr& expr, const Type*) {
@@ -74,6 +91,8 @@ void ASTPrinter::visit(ReturnStmt& stmt) {
 
 void ASTPrinter::visit(VarDeclStmt& stmt) {
     std::string init = stmt.initializer ? " = " + printExpr(*stmt.initializer) : "";
+    for (const auto& scalar : stmt.aggregate_initializers)
+        init += " @" + std::to_string(scalar.offset) + "=" + printExpr(*scalar.value);
     m_result = "(var_decl " + to_string(stmt.type) + " " + stmt.token.lexeme + init + ")";
 }
 
@@ -112,6 +131,7 @@ void ASTPrinter::visit(PlotStmt& stmt) {
 }
 
 void ASTPrinter::visit(PlotBeginStmt&) { m_result = "(plot_begin)"; }
+void ASTPrinter::visit(PlotBlockStmt& stmt) { m_result = "(plot " + print(*stmt.body) + ")"; }
 void ASTPrinter::visit(PlotEndStmt&) { m_result = "(plot_end)"; }
 void ASTPrinter::visit(SetColorStmt& stmt) { m_result = "(set_color " + printExpr(*stmt.color_value) + ")"; }
 void ASTPrinter::visit(CmodeStmt& stmt) { m_result = "(set_plot_options " + printExpr(*stmt.options_value) + ")"; }

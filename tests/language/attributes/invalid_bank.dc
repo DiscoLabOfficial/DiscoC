@@ -1,0 +1,2 @@
+// error: reserved; its ABI/lowering contract is not implemented
+@bank(0x70) void main() {}

@@ -1,0 +1,2 @@
+// error: Only @cfg is supported on imports
+@cache import "gsu.dci";

@@ -1,0 +1,2 @@
+// error: escape
+void main() { byte text[] = "\q"; }

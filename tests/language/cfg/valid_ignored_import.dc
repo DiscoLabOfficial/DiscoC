@@ -1,0 +1,4 @@
+// target: gsu
+module IgnoredImport;
+@cfg(spc700) import "missing-on-purpose.dci";
+void main() {}

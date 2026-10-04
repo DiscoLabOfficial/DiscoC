@@ -1,0 +1,9 @@
+import "types.dc";
+
+internal word identity(word value) {
+    return value;
+}
+
+export word add(word left, word right) {
+    return identity(left) + right;
+}

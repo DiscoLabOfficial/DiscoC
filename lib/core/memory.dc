@@ -1,0 +1,21 @@
+module DiscoCoreMemory;
+import "memory.dci";
+
+void dc_memcpy(u8* destination, const u8* source, u16 count) {
+    for (u16 index = 0; index < count; index++) destination[index] = source[index];
+}
+
+void dc_memmove(u8* destination, const u8* source, u16 count) {
+    if ((u16)destination <= (u16)source) {
+        dc_memcpy(destination, source, count);
+    } else {
+        while (count != 0) {
+            count--;
+            destination[count] = source[count];
+        }
+    }
+}
+
+void dc_memset(u8* destination, u8 value, u16 count) {
+    for (u16 index = 0; index < count; index++) destination[index] = value;
+}

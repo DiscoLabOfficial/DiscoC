@@ -30,6 +30,7 @@ and the [SNESdev SPC-700 instruction-set reference](https://snes.nesdev.org/wiki
 | Address size | 2 bytes |
 | `byte` size | 1 byte |
 | `word` size | 2 bytes |
+| `bool` size | 1 byte |
 | Pointer size | 2 bytes |
 | Direct-page window | 256 bytes |
 | Hardware stack | `$0100-$01FF` |
@@ -72,8 +73,10 @@ The target is selected on the command line:
 discc --target spc700 program.dc -o program.o
 ```
 
-`discc --emit-ir` remains available for this source because the IR is target
-independent. Normal object and assembly emission currently reports that the
+`discc --target spc700 --check program.dc` checks common language semantics and
+verified IR without machine emission. `--emit-ir` also remains available.
+Graphics, instruction-cache, hardware-loop and far-data capabilities are
+explicitly unavailable on this target and rejected by the analyzer/verifier. Normal object and assembly emission currently reports that the
 SPC-700 backend is not implemented yet; this prevents the GSU backend from
 being used accidentally.
 
@@ -86,7 +89,20 @@ The first SPC-700 code-generation milestone should support:
 * named functions and direct calls;
 * `return`, `if`, `while`, and basic comparisons;
 * ordinary RAM loads and stores;
-* explicit `volatile` hardware access once the language qualifier exists.
+* explicit `volatile` hardware access using the language/IR qualifiers.
+
+The shared frontend now supports const/volatile qualifiers, bool, strict
+integer conversions, modular arithmetic, bitwise/shifts, short-circuit logic,
+constant expressions/enums, layout queries, aggregate initialization, byte
+strings, real for/continue control flow and .dci module interfaces.
+Transparent aliases (`u8`/`i8`/`u16`/`i16` and user-defined `type` declarations)
+and `@cfg(spc700)` declarations/imports share the same frontend. Portable
+fixed-point and memory core modules pass these frontend/IR checks; there is no
+SPC700 machine library or DSP implementation yet. GSU graphics interfaces use
+target assertions and must not be substituted on this processor.
+IR inspection can represent common constructs; this does not supply SPC-700 machine
+lowering, runtime initialization, or MMIO execution tests. A future backend
+must preserve observable accesses, including `$F0-$FF` register accesses.
 
 The first milestone should defer structs, arrays, `rom const`, GSU plotting
 operations, 24-bit `far` pointers, floating-point types, dynamic allocation,

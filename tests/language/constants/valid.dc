@@ -1,0 +1,1 @@
+constexpr word WIDTH = 32; constexpr word TILE = 8; enum Mode { A = 1 << 4, B }; word buffer[WIDTH * TILE]; static_assert(sizeof(buffer) == 512); static_assert(B == 17); static_assert(0b1100 == 12); static_assert((word)32767 + 1 == -32768);

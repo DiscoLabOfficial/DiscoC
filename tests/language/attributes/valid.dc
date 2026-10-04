@@ -1,0 +1,2 @@
+// spc-error: lacks capability 'instruction-cache'
+@cache void main() { @cache for (word i = 0; i < 2; i++) {} }

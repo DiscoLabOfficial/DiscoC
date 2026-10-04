@@ -1,0 +1,1 @@
+struct S { word a; byte b; }; const byte text[] = "HELLO"; word values[] = {1, 2}; void main() { struct S items[2] = {{12, 30}, {46}}; word* pointers[2] = {&items[0].a, null}; byte name[] = "HI"; word tail[3] = {1}; *pointers[0] += tail[2]; }

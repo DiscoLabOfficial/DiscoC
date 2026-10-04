@@ -1,0 +1,11 @@
+// target: gsu
+type FarWord = far i16*;
+type Slot = FarWord*;
+static_assert(sizeof(FarWord) == 4);
+static_assert(sizeof(Slot) == 2);
+void main() {
+    FarWord value = (FarWord)0x710100;
+    Slot slot = &value;
+    FarWord copy = *slot;
+    copy;
+}

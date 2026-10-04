@@ -1,0 +1,2 @@
+// error: initializer count
+void main() { byte text[2] = "AB"; }

@@ -1,0 +1,2 @@
+// error: Unsigned is only valid
+unsigned bool value;

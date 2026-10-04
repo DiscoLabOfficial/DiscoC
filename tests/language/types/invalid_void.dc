@@ -1,0 +1,2 @@
+// error: Void is not a valid
+void bad;

@@ -1,0 +1,19 @@
+import "math.dc";
+import "graphics.dc";
+
+static_assert(sizeof(Frame) == 4);
+static_assert(PUBLIC_SIZE == 3);
+static_assert(READY == 2);
+
+void main() {
+    Frame frame;
+    frame.total = add(operands[0], operands[1]);
+    counter++;
+    volatile word* results = (volatile word*)0x0100;
+    results[0] = inspect(&frame);
+    results[1] = counter;
+    results[2] = (word)sizeof(Frame);
+    results[3] = PUBLIC_SIZE + BIAS;
+    results[4] = (word)READY;
+    results[5] = samples[0] + samples[1] + samples[2];
+}

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -20,7 +21,8 @@ public:
     Machine(std::vector<std::uint8_t> code, std::uint32_t origin,
             std::uint16_t initial_sp = 0x2000, std::uint8_t initial_ram_bank = 0)
         : code_(std::move(code)), origin_(static_cast<std::uint16_t>(origin)),
-          ram_(131072, 0), ram_bank_(initial_ram_bank), program_bank_(origin >> 16) {
+          ram_(131072, 0), rom_(2097152, 0), ram_bank_(initial_ram_bank), program_bank_(origin >> 16),
+          rom_bank_(program_bank_ <= 0x5f ? static_cast<std::uint8_t>(program_bank_) : 0) {
         if (code_.empty() || code_.size() > 65536u - origin_) {
             throw std::runtime_error("payload does not fit in the program bank");
         }
@@ -31,10 +33,29 @@ public:
         if (program_bank_ == 0x70 || program_bank_ == 0x71) {
             const auto base = static_cast<std::size_t>(program_bank_ - 0x70) * 65536 + origin_;
             std::copy(code_.begin(), code_.end(), ram_.begin() + base);
-        }
+        } else for (std::size_t index = 0; index < code_.size(); ++index)
+            rom_.at(romIndex((program_bank_ << 16) | (origin_ + static_cast<std::uint32_t>(index)))) = code_[index];
     }
 
     std::uint16_t reg(std::size_t index) const { return registers_.at(index); }
+    std::uint8_t ramBank() const { return ram_bank_; }
+    std::uint8_t romBank() const { return rom_bank_; }
+    unsigned accesses(std::uint32_t address, bool store) const {
+        const auto& counts = store ? writes_ : reads_;
+        const auto found = counts.find(address);
+        return found == counts.end() ? 0 : found->second;
+    }
+    std::uint8_t byte(std::uint32_t address) const {
+        if (address < 0x700000 || address > 0x71ffff) throw std::runtime_error("invalid RAM byte address");
+        return ram_.at(address - 0x700000);
+    }
+    void seed(std::uint32_t address, std::uint8_t value, bool rom) {
+        if (rom) rom_.at(romIndex(address)) = value;
+        else {
+            if (address < 0x700000 || address > 0x71ffff) throw std::runtime_error("invalid RAM seed address");
+            ram_.at(address - 0x700000) = value;
+        }
+    }
     std::uint16_t word(std::uint32_t address) const {
         const auto bank = address > 65535 ? (address >> 16) - 0x70 : ram_bank_;
         if (bank > 1) throw std::runtime_error("invalid RAM bank in expectation");
@@ -44,7 +65,7 @@ public:
     }
 
     void run() {
-        for (std::size_t step = 0; step < 100000; ++step) {
+        for (std::size_t step = 0; step < 10000000; ++step) {
             const auto opcode = pipeline_;
             pipeline_ = fetch();
             pc_written_ = false;
@@ -56,6 +77,12 @@ public:
     }
 
 private:
+    static std::size_t romIndex(std::uint32_t address) {
+        const auto bank = address >> 16, offset = address & 65535;
+        if (bank < 0x40 && offset >= 0x8000) return bank * 32768u + offset - 0x8000;
+        if (bank >= 0x40 && bank <= 0x5f) return (bank - 0x40) * 65536u + offset;
+        throw std::runtime_error("invalid GSU-visible ROM data address");
+    }
     std::uint8_t fetch() const {
         const auto pc = registers_[15];
         if (pc < origin_ || static_cast<std::size_t>(pc - origin_) >= code_.size()) {
@@ -118,6 +145,7 @@ private:
             prefix_ = true;
         } else if (opcode >= 0x30 && opcode <= 0x3b) {
             const auto address = static_cast<std::size_t>(ram_bank_) * 65536 + registers_[index];
+            ++writes_[static_cast<std::uint32_t>(0x700000 + address)];
             const auto value = registers_[source_];
             ram_.at(address) = static_cast<std::uint8_t>(value);
             if (!alt1_) ram_.at(address ^ 1u) = static_cast<std::uint8_t>(value >> 8);
@@ -128,14 +156,42 @@ private:
             prefix_ = false;
         } else if (opcode >= 0x40 && opcode <= 0x4b) {
             const auto address = registers_[index];
+            ++reads_[0x700000u + static_cast<std::uint32_t>(ram_bank_) * 65536u + address];
             write(destination_, alt1_ ? ram_.at(static_cast<std::size_t>(ram_bank_) * 65536 + address) : word(address));
             resetSelectors();
+        } else if (opcode == 0x9f && alt1_) {
+            const auto signedWord = [](std::uint16_t bits) -> std::int32_t {
+                return bits < 32768 ? bits : static_cast<std::int32_t>(bits) - 65536;
+            };
+            const auto product = static_cast<std::uint32_t>(signedWord(registers_[source_]) * signedWord(registers_[6]));
+            registers_[4] = static_cast<std::uint16_t>(product);
+            write(destination_, static_cast<std::uint16_t>(product >> 16));
+            setZeroSign(registers_[destination_]); resetSelectors();
+        } else if (opcode == 0x9e) {
+            const auto value = static_cast<std::uint16_t>(registers_[source_] & 255u);
+            write(destination_, value); setZeroSign(value); resetSelectors();
         } else if (opcode == 0x95) {
             const auto low = static_cast<std::uint16_t>(registers_[source_] & 255u);
             const auto value = static_cast<std::uint16_t>(low < 128 ? low : low | 0xff00u);
             write(destination_, value);
             setZeroSign(value);
             resetSelectors();
+        } else if (opcode == 0x4f) {
+            const auto value = static_cast<std::uint16_t>(~registers_[source_]);
+            write(destination_, value); setZeroSign(value); resetSelectors();
+        } else if (opcode == 0x03 || opcode == 0x96) {
+            const auto source = registers_[source_];
+            const auto value = static_cast<std::uint16_t>((source >> 1) | (opcode == 0x96 ? source & 0x8000u : 0));
+            carry_ = (source & 1u) != 0;
+            write(destination_, value); setZeroSign(value); resetSelectors();
+        } else if (opcode >= 0xc1 && opcode <= 0xcf) {
+            const auto right = alt2_ ? static_cast<std::uint16_t>(index) : registers_[index];
+            const auto value = static_cast<std::uint16_t>(alt1_ ? registers_[source_] ^ right : registers_[source_] | right);
+            write(destination_, value); setZeroSign(value); resetSelectors();
+        } else if (opcode >= 0x71 && opcode <= 0x7f && !alt1_) {
+            const auto right = alt2_ ? static_cast<std::uint16_t>(index) : registers_[index];
+            const auto value = static_cast<std::uint16_t>(registers_[source_] & right);
+            write(destination_, value); setZeroSign(value); resetSelectors();
         } else if (opcode >= 0x50 && opcode <= 0x6f) {
             const auto left = registers_[source_];
             const bool immediate = alt2_ && (opcode < 0x60 || !alt1_);
@@ -177,9 +233,18 @@ private:
             } else {
                 source_ = index;
             }
-        } else if (opcode == 0xdf && alt2_ && !alt1_) {
-            ram_bank_ = static_cast<std::uint8_t>(registers_[source_] & 1u);
+        } else if (opcode == 0xdf && alt2_) {
+            if (alt1_) rom_bank_ = static_cast<std::uint8_t>(registers_[source_] & 0x7fu);
+            else ram_bank_ = static_cast<std::uint8_t>(registers_[source_] & 1u);
             resetSelectors();
+        } else if (opcode == 0xef) {
+            ++reads_[(static_cast<std::uint32_t>(rom_bank_) << 16) | registers_[14]];
+            const auto fetched = rom_.at(romIndex((static_cast<std::uint32_t>(rom_bank_) << 16) | registers_[14]));
+            std::uint16_t value = fetched;
+            if (alt1_ && alt2_) value = static_cast<std::uint16_t>(fetched < 128 ? fetched : fetched | 0xff00);
+            else if (alt1_) value = static_cast<std::uint16_t>((registers_[source_] & 255) | (static_cast<std::uint16_t>(fetched) << 8));
+            else if (alt2_) value = static_cast<std::uint16_t>((registers_[source_] & 0xff00) | fetched);
+            write(destination_, value); resetSelectors();
         } else if ((opcode >= 0xd0 && opcode <= 0xde) ||
                    (opcode >= 0xe0 && opcode <= 0xee)) {
             const int adjustment = opcode < 0xe0 ? 1 : -1;
@@ -200,8 +265,11 @@ private:
     std::vector<std::uint8_t> code_;
     std::uint16_t origin_;
     std::vector<std::uint8_t> ram_;
+    std::vector<std::uint8_t> rom_;
+    std::map<std::uint32_t, unsigned> reads_, writes_;
     std::uint8_t ram_bank_ = 0;
     std::uint32_t program_bank_ = 0;
+    std::uint8_t rom_bank_ = 0;
     std::array<std::uint16_t, 16> registers_{};
     std::uint8_t pipeline_ = 1;
     std::size_t source_ = 0, destination_ = 0;
@@ -239,6 +307,23 @@ void selfTest() {
     bankMask.run();
     require(bankMask.word(0x700100) == 149 && bankMask.word(0x710100) == 0,
             "RAMB must use bit zero, not the program bank");
+    Machine rom({0xf4, 2, 0, 0xb4, 0x3f, 0xdf, 0xfe, 0, 0x80, 0xef, 0, 1}, 0x008000);
+    rom.seed(0x028000, 149, true);
+    rom.run();
+    require(rom.reg(0) == 149 && rom.romBank() == 2, "ROMB/GETB used the wrong bank");
+    // The two ROM views are aliases of the same physical cartridge bytes.
+    Machine alias({0xf4, 0x41, 0, 0xb4, 0x3f, 0xdf, 0xfe, 0, 0, 0xef, 0, 1}, 0x008000);
+    alias.seed(0x028000, 149, true); alias.run();
+    require(alias.reg(0) == 149, "Full-bank ROM view did not alias LoROM");
+    bool self_modified = false;
+    try {
+        Machine modification({0xf0, 0x0f, 0x60, 0xf1, 0x9f, 0, 0x21, 0x3d, 0x30,
+                              0xff, 0x0f, 0x60, 1, 1, 1, 0, 1}, 0x706000);
+        modification.run();
+    } catch (const std::runtime_error& error) {
+        self_modified = std::string(error.what()).find("unsupported GSU opcode") != std::string::npos;
+    }
+    require(self_modified, "RAM data writes did not modify subsequent instruction fetches");
     try {
         Machine unsupported({0x9f, 0, 1}, 0x8000);
         unsupported.run();
@@ -281,6 +366,7 @@ int main(int argc, char** argv) {
             }
             struct Expectation { std::string option; unsigned address; unsigned expected; };
             std::vector<Expectation> expectations;
+            std::vector<Expectation> seeds;
             std::uint16_t initial_sp = 0x2000;
             std::uint8_t initial_ram_bank = 0;
             for (int index = 3; index < argc;) {
@@ -295,15 +381,27 @@ int main(int argc, char** argv) {
                 if (index + 2 >= argc) throw std::runtime_error("missing expectation values");
                 const auto address = number(argv[index + 1], option == "--register" ? 15 : 0x71ffff);
                 const auto expected = number(argv[index + 2], 65535);
-                if (option != "--word" && option != "--register") throw std::runtime_error("unknown expectation");
+                if (option == "--rom-byte" || option == "--ram-byte") {
+                    if (expected > 255) throw std::runtime_error("seed byte exceeds 8 bits");
+                    seeds.push_back({option, address, expected});
+                    index += 3; continue;
+                }
+                if (option != "--word" && option != "--register" && option != "--byte" &&
+                    option != "--rambr" && option != "--rombr" && option != "--reads" && option != "--writes") throw std::runtime_error("unknown expectation");
                 expectations.push_back({option, address, expected});
                 index += 3;
             }
             if (expectations.empty()) throw std::runtime_error("at least one expectation is required");
             Machine machine(readPayload(argv[1]), number(argv[2], 0xffffff), initial_sp, initial_ram_bank);
+            for (const auto& seed : seeds) machine.seed(seed.address, static_cast<std::uint8_t>(seed.expected), seed.option == "--rom-byte");
             machine.run();
             for (const auto& expectation : expectations) {
-                const auto actual = expectation.option == "--word" ? machine.word(expectation.address) : machine.reg(expectation.address);
+                const unsigned actual = expectation.option == "--word" ? machine.word(expectation.address) :
+                    expectation.option == "--reads" ? machine.accesses(expectation.address, false) :
+                    expectation.option == "--writes" ? machine.accesses(expectation.address, true) :
+                    expectation.option == "--byte" ? machine.byte(expectation.address) :
+                    expectation.option == "--rambr" ? machine.ramBank() :
+                    expectation.option == "--rombr" ? machine.romBank() : machine.reg(expectation.address);
                 if (actual != expectation.expected) {
                     throw std::runtime_error(expectation.option + " " + std::to_string(expectation.address) +
                         ": expected " + std::to_string(expectation.expected) + ", got " + std::to_string(actual));

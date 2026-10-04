@@ -1,0 +1,2 @@
+module ConfiguredGSU;
+type TargetValue = i16;

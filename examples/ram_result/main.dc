@@ -1,6 +1,6 @@
 word add(word left, word right);
 
 void main() {
-    word* output = (word*)0x0100;
+    word* output = (word*)0x0400;
     *output = add(30, 12);
 }

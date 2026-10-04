@@ -1,0 +1,2 @@
+// error: Source-level set configuration
+set memory_mapping = lorom; void main() {}

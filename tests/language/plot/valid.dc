@@ -1,0 +1,2 @@
+// spc-error: lacks capability 'graphics'
+void main() { word plot_x = 7; word plot_y = 2; plot { plot.x = plot_x; plot.y = plot_y; plot(plot.x + 1, plot.y + 2); } }

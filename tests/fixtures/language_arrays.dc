@@ -1,0 +1,22 @@
+struct Pair { word a; word b; };
+@packed struct Bytes { byte a; byte b; byte c; };
+word frame[3] = {46, 103};
+struct Pair global_pair = {12, 30};
+rom const byte name[] = "PLAYER";
+void main() {
+    struct Pair pairs[2] = {{46, 103}, {12}};
+    word* pointers[] = {&pairs[0].a, &pairs[1].a, null};
+    far word* far_pointers[] = {(far word*)0x700100, null};
+    byte text[] = "HI\n";
+    struct Bytes packed[2] = {{1, 2, 3}, {4, 5, 6}};
+    *(word*)0x100 = *pointers[0] + pairs[0].b;
+    *(word*)0x102 = pairs[1].a + pairs[1].b;
+    *(word*)0x104 = (word)(pointers[2] == null);
+    *(word*)0x106 = (word)(far_pointers[1] == null);
+    *(word*)0x108 = frame[0] + frame[1] + frame[2];
+    *(word*)0x10a = global_pair.a + global_pair.b;
+    *(word*)0x10c = text[0] + text[2] + name[0];
+    *(word*)0x10e = text[3] + name[6];
+    *(word*)0x110 = packed[1].c;
+    *(word*)0x112 = 'A';
+}

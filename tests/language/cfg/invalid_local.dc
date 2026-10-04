@@ -1,0 +1,2 @@
+// error: @cfg is only supported on top-level
+void main() { @cfg(gsu) word value = 1; }

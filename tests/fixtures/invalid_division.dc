@@ -1,5 +1,5 @@
 word divide(word value) {
-    return value / 2;
+    return value / 0;
 }
 
 void main() {

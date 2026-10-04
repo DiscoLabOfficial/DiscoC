@@ -1,0 +1,2 @@
+// error: Cyclic constant
+constexpr word A = B; constexpr word B = A;

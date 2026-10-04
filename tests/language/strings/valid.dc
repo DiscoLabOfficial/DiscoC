@@ -1,0 +1,1 @@
+rom const byte text[] = "PLAYER"; void main() { unsigned byte raw[] = "\xFF\0"; byte chars[] = {'A', '\n', '\\'}; byte empty[] = ""; static_assert(sizeof(chars) == 3); }

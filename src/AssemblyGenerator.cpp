@@ -83,11 +83,13 @@ std::string AssemblyGenerator::generate() const {
            "; Relocatable symbols require discld; numeric linked addresses are fixed.\n"
            ".setcpu \"GSU\"\n.define __DISCO_MEMORY_MAPPING "
         << (m_object.config.mapping == MemoryMapping::LoROM ? "lorom" : "hirom")
-        << "\n.define __DISCO_CODE_START_ADDRESS " << hex(m_object.config.code_start_address, 6) << '\n';
+        << "\n.define __DISCO_CODE_START_ADDRESS " << hex(m_object.config.code_start_address, 6)
+        << "\n.define __DISCO_DATA_ALIGNMENT " << static_cast<unsigned>(m_object.data_alignment)
+        << "\n.define __DISCO_RAM_ALIGNMENT " << static_cast<unsigned>(m_object.ram_alignment) << '\n';
     std::set<std::string> names;
     for (const auto& symbol : m_object.symbol_table) names.insert(symbol.name);
     std::map<std::string, std::string> renamed;
-    std::map<std::size_t, std::vector<std::string>> code_labels, data_labels;
+    std::map<std::size_t, std::vector<std::string>> code_labels, data_labels, ram_labels;
     std::size_t serial = 0;
     const auto uniqueName = [&]() {
         std::string name;
@@ -98,11 +100,10 @@ std::string AssemblyGenerator::generate() const {
     for (const auto& symbol : m_object.symbol_table) {
         if (symbol.name.empty()) throw std::runtime_error("Assembly export: empty symbol name.");
         const bool local = symbol.name.front() == '\x01';
-        if (local && symbol.section != SymbolSection::CODE) throw std::runtime_error("Assembly export: local data symbol unsupported.");
         const auto name = local ? uniqueName() : symbol.name;
         renamed.emplace(symbol.name, name);
-        auto& labels = symbol.section == SymbolSection::CODE ? code_labels : data_labels;
-        const auto size = symbol.section == SymbolSection::CODE ? m_object.code_section.size() : m_object.data_section.size();
+        auto& labels = symbol.section == SymbolSection::CODE ? code_labels : symbol.section == SymbolSection::DATA ? data_labels : ram_labels;
+        const auto size = symbol.section == SymbolSection::CODE ? m_object.code_section.size() : symbol.section == SymbolSection::DATA ? m_object.data_section.size() : m_object.ram_section.size();
         if (symbol.offset > size) throw std::runtime_error("Assembly export: symbol outside section.");
         labels[symbol.offset].push_back(name);
         if (!local) out << ".export " << name << '\n';
@@ -149,7 +150,7 @@ std::string AssemblyGenerator::generate() const {
                 instruction.text = "ibt " + reg(op & 15u) + ", #^" + name;
             else if (entry.type != RelocationType::ADDR24_BANK && op >= 0xf0)
                 instruction.text = "iwt " + reg(op & 15u) + ", #" +
-                    (entry.type == RelocationType::ADDR24_OFFSET ? "lo24(" + name + ")" : name);
+                    (entry.type == RelocationType::ADDR24_OFFSET ? "lo24(" + name + ")" : entry.type == RelocationType::ADDR16_RAM ? "ram(" + name + ")" : name);
             else throw std::runtime_error("Assembly export: relocation opcode mismatch.");
         } else if (branches.count(offset)) {
             static const char* const branch_names[] = {"bra","bge","blt","bne","beq","bpl","bmi","bcc","bcs","bvc","bvs"};
@@ -187,5 +188,13 @@ std::string AssemblyGenerator::generate() const {
         out << "    .byte " << hex(m_object.data_section[offset]) << '\n';
     }
     labelsAt(data_labels, m_object.data_section.size());
+    if (!m_object.ram_section.empty()) {
+        out << "\n.segment \"RAM\"\n";
+        for (std::size_t offset = 0; offset < m_object.ram_section.size(); ++offset) {
+            labelsAt(ram_labels, offset);
+            out << "    .byte " << hex(m_object.ram_section[offset]) << '\n';
+        }
+        labelsAt(ram_labels, m_object.ram_section.size());
+    }
     return out.str();
 }

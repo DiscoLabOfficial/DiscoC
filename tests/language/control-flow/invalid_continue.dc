@@ -1,0 +1,2 @@
+// error: continue.*loop
+void main() { continue; }

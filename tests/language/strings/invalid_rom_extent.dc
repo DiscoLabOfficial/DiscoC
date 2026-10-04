@@ -1,0 +1,2 @@
+// error: ROM initializer count exceeds extent
+rom const byte name[2] = "HI";

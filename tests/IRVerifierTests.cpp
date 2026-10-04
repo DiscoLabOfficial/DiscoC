@@ -149,7 +149,7 @@ void testInvalidBinaryOperation() {
     add.type = wordType();
     add.result = IRValueId{3};
     add.operands = {IRValueId{1}, IRValueId{2}};
-    add.operation = "^";
+    add.operation = "**";
     function.blocks[0].instructions = {constant(1), constant(2), add, returnValue(3)};
     expectFailure("invalid binary operation", IRModule{{std::move(function)}},
                   "binary instruction has invalid operands");
@@ -167,6 +167,135 @@ void testSyntheticUnreachableBlock() {
     expectSuccess("synthetic unreachable block", IRModule{{std::move(function)}});
 }
 
+void testPointerRepresentation() {
+    auto function = baseFunction();
+    auto address = constant(1);
+    address.type.pointer_level = 1;
+    address.type.is_far = true;
+    address.type.space = AddressSpace::RAM;
+    function.value_count = 1;
+    function.blocks[0].instructions = {address, returnValue(1)};
+    expectFailure("far width", IRModule{{function}}, "invalid pointer representation");
+    address.type.sizeInBytes = 4;
+    address.immediate = 0x721000;
+    function.blocks[0].instructions[0] = address;
+    expectFailure("far domain", IRModule{{function}}, "invalid pointer constant");
+    address.type.pointer_level = MaxPointerDepth + 1;
+    function.blocks[0].instructions[0] = address;
+    expectFailure("pointer depth", IRModule{{function}}, "invalid pointer representation");
+}
+
+void testPointerOffset() {
+    auto function = baseFunction();
+    auto pointer = constant(1, 0x1000);
+    pointer.type = pointerTo(wordType(), AddressSpace::RAM);
+    IRInstruction offset;
+    offset.opcode = IROpcode::PointerOffset;
+    offset.type = pointer.type;
+    offset.result = IRValueId{3};
+    offset.operands = {IRValueId{1}, IRValueId{2}};
+    offset.operation = "+";
+    offset.immediate = 1; // word* must scale by two, not one.
+    function.return_type = pointer.type;
+    function.value_count = 3;
+    function.blocks[0].instructions = {pointer, constant(2), offset, returnValue(3)};
+    expectFailure("pointer stride", IRModule{{function}}, "stride does not match");
+    function.blocks[0].instructions[2].immediate = 2;
+    expectSuccess("typed pointer offset", IRModule{{function}});
+}
+
+void testAccessQualifiers() {
+    auto function = baseFunction();
+    function.value_count = 2;
+    auto address = constant(1, 0x100);
+    Type object = wordType();
+    object.is_volatile = true;
+    address.type = pointerTo(object, AddressSpace::RAM);
+    IRInstruction load;
+    load.opcode = IROpcode::LoadIndirect;
+    load.result = IRValueId{2};
+    load.type = wordType();
+    load.operands = {IRValueId{1}};
+    function.blocks[0].instructions = {address, load, returnValue(2)};
+    expectFailure("missing volatile load effect", IRModule{{function}}, "volatile load metadata");
+    function.blocks[0].instructions[1].memory_volatile = true;
+    expectSuccess("volatile load effect", IRModule{{function}});
+    function.blocks[0].instructions[1].type.base = BaseType::BYTE;
+    function.blocks[0].instructions[1].type.sizeInBytes = 1;
+    expectFailure("incorrect load width", IRModule{{function}}, "load.indirect requires");
+
+    object.is_const = true;
+    address.type = pointerTo(object, AddressSpace::RAM);
+    IRInstruction store;
+    store.opcode = IROpcode::StoreIndirect;
+    store.type = wordType();
+    store.memory_volatile = true;
+    store.operands = {IRValueId{1}, IRValueId{2}};
+    function.blocks[0].instructions = {address, constant(2), store, returnValue(2)};
+    expectFailure("const store", IRModule{{function}}, "const-qualified address");
+    function.blocks[0].instructions[2].operation = "declare";
+    expectSuccess("const volatile initialization", IRModule{{function}});
+    function.blocks[0].instructions[1].memory_volatile = true;
+    expectFailure("volatile on arithmetic value", IRModule{{function}}, "non-memory instruction");
+}
+
+void testTargetCapabilities() {
+    auto function = baseFunction();
+    function.value_count = 1;
+    function.blocks[0].instructions = {constant(1), returnValue(1)};
+    IRModule module{{function}, TargetKind::SPC700};
+    expectSuccess("common SPC700 IR", module);
+
+    module.functions[0].is_cached = true;
+    expectFailure("cached SPC700 function", module, "instruction-cache capability");
+    module.functions[0].is_cached = false;
+    IRInstruction cache;
+    cache.opcode = IROpcode::Cache;
+    module.functions[0].blocks[0].instructions.insert(
+        module.functions[0].blocks[0].instructions.begin(), cache);
+    expectFailure("SPC700 cache instruction", module, "instruction-cache capability");
+    module.target = TargetKind::GSU;
+    expectSuccess("GSU cache instruction", module);
+    cache.operands = {IRValueId{1}};
+    module.functions[0].blocks[0].instructions = {constant(1), cache, returnValue(1)};
+    expectFailure("cache with operands", module, "cache has no operands or targets");
+
+    auto coordinate = constant(1);
+    coordinate.opcode = IROpcode::PlotCoordinateRead;
+    coordinate.immediate = 0;
+    coordinate.in_plot_context = true;
+    function.blocks[0].instructions = {coordinate, returnValue(1)};
+    module = IRModule{{function}, TargetKind::GSU};
+    expectSuccess("GSU plot coordinate", module);
+    module.target = TargetKind::SPC700;
+    expectFailure("SPC700 plot coordinate", module, "graphics capability");
+    module.target = TargetKind::GSU;
+    module.functions[0].blocks[0].instructions[0].in_plot_context = false;
+    expectFailure("coordinate outside plot", module, "invalid plot coordinate access");
+    module.functions[0].blocks[0].instructions[0].in_plot_context = true;
+    module.functions[0].blocks[0].instructions[0].immediate = 2;
+    expectFailure("invalid coordinate selector", module, "invalid plot coordinate access");
+
+    IRInstruction hardware;
+    hardware.opcode = IROpcode::HardwareLoopEnd;
+    module = IRModule{{function}, TargetKind::SPC700};
+    module.functions[0].blocks[0].instructions[0] = hardware;
+    expectFailure("SPC700 hardware loop", module, "hardware-loops capability");
+
+    Type far_pointer = pointerTo(wordType(), AddressSpace::RAM);
+    far_pointer.is_far = true;
+    far_pointer.pointer_reach[0] = true;
+    far_pointer.sizeInBytes = 4;
+    function.return_type = far_pointer;
+    auto pointer = constant(1, 0x701000);
+    pointer.type = far_pointer;
+    function.blocks[0].instructions = {pointer, returnValue(1)};
+    module = IRModule{{function}, TargetKind::GSU};
+    expectSuccess("GSU far-data IR", module);
+    module.target = TargetKind::SPC700;
+    expectFailure("SPC700 far-data IR", module, "far-data capability");
+}
+
 } // namespace
 
 int main() {
@@ -179,6 +308,10 @@ int main() {
         testIndirectLoadRequiresPointer();
         testInvalidBinaryOperation();
         testSyntheticUnreachableBlock();
+        testPointerRepresentation();
+        testPointerOffset();
+        testAccessQualifiers();
+        testTargetCapabilities();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

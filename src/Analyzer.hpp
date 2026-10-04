@@ -9,6 +9,8 @@ struct FunctionSymbol {
     Type returnType;
     std::vector<Type> paramTypes;
     bool has_definition = false;
+    Linkage linkage = Linkage::External;
+    std::string link_name;
 };
 struct StructMemberSymbol {
     Type type;
@@ -17,6 +19,8 @@ struct StructMemberSymbol {
 struct StructSymbol {
     std::string name;
     int totalSize = 0;
+    int alignment = 2;
+    std::vector<std::string> member_order;
     std::map<std::string, StructMemberSymbol> members;
 };
 
@@ -24,7 +28,7 @@ class Analyzer : public Visitor {
 public:
     using LocalSymbolTable = std::map<SymbolId, Symbol>;
 
-    Analyzer(DataSegmentManager& dataManager);
+    Analyzer(DataSegmentManager& dataManager, TargetKind target = TargetKind::GSU);
     void analyze(const std::vector<std::unique_ptr<Stmt>>& program);
 
     const std::map<std::string, FunctionSymbol>& getFunctionSymbols() const;
@@ -33,9 +37,22 @@ public:
     void registerFunctionSymbol(FunctionDeclStmt& stmt);
     void registerStructSymbol(StructDefStmt& stmt);
     void registerRomSymbol(ConstDataStmt& stmt);
+    void registerGlobalSymbol(VarDeclStmt& stmt);
 
     void visit(LiteralExpr& expr, const Type* context) override;
     void visit(VariableExpr& expr, const Type* context) override;
+    void visit(PlotCoordinateExpr& expr, const Type* context) override;
+    void visit(LayoutQueryExpr& expr, const Type* context) override;
+    void visit(NullExpr& expr, const Type* context) override;
+    void visit(InitializerListExpr& expr, const Type* context) override;
+    void visit(StringExpr& expr, const Type* context) override;
+    void visit(UpdateExpr& expr, const Type* context) override;
+    void visit(ForStmt& stmt) override;
+    void visit(ContinueStmt& stmt) override;
+    void visit(FallthroughStmt& stmt) override;
+    void visit(EnumDeclStmt& stmt) override;
+    void visit(StaticAssertStmt& stmt) override;
+    void visit(TypeAliasDeclStmt& stmt) override;
     void visit(BinaryExpr& expr, const Type* context) override;
     void visit(AssignExpr& expr, const Type* context) override;
     void visit(UnaryExpr& expr, const Type* context) override;
@@ -55,6 +72,7 @@ public:
     void visit(ExpressionStmt& stmt) override;
 	void visit(PlotStmt& stmt) override;
 	void visit(PlotBeginStmt& stmt) override;
+    void visit(PlotBlockStmt& stmt) override;
 	void visit(PlotEndStmt& stmt) override;
 	void visit(SetColorStmt& stmt) override;
 	void visit(CmodeStmt& stmt) override;
@@ -70,12 +88,32 @@ public:
 
 
 private:
+    int m_loop_depth = 0;
+    bool m_fallthrough_marker_allowed = false;
+    struct ConstantSymbol { Type type; std::int64_t value; };
+    std::map<std::string, VarDeclStmt*> m_pending_constants;
+    std::map<std::string, ConstantSymbol> m_named_constants;
+    std::map<SymbolId, std::int64_t> m_local_constants;
+    std::set<SymbolId> m_constexpr_ids;
+    std::set<std::string> m_evaluating_constants;
+    std::map<std::string, Type> m_enum_types;
+    std::set<const EnumDeclStmt*> m_registered_enums;
+    std::set<std::string> m_type_alias_names;
+    void resolveConstant(const std::string& name);
+    void prepareInitializer(VarDeclStmt& declaration);
+    void flattenInitializer(Type type, std::unique_ptr<Expr> initializer, int offset, std::vector<AggregateInitializer>& output, const Token& source);
+    void resolveExtent(Type& type, std::unique_ptr<Expr>& expression);
+    int typeAlignment(const Type& type) const;
+    void requireCapability(TargetCapability capability, const Token& source) const;
+    TargetKind m_target;
     void analyzeExpr(Expr& expr, const Type* context);
     void normalizeType(Type& type, const Token& source);
     bool sameType(const Type& left, const Type& right) const;
     bool canImplicitlyConvert(const Type& source, const Type& target) const;
     void coerceExpr(std::unique_ptr<Expr>& expression, const Type& target);
     bool isAssignableLValue(const Expr& expression) const;
+    int pointeeSize(const Type& type, const Token& source);
+    void validateConstantAddress(const Expr& expression, const Type& pointer, int width) const;
     void beginScope();
     void endScope();
     bool canFallThrough(const Stmt& stmt) const;
@@ -95,6 +133,7 @@ private:
     DataSegmentManager& m_data_manager;
     Type m_currentFunctionType;
     bool m_isInPlottingContext = false;
+    bool m_lexical_plot_context = false;
     std::map<std::string, FunctionSymbol> m_function_symbols;
     std::map<std::string, StructSymbol> m_struct_symbols;
 };

@@ -1,0 +1,1 @@
+module CycleB; import "cycle_a.dci";

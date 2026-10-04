@@ -1,0 +1,3 @@
+// error: Unknown type alias
+type First = Second;
+type Second = First;

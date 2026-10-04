@@ -1,0 +1,25 @@
+// A fixed-origin GSU payload; host startup still owns PBR and bus access.
+struct State { word sum; word bucket; bool ready; };
+
+internal struct State state;
+export volatile word frame_counter;
+const ram word divisor = 7;
+word add(word left, word right);
+
+void main() {
+    frame_counter = frame_counter + 1;
+    plot {
+        plot.x = 46;
+        plot.y = 103;
+        state.sum = add(plot.x, plot.y);
+        state.bucket = state.sum / divisor;
+    }
+    state.ready = (state.sum & 1) == 1 && state.bucket % divisor == 0;
+
+    // Example host-agreed output buffer, separate from globals and stack.
+    volatile word* output = (volatile word*)0x0100;
+    output[0] = state.sum;
+    output[1] = state.bucket;
+    output[2] = (word)state.ready;
+    output[3] = frame_counter;
+}

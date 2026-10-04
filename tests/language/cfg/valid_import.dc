@@ -1,0 +1,4 @@
+module Configured;
+@cfg(gsu) import "gsu.dci";
+@cfg(spc700) import "spc700.dci";
+void main() { TargetValue value = (TargetValue)1; }

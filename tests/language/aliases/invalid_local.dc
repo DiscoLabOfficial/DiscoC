@@ -1,0 +1,2 @@
+// error: Type aliases are top-level
+void main() { type Local = u8; }

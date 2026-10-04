@@ -7,7 +7,8 @@ namespace {
 void check(const ObjectFile& object) {
     const auto reconstructed = Assembler().assemble(AssemblyGenerator(object).generate());
     if (object.code_section != reconstructed.code_section ||
-        object.data_section != reconstructed.data_section || object.config != reconstructed.config)
+        object.data_section != reconstructed.data_section || object.config != reconstructed.config ||
+        object.data_alignment != reconstructed.data_alignment)
         throw std::runtime_error("Assembly round trip changed bytes or placement");
 }
 }
@@ -28,6 +29,7 @@ int main() {
         }
         ObjectFile object;
         object.config.code_start_address = 0x706000;
+        object.data_alignment = 2;
         object.code_section = {0xa1, 0, 0xf2, 0, 0, 0xff, 0, 0, 1, 0, 1};
         object.data_section = {0xff, 0x00, 0x80};
         object.symbol_table = {{"main", SymbolSection::CODE, 0},

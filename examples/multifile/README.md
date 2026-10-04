@@ -5,6 +5,24 @@ prototype in `main.dc` is checked by the compiler but does not emit a second
 function body; the definition in `math.dc` provides the exported symbol that
 the linker resolves.
 
+With `discc` on `PATH`, run from this example's directory:
+
+```sh
+discc build
+```
+
+The included `discoc.toml` builds both units, links for `$70:0900`, initializes
+RAMBR/R10, and writes `build/0-main.o`, `build/1-math.o`,
+`build/multifile.bin`, and `build/final.s`. Copy the payload to `$70:0900` and
+enter at that address; the host still owns SNES/GSU bus setup. The assembly is
+the exact linked payload, not the compiler's relocatable export.
+
+From the repository root, use `discc build --config examples/multifile/discoc.toml`.
+Relative paths stay relative to the manifest, regardless of the terminal's
+working directory. CLI flags can override it without source edits. See
+[project manifests](../../docs/project-manifest.md). The commands below show
+the independent-tool workflow with its original defaults.
+
 From a build directory containing `discc` and `discld`:
 
 ```sh
@@ -37,10 +55,10 @@ For host-owned initialization, omit `--init-runtime` and initialize RAMBR/R10
 before entering generated code. Final assembly is in DiscoC's dialect, not
 WLA-DX. See [GSU loading](../../docs/gsu-loading.md).
 
-Alternatively, put `set execution_memory = ram;` in both `.dc`
-files. LoROM remains the mapping default and that default execution origin becomes
-`$70:8000`. An explicit `set code_start_address = 0x710000;` can override this
-with `$71:0000`. Placement is preserved in both direct and assembly workflows.
+Alternatively, compile both units with `--execution-memory ram`.
+LoROM remains the default mapping and RAM's default origin is `$70:8000`.
+`--origin 0x710000` overrides it with `$71:0000`. Placement survives both direct
+and assembly workflows. Source-level `set` directives are no longer accepted.
 The linker
 rejects inaccessible origins and payloads that cross a program-bank boundary.
 RAM execution requires copying the payload into cartridge RAM first. Configure the SNES
