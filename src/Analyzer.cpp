@@ -201,6 +201,7 @@ void Analyzer::registerRomSymbol(ConstDataStmt& stmt) {
         throw CompilerError("ROM pointer constants require a typed pointer initializer and are not supported yet.", stmt.token);
     normalizeType(stmt.type, stmt.token);
     resolveExtent(stmt.type, stmt.array_extent);
+    if (stmt.is_extern) { m_data_manager.add(stmt); return; }
     if (stmt.type.array_size > 0) {
         if (stmt.initializers.size() > static_cast<std::size_t>(stmt.type.array_size)) throw CompilerError("ROM initializer count exceeds extent.", stmt.token);
         while (stmt.initializers.size() < static_cast<std::size_t>(stmt.type.array_size))
@@ -226,7 +227,7 @@ void Analyzer::registerGlobalSymbol(VarDeclStmt& stmt) {
 
     if (stmt.inferred_extent && !stmt.initializer) throw CompilerError("Inferred array extent requires an initializer.", stmt.token);
     stmt.link_name = stmt.linkage == Linkage::Internal ? std::string(1, '\x01') + stmt.token.lexeme : stmt.token.lexeme;
-    if (stmt.is_extern && stmt.initializer)
+    if (stmt.is_extern && stmt.initializer && !stmt.is_imported)
         throw CompilerError("An extern global cannot have an initializer.", stmt.token);
     resolveExtent(stmt.type, stmt.array_extent);
     normalizeType(stmt.type, stmt.token);

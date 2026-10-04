@@ -71,12 +71,15 @@ void Parser::parsePreamble() {
             if (attribute.name.lexeme != "cfg")
                 throw CompilerError("Only @cfg is supported on imports.", attribute.name);
         const bool enabled = configurationEnabled(attributes);
-        auto path = consume(TokenType::LITERAL_STRING, "Expect quoted .dci interface path.");
+        auto path = consume(TokenType::LITERAL_STRING, "Expect quoted .dc source or .dci interface path.");
+        if (path.lexeme.size() > 4096) throw CompilerError("Import path exceeds 4096 bytes.", path);
         if (path.lexeme.empty() || path.lexeme.front() == '/' || path.lexeme.front() == '\\' ||
-            path.lexeme.find(':') != std::string::npos || path.lexeme.find('\0') != std::string::npos)
-            throw CompilerError("Imports require a relative .dci interface path.", path);
-        if (path.lexeme.size() < 4 || path.lexeme.substr(path.lexeme.size() - 4) != ".dci")
-            throw CompilerError("Imports require a .dci interface path.", path);
+            path.lexeme.find(':') != std::string::npos ||
+            std::any_of(path.lexeme.begin(), path.lexeme.end(), [](char value) { return static_cast<unsigned char>(value) < 32 || value == 127; }))
+            throw CompilerError("Imports require a relative .dc source or .dci interface path.", path);
+        const auto dot = path.lexeme.find_last_of('.');
+        if (dot == std::string::npos || (path.lexeme.substr(dot) != ".dc" && path.lexeme.substr(dot) != ".dci"))
+            throw CompilerError("Imports require a .dc source or .dci interface path.", path);
         if (++imports > 128) throw CompilerError("Import count exceeds 128.", path);
         consume(TokenType::SEMICOLON, "Expect ';' after import.");
         if (enabled) m_imports.push_back(std::move(path));
@@ -510,6 +513,8 @@ std::unique_ptr<Stmt> Parser::structDeclaration() {
 }
 
 std::unique_ptr<Stmt> Parser::statement() {
+    if (check(TokenType::KEYWORD_IMPORT))
+        throw CompilerError("Imports are allowed only at file scope, before declarations.", peek());
     ParseDepthGuard depth(m_statement_depth, peek());
     if (check(TokenType::KEYWORD_TYPE))
         throw CompilerError("Type aliases are top-level declarations.", peek());

@@ -49,7 +49,7 @@ public:
                 table = key();
                 require(']', "Expected ']' after table name.");
                 if (table == "target.superfx") table = "target.gsu";
-                if (table != "project" && table != "runtime" && table != "output" &&
+                if (table != "project" && table != "compiler" && table != "runtime" && table != "output" &&
                     table != "target.gsu" && table != "target.spc700")
                     fail("Unknown manifest table '" + table + "'.");
                 if (!tables.insert(table).second) fail("Duplicate table '" + table + "'.");

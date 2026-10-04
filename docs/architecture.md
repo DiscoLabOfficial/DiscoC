@@ -54,8 +54,9 @@ compiler and linker drivers as individual invocations. The CLI adapters own
 argument strings; no shell/subprocess protocol or mutable global driver state
 is involved. `disco_project_core` owns TOML schema decoding, option precedence,
 and path handling without depending on AST/backend code. `ProjectBuild` discovers
-input interfaces before any writes, then compiles explicit sources in order and
-links only if all units succeed. See [project-manifest.md](project-manifest.md)
+the full source/interface graph before any writes, then compiles implementations
+dependency-first and links only if all units succeed. Explicit roots retain link
+order; discovered sources are appended once. See [project-manifest.md](project-manifest.md)
 for supported schema, target limitations, and failure behavior.
 
 The source-level contract and ordered language refactoring are documented in
@@ -70,8 +71,8 @@ The lexer converts source text into tokens. The parser constructs an owning
 AST using `std::unique_ptr`. Syntax errors are reported before analysis; parser
 recursion and expression-tree depth have explicit diagnostic limits. Lexical
 `plot` blocks own their body rather than representing context only as pairs.
-`ModuleLoader` parses the module/import preamble first, loads bounded interface
-graphs, then supplies owned alias bindings before parsing the remaining unit.
+`ModuleLoader` parses the module/import preamble first, loads bounded source and
+interface graphs, then supplies owned alias bindings before parsing the remaining unit.
 Transitive aliases use stable table IDs and declaration-origin identity for
 deduplication; the parser never borrows another parser's token/type storage.
 Inactive `@cfg` declarations are syntactically checked and discarded before
@@ -292,8 +293,16 @@ The SPC-700 target model and ABI proposal are documented in
 
 ## Language front-end extensions
 
-`ModuleLoader` owns bounded source intake and merges parsed .dci declarations,
-preserving source-path tokens without borrowing parser buffers. `ConstantEvaluator`
+`ModuleLoader` owns bounded source intake, dependency edges and cached ASTs for
+one invocation/build. It resolves local-first imports plus configured search
+directories, deduplicates physical files and diagnoses cycles before output.
+Each source transfers its owning AST to one compiler invocation; graph edges use
+stable indices, never references into growing vectors. `ModuleInterface` creates
+owned public declaration projections without bodies/storage or `internal` names.
+Imports never borrow another unit's mutable AST. Dependency-first analysis
+refreshes public constants and layouts before an importer uses them, so private
+compile-time implementation names do not leak. Failed discovery clears the
+partial graph; imported tokens preserve diagnostic origins. `ConstantEvaluator`
 evaluates pure typed expressions; layout/enum constants never require runtime
 calls. `LanguageWarnings` is a read-only source pass, with conservative scalar
 definite assignment and bounded, configurable diagnostics. `PlacementOptions`

@@ -24,6 +24,7 @@ void projectUsage() {
     std::cout << "Usage: discc build [--config discoc.toml] [options]\n"
         "       discc --project discoc.toml [options]\n"
         "  --target <gsu|spc700> --origin <address> --memory-mapping <lorom|hirom>\n"
+        "  --import-path <directory> (repeatable; -I; replaces manifest import_paths)\n"
         "  --execution-memory <rom|ram> --ram-bank <0|1> --ram-origin <word>\n"
         "  --rom-bank <bank> --stack-pointer <word> --entry <symbol>\n"
         "  --init-runtime | --no-init-runtime\n"
@@ -55,6 +56,10 @@ int buildProject(const std::vector<std::string>& arguments) {
                 if (!path.empty()) throw std::runtime_error("Only one project manifest can be specified.");
                 path = next();
             } else if (flag == "--output-dir") output_directory = absolutePath(next());
+            else if (flag == "--import-path" || flag == "-I") {
+                const auto value = next(); compile_flags.insert(compile_flags.end(), {"--import-path", absolutePath(value)});
+            } else if (flag.compare(0, 2, "-I") == 0)
+                compile_flags.insert(compile_flags.end(), {"--import-path", absolutePath(flag.substr(2))});
             else if (flag == "--check") check = true;
             else if (shared.count(flag)) {
                 const auto value = next();
@@ -85,12 +90,21 @@ int buildProject(const std::vector<std::string>& arguments) {
         compile.insert(compile.end(), compile_flags.begin(), compile_flags.end());
         compile = configurationArguments(compile, Consumer::Compiler, &manifest);
         auto target = TargetKind::GSU;
+        std::vector<std::string> import_paths;
         for (std::size_t index = 1; index < compile.size(); ++index) {
             if (compile[index] == "--target") target = parseTarget(compile.at(++index));
+            else if (compile[index] == "--import-path" || compile[index] == "-I") import_paths.push_back(absolutePath(compile.at(++index)));
             else if (optionTakesValue(compile[index], Consumer::Compiler)) ++index;
         }
         if (!check && target != TargetKind::GSU)
             throw std::runtime_error("Target 'spc700' has a target model but no code-generation backend yet; use build --check.");
+        CompilerConfig module_config; module_config.target = target;
+        ModuleLoader modules; modules.prepare(sources, module_config, import_paths);
+        for (const auto& dependency : modules.implementationOrder()) {
+            if (std::any_of(sources.begin(), sources.end(), [&](const std::string& source) { return samePath(source, dependency); })) continue;
+            objects.push_back(absolutePath(objectName(dependency, sources.size()), output_directory));
+            sources.push_back(dependency);
+        }
         std::vector<std::string> link{"discld", "--config", manifest.path, "-o",
             absolutePath(manifest.string("output.binary", manifest.string("project.name", "new") + ".bin"), output_directory)};
         if (manifest.find("output.assembly"))
@@ -111,29 +125,30 @@ int buildProject(const std::vector<std::string>& arguments) {
             for (std::size_t index = 0; index < outputs.size(); ++index)
                 for (std::size_t other = 0; other < index; ++other)
                     if (samePath(outputs[index], outputs[other])) throw std::runtime_error("Project output paths must be different.");
-            // Discover imported interfaces before writing any object, including
-            // imports used only by a later compilation unit. This syntax-only
-            // preflight also prevents output aliases from destroying inputs.
-            CompilerConfig config; config.target = target;
-            std::set<std::string> inputs;
-            for (const auto& source : sources) {
-                ModuleLoader loader;
-                const auto loaded = loader.load(source, config);
-                inputs.insert(loaded.source_paths.begin(), loaded.source_paths.end());
-            }
-            for (const auto& input : inputs)
+            // The complete graph is known before any output can overwrite an
+            // imported source/interface, including auto-discovered sources.
+            for (const auto& input : modules.sourcePaths())
                 for (const auto& output : outputs)
                     if (samePath(input, output)) throw std::runtime_error("Project output must not overwrite a source/interface.");
             createDirectories(output_directory);
             createDirectories(parentPath(binary));
             if (!assembly.empty()) createDirectories(parentPath(assembly));
         }
-        for (std::size_t index = 0; index < sources.size(); ++index) {
+        for (const auto& source : modules.analysisOrder()) {
+            const bool interface = source.size() >= 4 && source.substr(source.size() - 4) == ".dci";
+            if (interface) {
+                auto unit = compile; unit.insert(unit.end(), {source, "--check"});
+                if (runCompiler(std::move(unit), &modules) != 0) return 1;
+                continue;
+            }
+            const auto found = std::find_if(sources.begin(), sources.end(), [&](const std::string& item) { return samePath(source, item); });
+            if (found == sources.end()) throw std::logic_error("Discovered implementation is missing from project sources.");
+            const auto index = static_cast<std::size_t>(std::distance(sources.begin(), found));
             auto unit = compile;
             unit.push_back(sources[index]);
             if (check) unit.push_back("--check");
             else unit.insert(unit.end(), {"-o", objects[index]});
-            if (runCompiler(std::move(unit)) != 0) return 1; // Never link stale objects after a failure.
+            if (runCompiler(std::move(unit), &modules) != 0) return 1; // Never link stale objects after a failure.
         }
         if (check) { std::cout << "Project frontend/IR checks passed (no linking).\n"; return 0; }
         link.insert(link.end(), objects.begin(), objects.end());

@@ -1,0 +1,16 @@
+// Private constants can determine a public API without becoming visible.
+constexpr internal word LANES = 2;
+constexpr word PUBLIC_SIZE = LANES + 1;
+
+@packed
+struct Frame {
+    byte pixels[LANES];
+    word total;
+};
+type Frame = struct Frame;
+enum Status { READY = LANES };
+
+word counter = 7;
+const word BIAS = 3;
+word samples[] = {1, 2, 3};
+rom const word operands[] = {46, 103};

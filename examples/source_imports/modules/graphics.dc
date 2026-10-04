@@ -1,0 +1,6 @@
+import "types.dc";
+
+// Public by default; export is an optional explicit spelling.
+word inspect(Frame* frame) {
+    return frame->total;
+}

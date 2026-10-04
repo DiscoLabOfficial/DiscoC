@@ -70,6 +70,9 @@ Among repeated CLI options, the last one wins. The position of `--config` does
 not affect precedence. Malformed or out-of-range manifest values are rejected
 even when a CLI option would override them.
 
+Repeatable import-path options are a list, not a last-value setting: any explicit
+CLI import paths replace `compiler.import_paths`, retaining their supplied order.
+
 ```sh
 discc build --origin 0x701000 --config discoc.toml --ram-bank 1 \
   --stack-pointer 0x3000 --output-dir experiment
@@ -96,7 +99,7 @@ discc --config discoc.toml math.dc -o math.o
 discld main.o math.o --config discoc.toml
 ```
 
-Ordinary `discc --config` uses target/placement defaults, not `project.sources`
+Ordinary `discc --config` uses target/placement/import-path defaults, not `project.sources`
 or linked output names. Its input and `-o` still name one compilation unit.
 `discld --config` uses target, placement, runtime, and output defaults but does
 not compile sources. It checks that target/mapping agree with the objects;
@@ -110,6 +113,51 @@ final linked assembly output. `discc build --check` analyzes and verifies each
 source without generating objects, creating output directories, or linking.
 It cannot diagnose unresolved cross-unit symbols or link-time layout failures.
 
+## Source dependencies and import paths
+
+```toml
+[project]
+sources = ["src/main.dc"]
+
+[compiler]
+import_paths = ["src", "lib"]
+```
+
+`import "math.dc";` exposes public declarations without inserting function
+bodies or defining storage in the importing unit. `project.sources` lists
+roots: the build discovers their transitive `.dc` imports and compiles every
+implementation once into a separate object. Shared dependencies and sources
+already listed as roots are not compiled twice. The build keeps a bounded
+dependency graph, diagnoses cycles, and analyzes/compiles dependency-first.
+
+Explicit root order remains link order. Automatically discovered sources follow
+the roots in deterministic dependency order; indexed object names use that link
+order, not compilation order. Runtime `entry` selects the entry symbol normally.
+
+Imports search the importing file's directory first, then `compiler.import_paths`
+in order. Manifest directories resolve relative to the manifest. The first
+existing file wins: invalid local source is an error, not a reason to try another
+directory. Transitive imports use their own file's directory. Paths can contain
+spaces; imports must name relative `.dc` or `.dci` files, not logical module names.
+
+```sh
+discc build --config discoc.toml --import-path experiment --import-path shared
+discc --check -I shared main.dc
+discc --check -Ishared main.dc
+```
+
+CLI import directories resolve from the terminal's working directory and replace
+the manifest list, regardless of `--config` position. Local-file precedence still
+applies. There are at most 64 configured directories. `--check` follows the same
+graph without producing objects or linking; SPC700 remains frontend/IR-only.
+
+An ordinary one-source command also discovers/checks imports, but emits only
+that unit's object or assembly. Compile/link dependencies explicitly or use
+project build mode. `.dci` imports remain declaration-only: they do not infer or
+automatically compile a matching implementation file. See
+[language module rules](language-spec.md#13-modules-and-interfaces) and the
+[source-import example](../examples/source_imports/README.md).
+
 ## Schema
 
 All keys are optional except a nonempty `project.sources` for project builds.
@@ -119,7 +167,8 @@ Unknown tables/keys and duplicate definitions are errors.
 | --- | --- | --- |
 | `project` | `name` | `new`; 1–64 ASCII letters, digits, `_`, `-` |
 | `project` | `target` | `gsu`; `superfx` alias, or `spc700` |
-| `project` | `sources` | Ordered array of up to 128 `.dc` implementations |
+| `project` | `sources` | Ordered nonempty array of up to 128 `.dc` roots; imports discover additional sources |
+| `compiler` | `import_paths` | `[]`; ordered array of up to 64 manifest-relative search directories |
 | `target.gsu` | `memory_mapping` | `lorom`; explicit `hirom` retained |
 | `target.gsu` | `execution_memory` | Inferred from origin; optional `rom` or `ram` constraint |
 | `target.gsu` | `origin` | `$00:8000`; `$40:8000` for HiROM, `$70:8000` for explicit RAM execution |
@@ -163,20 +212,20 @@ The dependency-free, C++14-compatible reader implements a documented subset of
 Unsupported TOML constructs are rejected, not silently ignored: quoted/dotted
 assignment keys, multiline strings, inline tables, arrays of tables, non-string
 arrays, floats, and dates/times. The reader is bounded at 64 KiB per file,
-4,096 bytes per string/path, 128 source entries, 128 bytes per key/table name,
-64 keys, and 8 tables. It does not recurse over input-controlled structures.
+4,096 bytes per string/path, 128 source entries, 64 import directories,
+128 bytes per key/table name, 64 keys, and 8 tables. It does not recurse over
+input-controlled structures.
 
-`sources` are explicit implementations: imported `.dci` files are discovered
-by the normal module loader, but importing an interface does not automatically
-add its `.dc` implementation or a library to the link.
+The module graph is separately bounded at 128 files, 32 import levels,
+16 MiB per file and 32 MiB total source, counting both roots and dependencies.
 
 ## Failure behavior and scope
 
 Project builds reject duplicate sources, output collisions, and outputs aliasing
-the manifest, sources, or imported interfaces before object writes. Existing
+the manifest, sources, or imported source/interface dependencies before object writes. Existing
 file identity and normalized paths are checked; native C++17+ builds additionally
 canonicalize symlink paths. Syntax-only input discovery precedes compilation so
-an output cannot destroy an interface used by a later unit. Any compilation
+an output cannot destroy an imported file used by a later unit. Any compilation
 failure stops the project before linking, including when old objects exist.
 Diagnostic failures leave an existing final payload untouched.
 

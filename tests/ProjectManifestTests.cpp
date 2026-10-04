@@ -1,4 +1,5 @@
 #include "ProjectManifest.hpp"
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
@@ -58,6 +59,11 @@ void parsing() {
     require(Manifest::parse(sources + ']', "limit.toml").find("project.sources")->strings.size() == MaxProjectSources,
             "Source limit boundary");
     reject(sources + "'b.dc']", "Source count exceeds 128");
+    std::string imports = "[compiler]\nimport_paths = [";
+    for (std::size_t index = 0; index < 64; ++index) imports += "'lib',";
+    require(Manifest::parse(imports + ']', "imports.toml").find("compiler.import_paths")->strings.size() == 64,
+            "Import path limit boundary");
+    reject(imports + "'more']", "Import path count exceeds 64");
 }
 void invalidInput() {
     reject("[unknown]", "Unknown manifest table");
@@ -74,6 +80,10 @@ void invalidInput() {
     reject("[project]\nsources = [", "array of quoted strings");
     reject("[project]\nsources = ['']", "Invalid source path");
     reject("[project]\nsources = ['a.dc', ['b.dc']]", "array of quoted strings");
+    reject("[compiler]\nimport_paths = 'lib'", "Expected array");
+    reject("[compiler]\nimport_paths = [1]", "array of quoted strings");
+    reject("[compiler]\nimport_paths = ['']", "Invalid import path");
+    reject("[compiler]\nunknown = true", "unsupported manifest key");
     reject("[runtime]\ninitialize = 'true'", "Expected boolean");
     reject("[runtime]\ninitialize = True", "integer or boolean");
     reject("[target.gsu]\norigin = '0x8000'", "32-bit integer");
@@ -148,6 +158,21 @@ void precedence() {
     require(lastValue(cli_output, "-o", Consumer::Linker) == "local.bin", "CLI paths retain working-directory semantics");
     require(samePath(absolutePath("a/../test.toml"), absolutePath("test.toml")), "Lexical alias protection");
     require(parentPath(absolutePath("dir/file.toml")) == absolutePath("dir") + '/', "Manifest parent resolution");
+    const auto imports = Manifest::parse("[compiler]\nimport_paths = ['src', 'lib path']", absolutePath("dir/imports.toml"));
+    const auto configured = configurationArguments({"discc", "--check"}, Consumer::Compiler, &imports);
+    require(configured == std::vector<std::string>{"discc", "--target", "gsu", "--import-path", absolutePath("dir/src"),
+            "--import-path", absolutePath("dir/lib path"), "--check"}, "Manifest import directories must retain order and manifest-relative resolution");
+    for (const auto& flags : {std::vector<std::string>{"--import-path", "override"},
+                             std::vector<std::string>{"-I", "override"}, std::vector<std::string>{"-Ioverride"}}) {
+        std::vector<std::string> arguments{"discc"}; arguments.insert(arguments.end(), flags.begin(), flags.end());
+        const auto explicit_paths = configurationArguments(arguments, Consumer::Compiler, &imports);
+        require(std::find(explicit_paths.begin(), explicit_paths.end(), absolutePath("dir/lib path")) == explicit_paths.end(),
+                "Explicit CLI import directories must replace manifest directories");
+    }
+    const auto flag_value = configurationArguments({"discc", "-o", "-Ioverride"}, Consumer::Compiler, &imports);
+    require(hasFlag(flag_value, "--import-path", Consumer::Compiler), "Flag-looking output name changed import path precedence");
+    const auto link_imports = configurationArguments({"discld"}, Consumer::Linker, &imports);
+    require(!hasFlag(link_imports, "--import-path", Consumer::Linker), "Compiler import directories leaked to linker arguments");
 }
 } // namespace
 int main() {

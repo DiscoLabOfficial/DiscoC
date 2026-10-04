@@ -371,8 +371,8 @@ void checkTypeAliasesAndSelection() {
     expectDiagnostic("type Count = u16; void f(i16 Count);", "Type alias name cannot be used as a value name");
     expectDiagnostic("enum E { Count }; type Count = u16;", "Enumerator name conflicts with a type alias");
     expectDiagnostic("@cfg(spc700) type Hidden = i16; Hidden value;", "Unknown type alias");
-    expectDiagnostic("@cfg(gsu) import \"invalid.dc\";", ".dci interface path");
-    expectDiagnostic("@cfg(spc700) import \"invalid.dc\";", ".dci interface path");
+    expectDiagnostic("@cfg(gsu) import \"invalid.txt\";", ".dci interface path");
+    expectDiagnostic("@cfg(spc700) import \"invalid.txt\";", ".dci interface path");
     expectDiagnostic("@cfg(gsu void main() {}", "Expect ')' after attribute arguments");
 
     std::string aliases;

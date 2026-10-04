@@ -775,31 +775,72 @@ unsigned byte raw[] = "\xFF\0";  // FF, 00, 00
 
 ```c
 module Main;
-import "math.dci";
+import "math.dc";
 void main() { word value = add(46, 103); }
 ```
 
-A module header is optional on .dc units and mandatory on .dci interfaces.
-Imports precede declarations and name explicit relative .dci paths. Interfaces
-can import interfaces and contain structs, enums, type aliases, constexpr,
-static assertions, public prototypes and extern RAM declarations, not
-bodies/storage definitions.
-Interfaces are parsed and merged as declarations, not pasted text or macros.
-Names remain unqualified; there is no namespace/type mangling. Repeated imports
-of a normalized path are deduplicated. Distinct interfaces cannot reuse a module
-name. Missing files, invalid interface contents and cycles are errors.
+A module header is optional on `.dc` units and mandatory on `.dci` interfaces.
+Imports appear only at file scope, before declarations, and name quoted relative
+`.dc` source or `.dci` interface paths. `@import` and logical imports such as
+`import math;` are not supported; `@...` remains attribute syntax. The optional
+source module name does not change filename resolution or add a namespace.
+
+A source import makes public declarations available, not the file's text.
+Functions become prototypes and RAM/ROM objects become external references;
+function bodies and storage initializers are never duplicated in an importer.
+Types, aliases, enums and compile-time constants are available to the importer.
+Resolved public constants/layouts may depend on private constants without making
+those private names visible. Symbols are public by default; `export` is explicit
+public linkage, and `internal` functions/data/constants stay private.
+
+```c
+// math.dc
+internal word helper(word x) { return x + 1; }
+export word add(word a, word b) { return a + b; }
+
+// main.dc
+import "math.dc";
+void main() { add(1, 2); } // helper(1) would be an undeclared-symbol error
+```
+
+Imports can themselves import files. A build-owned dependency graph parses each
+physical file once, deduplicates repeated/shared imports and path aliases, and
+checks dependencies before importers. Cycles report their file chain and import
+location; missing files and malformed imported sources are errors. Definitions
+are emitted only by their own compilation unit. Names remain unqualified, so
+incompatible declarations from different imports conflict rather than gaining
+implicit namespaces. Distinct `.dci` interfaces cannot reuse a module name.
+
+Resolve a path relative to the importing file first, then search configured
+directories in order. The first existing file wins; a malformed local file does
+not trigger fallback. `[compiler].import_paths` in `discoc.toml` supplies up to
+64 manifest-relative directories. Explicit repeatable `--import-path DIR`,
+`-I DIR` or `-IDIR` replaces that list with CLI-relative directories. See
+[project-manifest.md](project-manifest.md#source-dependencies-and-import-paths).
+
+Declaration-only `.dci` interfaces remain supported. They can import sources or
+interfaces and contain structs, enums, type aliases, constexpr, static assertions,
+public prototypes and extern RAM declarations, not bodies/storage definitions.
+Importing an interface does not infer a matching implementation filename.
 
 The loader reads imports before parsing declarations, making imported aliases
 available in types, casts and attributes. Transitive aliases from a shared
-interface are deduplicated by declaration identity; separately declared aliases
+file are deduplicated by declaration identity; separately declared aliases
 with the same name conflict even if their underlying types match. `@cfg` can
 select imports without opening an inactive path (section 16).
 
-Implementations remain separately compiled .dc files, linked normally. See
-[the multi-file example](../examples/language_modules/README.md). Limits are
-32 import levels, 128 files/imports, 16 MiB per file and 32 MiB total source.
-Imported diagnostics retain the interface's path. There is no package resolver,
-automatic implementation compilation, binary module cache or C preprocessor.
+`discc build` discovers and compiles transitive `.dc` imports once into separate
+objects, without requiring every dependency in `project.sources`. Ordinary
+`discc main.dc -o main.o` checks the reachable graph but emits only that unit;
+compile/link dependencies separately or use project build mode. `.dci` imports
+never automatically compile a matching `.dc`. See the
+[source-import example](../examples/source_imports/README.md) and
+[interface workflow](../examples/language_modules/README.md).
+
+Limits are 32 import levels, 128 total files, 128 imports per file, 16 MiB per
+file, 32 MiB total source and 4,096 bytes per import path. Imported diagnostics
+retain the originating source/interface path. The cache is per invocation,
+not persistent or incremental. There is no package resolver or C preprocessor.
 
 ## 14. Warnings and conformance
 
@@ -826,8 +867,9 @@ strings, null, volatile effects and imported interfaces. Graphics coverage check
 emission, not rendered pixels.
 
 Parser nesting is limited to 128 entries and expression trees to depth 256.
-Aggregate-by-value ABI, interbank code calls, named far placement, extern ROM
-objects, complete WLA-DX export and the SPC700 backend remain future work.
+Aggregate-by-value ABI, interbank code calls, named far placement, explicit
+`extern rom` syntax, complete WLA-DX export and the SPC700 backend remain future
+work; importing public ROM data already creates checked external references.
 
 ## 15. Transparent type aliases
 
@@ -896,7 +938,7 @@ because only one declaration is active. Inactive function bodies do not need
 to resolve target-specific calls or satisfy the other target's capabilities.
 
 Inactive imports are not opened and contribute no names, but must still use
-valid relative `.dci` path syntax. They count toward the bounded import count.
+valid relative `.dc`/`.dci` path syntax. They count toward the bounded import count.
 `@target` remains an assertion on an active function, not a selector; `@cfg`
 does not silently suppress unknown/reserved attributes or malformed target
 names. Actual implementations remain separately compiled and linked.

@@ -33,6 +33,17 @@ and assembly are compared with explicit tool invocations; final assembly is
 reassembled byte-for-byte. The GSU model checks RAM bank/stack initialization
 and the 46 + 103 result. These run in both CTest and the direct-build registry.
 
+`module_loader` checks the actual dependency graph, diamond edges, physical-file
+deduplication, deterministic order, owned API projections, cached AST transfer,
+private visibility, cycle locations, failed-discovery cleanup and graph/depth
+boundaries. `module_imports`, `module_import_paths` and
+`module_import_diagnostics` exercise root-only source discovery, shared RAM/ROM
+data, private constants behind public layouts, `.dci` compatibility, configured
+search order, CLI-list precedence, inactive imports, malformed dependencies,
+name conflicts and output protection. Project/manual objects and direct/assembly
+payloads are compared byte-for-byte; the GSU model checks their results. Source
+imports also run frontend conformance on both supported target models.
+
 `target_foundation` checks LoROM defaults, retained HiROM support, optional RAM
 execution, CLI argument ordering/default selection, explicit origins, region mismatches, and GSU-only
 diagnostics. `gsu_execution_memory` checks golden object-header bytes for both
@@ -123,9 +134,9 @@ The test model is not a complete SNES emulator or hardware validation.
 
 ## Language conformance and extensions
 
-The native suite has 69 CTest groups: 8 unit/model groups, 36 earlier CLI
-regressions, 16 language-conformance categories and 9 extension/integration
-groups. The physical positive/negative cases under `tests/language/` run through
+The native suite includes unit/model tests, CLI regressions, language-conformance
+categories and extension/integration groups. The physical positive/negative
+cases under `tests/language/` run through
 `discc --check` on both GSU and SPC700, with explicit capability exceptions.
 They are independent of opcode golden files and do not imply SPC700 emission.
 

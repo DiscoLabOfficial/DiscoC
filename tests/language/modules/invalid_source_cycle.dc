@@ -1,0 +1,2 @@
+// error: Cyclic module import
+import "source/cycle-a.dc";

@@ -94,14 +94,15 @@ void DataSegmentManager::add(VarDeclStmt& stmt) {
 }
 
 void DataSegmentManager::add(ConstDataStmt& stmt) {
-    if (stmt.is_array && stmt.initializers.empty()) throw CompilerError("ROM array requires a nonempty initializer.", stmt.token);
+    if (stmt.is_array && stmt.initializers.empty() && !stmt.is_extern) throw CompilerError("ROM array requires a nonempty initializer.", stmt.token);
     if (m_entries.count(stmt.token.lexeme)) {
         throw CompilerError("Data label '" + stmt.token.lexeme + "' already defined.", stmt.token);
     }
     DataEntry entry;
     entry.label = stmt.token.lexeme;
     entry.type = stmt.type;
-    if (stmt.is_array) entry.type.array_size = static_cast<int>(stmt.initializers.size());
+    if (stmt.is_array && !stmt.is_extern) entry.type.array_size = static_cast<int>(stmt.initializers.size());
+    entry.is_extern = stmt.is_extern;
     entry.link_name = stmt.linkage == Linkage::Internal ? std::string(1, '\x01') + stmt.token.lexeme : stmt.token.lexeme;
     for (const auto& expr : stmt.initializers) {
         if (auto* literal = dynamic_cast<LiteralExpr*>(expr.get())) {

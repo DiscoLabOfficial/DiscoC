@@ -90,6 +90,8 @@ struct Stmt {
     std::vector<Attribute> attributes;
     Linkage linkage = Linkage::External;
     std::string link_name;
+    // Imported declarations are owned projections, never pasted definitions.
+    bool is_imported = false;
 };
 
 struct TypeAliasDeclStmt : public Stmt {
@@ -374,6 +376,7 @@ struct SubscriptExpr : public Expr {
 };
 struct ConstDataStmt : public Stmt {
     Type type;
+    bool is_extern = false;
     bool is_array = false;
     std::unique_ptr<Expr> array_extent;
     std::vector<std::unique_ptr<Expr>> initializers;

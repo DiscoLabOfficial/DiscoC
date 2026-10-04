@@ -18,6 +18,7 @@ namespace {
 void usage() {
     std::cout << "Usage: discc [options] <file.dc> [-o output]\n"
         "  --config <discoc.toml>     Load project target/placement defaults\n"
+        "  --import-path <directory> Search after the importing directory (repeatable; -I also accepted)\n"
         "  build [--config manifest] Compile and link project sources\n"
         "  --project <manifest>      Alias for build --config\n"
         "  --target <gsu|spc700>      Select target (default gsu)\n"
@@ -36,11 +37,12 @@ std::uint32_t addressArgument(const std::string& value) {
     return static_cast<std::uint32_t>(number);
 }
 }
-int runCompiler(std::vector<std::string> arguments) {
+int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
     std::string input, output;
     bool emit_ast = false, emit_ir = false, emit_asm = false, check = false, warnings_as_errors = false;
     CompilerConfig config;
     PlacementOptions placement;
+    std::vector<std::string> import_paths;
     const std::set<std::string> known_warnings = {"shadowing", "unused-variable", "unused-function",
         "uninitialized", "implicit-fallthrough", "unreachable", "expensive-helper"};
     auto enabled_warnings = known_warnings;
@@ -58,6 +60,12 @@ int runCompiler(std::vector<std::string> arguments) {
             };
             if (argument == "--help" || argument == "-h") { usage(); return 0; }
             if (argument == "-o") output = next();
+            else if (argument == "--import-path" || argument == "-I") {
+                const auto directory = next();
+                if (directory.empty()) throw std::runtime_error(argument + " requires a nonempty directory.");
+                import_paths.push_back(DiscoProject::absolutePath(directory));
+            }
+            else if (argument.compare(0, 2, "-I") == 0) import_paths.push_back(DiscoProject::absolutePath(argument.substr(2)));
             else if (argument == "--target") {
                 config.target = DiscoProject::parseTarget(next());
             } else if (argument == "--origin") { placement.origin = addressArgument(next()); placement.explicit_origin = true; }
@@ -92,11 +100,34 @@ int runCompiler(std::vector<std::string> arguments) {
         if (input.empty()) throw std::runtime_error("No input file specified.");
         applyPlacement(config, placement);
         ModuleLoader loader;
-        auto loaded = loader.load(input, config);
+        if (!modules) {
+            loader.prepare({input}, config, import_paths);
+            modules = &loader;
+            // Check imported implementations once, in dependency order, without
+            // emitting their definitions into this unit's object or assembly.
+            std::vector<std::string> dependency_flags{arguments.front()};
+            for (std::size_t index = 1; index < arguments.size(); ++index) {
+                const auto& flag = arguments[index];
+                if (flag == "-o") { ++index; continue; }
+                if (flag == "--emit-ast" || flag == "--emit-ir" || flag == "--emit-asm" || flag == "--check") continue;
+                if (flag.empty() || flag.front() != '-') continue;
+                dependency_flags.push_back(flag);
+                if (DiscoProject::optionTakesValue(flag, DiscoProject::Consumer::Compiler))
+                    dependency_flags.push_back(arguments.at(++index));
+            }
+            dependency_flags.push_back("--check");
+            for (const auto& dependency : modules->analysisOrder()) {
+                if (DiscoProject::samePath(dependency, DiscoProject::absolutePath(input))) continue;
+                auto unit = dependency_flags; unit.push_back(dependency);
+                if (runCompiler(std::move(unit), modules) != 0) return 1;
+            }
+        } else if (modules->target() != config.target) throw std::logic_error("Module graph target does not match compilation.");
+        auto loaded = modules->take(input);
         auto& program = loaded.declarations;
         DataSegmentManager data;
         Analyzer analyzer(data, config.target);
         analyzer.analyze(program);
+        modules->complete(input, program);
         LanguageWarnings warnings;
         bool warning_failure = false;
         for (const auto& warning : warnings.check(program, enabled_warnings)) {

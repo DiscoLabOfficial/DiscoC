@@ -108,21 +108,26 @@ std::string parentPath(const std::string& path) {
     const auto slash = absolute.find_last_of('/');
     return absolute.substr(0, slash + 1);
 }
-bool samePath(const std::string& left, const std::string& right) {
+bool sameExistingFile(const std::string& left, const std::string& right) {
 #if __cplusplus >= 201703L
     std::error_code error;
-    if (std::filesystem::equivalent(left, right, error) && !error) return true;
+    return std::filesystem::equivalent(left, right, error) && !error;
+#elif defined(_WIN32)
+    return sameNativeFile(left, right);
+#else
+    struct stat a_stat{}, b_stat{};
+    return stat(left.c_str(), &a_stat) == 0 && stat(right.c_str(), &b_stat) == 0 && a_stat.st_ino != 0 &&
+        a_stat.st_ino == b_stat.st_ino && a_stat.st_dev == b_stat.st_dev;
+#endif
+}
+bool samePath(const std::string& left, const std::string& right) {
+    if (sameExistingFile(left, right)) return true;
+#if __cplusplus >= 201703L
     // Preserve existing symlink components until canonicalization, especially
     // before '..'; lexical normalization alone can miss an output alias.
     auto a = std::filesystem::weakly_canonical(std::filesystem::absolute(left)).generic_string();
     auto b = std::filesystem::weakly_canonical(std::filesystem::absolute(right)).generic_string();
 #else
-#ifdef _WIN32
-    if (sameNativeFile(left, right)) return true;
-#endif
-    struct stat a_stat{}, b_stat{};
-    if (stat(left.c_str(), &a_stat) == 0 && stat(right.c_str(), &b_stat) == 0 && a_stat.st_ino != 0 &&
-        a_stat.st_ino == b_stat.st_ino && a_stat.st_dev == b_stat.st_dev) return true;
     auto a = absolutePath(left), b = absolutePath(right);
 #endif
 #if defined(_WIN32) || defined(__DJGPP__)

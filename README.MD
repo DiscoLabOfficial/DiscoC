@@ -57,10 +57,12 @@ The refactored language has a documented [language contract](docs/language-spec.
   `fallthrough;` annotations.
 - **Explicit hardware context:** lexical `plot { ... }` blocks with arbitrary
   coordinate expressions, `plot.x`/`plot.y`, and GSU drawing operations.
-- **Attributes and interfaces:** `@cache`, `@packed`, `@align(N)`,
+- **Attributes and modules:** `@cache`, `@packed`, `@align(N)`,
   `@target(...)`, and top-level `@cfg(gsu)`/`@cfg(spc700)` selection.
-  Relative `.dci` module interfaces share declarations and types without a C
-  textual preprocessor.
+  `import "code.dc";` shares public declarations without copying definitions;
+  project builds compile discovered dependencies once in separate objects.
+  Declaration-only `.dci` interfaces remain supported. `@...` is for attributes,
+  not imports or a C textual preprocessor.
 
 Warnings cover shadowing, unused declarations, uninitialized reads, unreachable
 code, and implicit fallthrough. `-Wall` also enables expensive-helper warnings;
@@ -136,7 +138,7 @@ address rather than treating registers after `STOP` as a result API.
 
 ```c
 // main.dc
-word add(word a, word b);
+import "math.dc";
 
 void main() {
     volatile word* output = (volatile word*)0x0100;
@@ -157,7 +159,7 @@ Place `discoc.toml` alongside them:
 [project]
 name = "multifile"
 target = "gsu"
-sources = ["main.dc", "math.dc"]
+sources = ["main.dc"]
 
 [target.gsu]
 memory_mapping = "lorom"
@@ -183,6 +185,10 @@ discc build
 discc --project discoc.toml
 ```
 
+The import discovers `math.dc`; it does not paste its function body into
+`main.dc`. Each source is parsed/compiled once per build. Symbols are public by
+default; `export` makes that explicit, and `internal` hides helpers and data.
+
 This produces `build/0-main.o`, `build/1-math.o`,
 `build/multifile.bin`, and `build/final.s`. The result is stored at
 `$70:0100`; load the payload at `$70:0900` and enter there with the host setup
@@ -196,8 +202,21 @@ discc build --config examples/multifile/discoc.toml
 
 Configuration precedence is **built-in defaults → manifest → explicit CLI
 options**. Manifest paths resolve relative to the manifest, not the terminal's
-working directory. Sources, libraries, and outputs are explicit; this is not a
-package manager or an incremental build system.
+working directory. Root sources and outputs are explicit, while `.dc` imports
+discover source dependencies. This is not a package manager or an incremental
+build system.
+
+Imports search the current source directory first, then configured directories:
+
+```toml
+[compiler]
+import_paths = ["src", "lib"]
+```
+
+These paths are manifest-relative. Repeat `--import-path DIR` (or `-I DIR`) to
+replace the configured list with CLI-relative directories. See the
+[source-import example](examples/source_imports/README.md) for shared dependencies,
+imported types/constants, and RAM/ROM data.
 
 See [Project manifests](docs/project-manifest.md) for the supported TOML subset,
 schema, output-path rules, CLI overrides, and frontend-only project checks.
@@ -212,6 +231,9 @@ discc math.dc -o math.o
 discld main.o math.o --origin 0x700900 --init-runtime \
   --ram-bank 0 --stack-pointer 0x2000 --emit-asm final.s -o multifile.bin
 ```
+
+Ordinary `discc main.dc` checks its import graph but emits only `main.o`; compile
+and link each dependency separately, or use `discc build` to do that automatically.
 
 There are two distinct assembly exports:
 
@@ -282,6 +304,8 @@ explicit scaling helpers, not new primitive types or floating-point support.
 Import a library's `.dci` interface and explicitly compile/link its matching
 `.dc` implementation, or list it in `project.sources`. Importing an interface
 does not automatically add an implementation to the build.
+Alternatively, import the `.dc` implementation directly and let a project build
+discover and compile its source dependencies.
 
 Useful examples:
 
@@ -289,6 +313,8 @@ Useful examples:
   numeric operators, and lexical plotting.
 - [Module interfaces](examples/language_modules/README.md): shared types,
   declarations, and multi-file linking.
+- [Source imports](examples/source_imports/README.md): automatic project discovery,
+  shared dependencies, and configurable import paths.
 - [Fixed-point and memory helpers](examples/fixed_point/README.md): portable
   core modules and explicit library linking.
 - [RAM result](examples/ram_result/README.md): host-visible output and startup.

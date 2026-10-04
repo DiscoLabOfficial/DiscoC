@@ -96,6 +96,7 @@ foreach(core_target IN ITEMS disco_object_core disco_frontend_core disco_compile
 endforeach()
 
 target_link_libraries(disco_linker_core PUBLIC disco_object_core disco_project_core)
+target_link_libraries(disco_frontend_core PUBLIC disco_project_core)
 
 target_link_libraries(disco_compiler_core PUBLIC disco_frontend_core disco_object_core)
 target_link_libraries(disco_assembler_core PUBLIC disco_object_core)
@@ -142,6 +143,9 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_executable(disco_project_manifest_tests tests/ProjectManifestTests.cpp)
     target_link_libraries(disco_project_manifest_tests PRIVATE disco_project_core)
 
+    add_executable(disco_module_loader_tests tests/ModuleLoaderTests.cpp)
+    target_link_libraries(disco_module_loader_tests PRIVATE disco_compiler_core)
+
     add_executable(disco_gsu_execution_tests ${DISCO_SOURCES_disco_gsu_execution_tests})
     target_link_libraries(disco_gsu_execution_tests PRIVATE disco_common_warnings disco_platform_options)
 
@@ -173,6 +177,7 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_test(NAME target_foundation COMMAND disco_target_foundation_tests)
     add_test(NAME language_contract COMMAND disco_language_contract_tests)
     add_test(NAME project_manifest COMMAND disco_project_manifest_tests)
+    add_test(NAME module_loader COMMAND disco_module_loader_tests)
     add_test(NAME gsu_execution_model COMMAND disco_gsu_execution_tests --self-test)
     add_test(NAME gsu_memory_map COMMAND disco_gsu_mapping_tests)
     add_test(NAME assembly_export COMMAND disco_assembly_export_tests)

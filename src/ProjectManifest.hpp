@@ -48,6 +48,8 @@ TargetKind parseTarget(const std::string& name);
 std::string absolutePath(const std::string& path, const std::string& base = "");
 std::string parentPath(const std::string& path);
 bool samePath(const std::string& left, const std::string& right);
+// Compare existing physical file identities only; no path canonicalization.
+bool sameExistingFile(const std::string& left, const std::string& right);
 void createDirectories(const std::string& path);
 void protectManifest(const Manifest& manifest, const std::vector<std::string>& paths);
 } // namespace DiscoProject

@@ -35,7 +35,8 @@ bool optionTakesValue(const std::string& flag, Consumer consumer) {
         flag == "--memory-mapping" || flag == "--execution-memory" || flag == "--ram-bank" ||
         flag == "--rom-bank" || flag == "--ram-origin" || flag == "--stack-pointer" ||
         flag == "--entry" || flag == "--output-dir" ||
-        (flag == "--emit-asm" && consumer == Consumer::Linker);
+        (flag == "--emit-asm" && consumer == Consumer::Linker) ||
+        ((flag == "--import-path" || flag == "-I") && consumer == Consumer::Compiler);
 }
 TargetKind parseTarget(const std::string& name) {
     if (name == "gsu" || name == "superfx") return TargetKind::GSU;
@@ -70,9 +71,12 @@ void Manifest::validate() const {
     for (const auto& item : values) {
         const auto& key = item.first; const auto& value = item.second;
         const bool path = key == "output.directory" || key == "output.binary" || key == "output.assembly";
-        if (key == "project.sources") {
-            if (value.kind != Value::Kind::Strings) error(*this, key, "Expected array of quoted source paths.");
-            for (const auto& name : value.strings) if (!validPath(name)) error(*this, key, "Invalid source path.");
+        if (key == "project.sources" || key == "compiler.import_paths") {
+            if (value.kind != Value::Kind::Strings) error(*this, key, "Expected array of quoted paths.");
+            if (key == "compiler.import_paths" && value.strings.size() > 64)
+                error(*this, key, "Import path count exceeds 64.");
+            for (const auto& name : value.strings)
+                if (!validPath(name)) error(*this, key, key == "project.sources" ? "Invalid source path." : "Invalid import path.");
         } else if (path || key == "project.name" || key == "project.target" || key == "runtime.entry") {
             const auto text = string(key);
             if (!validPath(text)) error(*this, key, "Empty string or invalid control character.");
@@ -109,11 +113,17 @@ std::vector<std::string> configurationArguments(const std::vector<std::string>& 
     const auto& path = manifest.path;
     auto target = manifest.target();
     bool initialize = manifest.boolean("runtime.initialize", manifest.boolean("target.gsu.initialize_runtime"));
+    bool explicit_import_paths = false;
     for (std::size_t index = 1; index < arguments.size(); ++index) {
         if (arguments[index] == "--target") {
             if (++index == arguments.size()) throw std::runtime_error("--target requires a value.");
             target = parseTarget(arguments[index]);
-        } else if (arguments[index] == "--init-runtime") initialize = true;
+        } else if (consumer == Consumer::Compiler && (arguments[index] == "--import-path" || arguments[index] == "-I")) {
+            explicit_import_paths = true;
+            if (++index == arguments.size()) throw std::runtime_error(arguments[index - 1] + " requires a value.");
+        } else if (consumer == Consumer::Compiler && arguments[index].compare(0, 2, "-I") == 0)
+            explicit_import_paths = true;
+        else if (arguments[index] == "--init-runtime") initialize = true;
         else if (arguments[index] == "--no-init-runtime") initialize = false;
         else if (optionTakesValue(arguments[index], consumer)) {
             if (++index == arguments.size()) throw std::runtime_error(arguments[index - 1] + " requires a value.");
@@ -121,6 +131,10 @@ std::vector<std::string> configurationArguments(const std::vector<std::string>& 
     }
     const std::string prefix = target == TargetKind::GSU ? "target.gsu." : "target.spc700.";
     std::vector<std::string> result{arguments.front(), "--target", target == TargetKind::GSU ? "gsu" : "spc700"};
+    if (consumer == Consumer::Compiler && !explicit_import_paths)
+        if (const auto* paths = manifest.find("compiler.import_paths"))
+            for (const auto& directory : paths->strings)
+                result.insert(result.end(), {"--import-path", absolutePath(directory, parentPath(path))});
     const auto option = [&](const std::string& key, const std::string& flag) {
         if (const auto* value = manifest.find(key)) {
             result.push_back(flag);

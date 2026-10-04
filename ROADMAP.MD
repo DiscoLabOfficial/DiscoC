@@ -23,7 +23,8 @@ acceptance criteria, not release dates or a fixed number of pull requests.
 - [x] Compile-time constants/enums, layout queries/assertions, and packed/aligned structs.
 - [x] Compound updates, real for/continue control flow, and explicit switch fallthrough annotations.
 - [x] Lexical plotting with explicit plot coordinates and target-capability checks.
-- [x] Attributes, relative .dci module interfaces, transparent type aliases, and bounded imports.
+- [x] Attributes, source imports and .dci interfaces, transparent type aliases, and bounded dependency graphs.
+- [x] Local-first import search, TOML/CLI import paths, public API projections, and one-object-per-source project discovery.
 - [x] Declarative target selection with @cfg; @target remains a target assertion.
 - [x] Language warnings and a target-independent conformance suite.
 
@@ -219,6 +220,9 @@ These improvements follow correctness and deployment validation.
   defined calling, representation, aliasing, and far-code contracts.
 - [ ] **Project UX:** consider dependency-aware incremental builds after
   interface/source/configuration invalidation rules are specified.
+- [ ] **Logical modules:** evaluate named imports/namespaces independently of
+  filenames, with explicit visibility and compatibility rules; retain file
+  imports without introducing a textual preprocessor.
 - [ ] **Later numerics:** keep BF16/FP16 below deterministic integer and
   fixed-point work.
 

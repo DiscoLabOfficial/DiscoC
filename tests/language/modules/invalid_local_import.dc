@@ -1,0 +1,2 @@
+// error: Imports are allowed only at file scope
+void main() { import "source/api.dc"; }

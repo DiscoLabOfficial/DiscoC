@@ -1,0 +1,18 @@
+[project]
+name = "source-imports"
+target = "gsu"
+sources = ["src/main.dc"]
+
+[compiler]
+import_paths = ["modules"]
+
+[target.gsu]
+ram_origin = 0x0600
+
+[runtime]
+initialize = true
+
+[output]
+directory = "build"
+binary = "source-imports.bin"
+assembly = "source-imports.s"
