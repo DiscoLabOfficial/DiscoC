@@ -1,223 +1,333 @@
-# DiscoC: A C++23 Cross-Compilation Toolchain
+# DiscoC: A Systems Language and Cross-Compilation Toolchain
 
 [![CMake](https://github.com/DiscoLabOfficial/DiscoC/actions/workflows/cmake.yml/badge.svg)](https://github.com/DiscoLabOfficial/DiscoC/actions/workflows/cmake.yml)
 
-DiscoC is a custom **systems programming language and complete cross-compilation
-toolchain** (Compiler, Assembler, and Linker) for specialized hardware targets.
-The current production backend targets the **Super Nintendo's SuperFX (GSU)**
-RISC co-processor, while the SPC-700 target foundation is now being developed.
+DiscoC is a freestanding systems programming language and compiler, assembler,
+and linker for specialized hardware. Its C-like syntax is paired with explicit
+rules for small integers, banked memory, hardware access, and target capabilities.
+It is not an ISO C implementation.
 
-Written in **Modern C++ (C++23)**, this project aims to bring modern development practices to legacy hardware constraints. It features a custom **Relocatable Object File format**, a dedicated Linker for memory mapping resolution, and hardware-specific optimizations.
+The toolchain is written in C++23, with a C++14-compatible experimental DOS
+cross-build. The executable backend targets the SNES SuperFX (GSU); SPC700
+currently provides a frontend and IR foundation.
 
 > **Status: Pre-Alpha / Experimental**
-> This project is currently a work-in-progress. While fully functional (compiles and links binaries), the generated assembly focuses on correctness over speed. Advanced register allocation is on the roadmap.
-> The toolchain produces relocatable objects and a linked GSU payload. The final `.bin` still needs to be embedded into a valid SNES ROM image.
+> Correctness and explicit language contracts take priority over speed. GSU
+> compilation, assembly, linking, and runtime regressions are implemented, but
+> the language and object format can still change. A linked `.bin` is a GSU
+> payload, not a complete SNES ROM.
 
-## Features
+## Supported Targets
 
-### Language Features
-*   C-like syntax (`if`, `for`, `while`, variables, functions)
-*   `word` (16-bit) and `byte` (8-bit) integer types
-*   Full 24-bit pointer support with or without `far` keywords
-*   `struct` definitions with member access
-*   `rom const` for placing data directly into the ROM
-*   Direct hardware access via special keywords (`plot`, `set_color`, etc.)
+| Target | Current support |
+| --- | --- |
+| `gsu` / `superfx` | Source compilation, assembly, relocatable objects, linking, and ROM/RAM execution payloads. |
+| `spc700` | Language analysis, target-capability diagnostics, and verified IR inspection; no machine-code emission yet. |
 
-### Compiler & Toolchain
-*   **Two-Stage Build Process:** A separate compiler (`discc`) and linker (`discld`) for multi-file projects.
-*   **Assembly Export:** Inspect the compiler's output with the `--emit-asm` flag.
-*   **Explicit target selection:** Choose the processor from the build command,
-    for example `discc --target gsu program.dc` or `discc --target spc700 program.dc`.
-*   **Standalone Assembler:** `discas` consumes the emitted ca65-like `.s` syntax and produces the same relocatable `.o` format used by `discc`.
-*   **Intermediate Representation and CFG:** `discc --emit-ir` prints the verified, target-independent IR and its basic blocks/control-flow graph. Normal object compilation verifies this stage before the IR backend emits GSU code.
-*   **Hardware-Specific Optimizations:**
-    *   Recognizes `for` loops and converts them to the ultra-fast `LOOP` instruction.
-    *   Optimizes small integer arithmetic into single-byte immediate instructions.
-*   **Custom Object File Format** for relocatable code.
-*   **Multi-target foundation:** the object format and configuration identify
-    the target processor explicitly. The initial SPC-700 model is available for
-    IR inspection, with code generation planned for a later milestone.
+Select the target through the CLI or `discoc.toml`. Hardware-specific features
+are capability-checked rather than treated as portable language operations.
 
-### Architecture & Engineering Highlights
+## Language
 
-This is not just a parser; it is a full-stack compiler implementation including:
+The refactored language has a documented [language contract](docs/language-spec.md):
 
-*   **Custom Object File Format:** Designed a binary format supporting code/data sections, symbol tables, and relocation entries (patching `JAL` targets and global variable addresses at link-time).
-*   **The `discld` Linker:** A custom linker built from scratch to handle symbol resolution, memory placement, and binary patching across multiple compilation units.
-*   **Peephole Optimization:** The compiler analyzes the AST to detect high-level patterns (like decrementing `while` loops) and emits specialized hardware instructions (`LOOP` opcode) for zero-overhead looping.
-*   **Manual ABI Management:** Implements a full stack frame convention (Frame Pointer `R9`, Stack Pointer `R10`) to support recursion and local scope management.
-*   **Numerics Roadmap:** Planned software-defined **BF16 (Brain Float 16)** and **FP16** support for modern numerics on a 16-bit integer chip.
+- **Small, predictable values:** signed-by-default `byte` and `word`,
+  `unsigned` variants, byte-sized `bool`, and transparent `type` aliases
+  including `i8`, `u8`, `i16`, and `u16`.
+- **Deliberate numeric rules:** modular overflow for signed and unsigned integers,
+  explicit narrowing and signedness conversions, boolean comparisons,
+  short-circuit logic, bitwise operators, checked shifts, and software `/` and
+  `%` on GSU.
+- **Independent access properties:** `rom`/`ram` specify address space,
+  `const` restricts modification, and `volatile` preserves observable memory
+  accesses through the IR and backend.
+- **Bank-aware data pointers:** 16-bit near pointers and four-byte far
+  descriptors, pointer arithmetic, indexing, `->`, `null`, and checked casts.
+  Far accesses restore the configured near data bank. Typed word accesses
+  require two-byte alignment.
+- **Memory-resident aggregates:** structs, arrays of structs/pointers, initializer
+  lists, and character/string literals. Unsupported aggregate-by-value
+  operations are diagnosed instead of silently using an incompatible ABI.
+- **Static storage and visibility:** mutable RAM globals, ROM data, explicit
+  initialization, and `internal`/`export`/`extern` linkage.
+- **Compile-time tools:** `constexpr`, enums, constant-expression array sizes
+  and case labels, `sizeof`, `alignof`, `offsetof`, and `static_assert`.
+- **Structured control flow:** compound assignments, `++`/`--`, real
+  `for` loops with correct `continue` behavior, and explicit
+  `fallthrough;` annotations.
+- **Explicit hardware context:** lexical `plot { ... }` blocks with arbitrary
+  coordinate expressions, `plot.x`/`plot.y`, and GSU drawing operations.
+- **Attributes and interfaces:** `@cache`, `@packed`, `@align(N)`,
+  `@target(...)`, and top-level `@cfg(gsu)`/`@cfg(spc700)` selection.
+  Relative `.dci` module interfaces share declarations and types without a C
+  textual preprocessor.
 
-## "Hello, World!" (The "Add" Example)
+Warnings cover shadowing, unused declarations, uninitialized reads, unreachable
+code, and implicit fallthrough. `-Wall` also enables expensive-helper warnings;
+`-Werror` turns enabled warnings into errors.
 
-Here is a simple example of a DiscoC program with two functions.
+## Toolchain
+
+- `discc` compiles one source file or builds a multi-file project from
+  `discoc.toml`. `--check` checks the frontend/IR without emitting objects;
+  `--emit-ir` prints the verified IR.
+- `discas` assembles DiscoC's ca65-like assembly dialect into relocatable
+  objects.
+- `discld` resolves symbols, validates placement and relocations, and produces
+  a fixed-origin payload with optional runtime initialization and final
+  assembly export.
+
+The canonical backend uses typed IR and a control-flow graph, stable resolved
+symbol IDs, a dedicated IR verifier, and linear-scan register allocation.
+GSU lowering includes hardware-loop selection, switch dispatch optimization,
+and branch relaxation. The ABI uses `R9` as frame pointer and `R10` as stack
+pointer, with regression coverage for nested calls and stack restoration.
+
+Objects use a versioned little-endian format with CODE/DATA/RAM images,
+visibility, relocations, and alignment metadata. The reader and linker reject
+malformed records, invalid relocation spans, and unsupported bank crossings.
+Rebuild the tools together when the object format changes.
+
+## Building from Source
+
+Install a C++23-capable compiler. CMake is the primary build system; the helpers
+also support direct GCC/Clang builds.
+
+```powershell
+# Windows: build the tools and run the tests
+.\build.cmd -Test
+
+# Direct GCC build, without configuring a CMake project
+.\build.cmd -Backend Direct -Compiler g++
+```
+
+```bash
+# Linux/macOS: build the tools and run the tests
+bash build.sh --test
+
+# Alternatives
+make test
+bash build.sh --backend direct --compiler clang++
+```
+
+The default helper output is `build/<backend>-<configuration>`, such as
+`build/cmake-Release`. Multi-configuration CMake generators add a configuration
+subdirectory. Add that executable directory to `PATH`, or invoke the tools
+by their full paths in the examples below.
+
+Manual CMake builds remain supported:
+
+```bash
+git clone https://github.com/DiscoLabOfficial/DiscoC.git
+cd DiscoC
+cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release
+cmake --build build/native --config Release --parallel
+ctest --test-dir build/native -C Release --output-on-failure
+```
+
+See [Building DiscoC](docs/building.md) for prerequisites, MinGW/MSVC selection,
+static linking, direct-build tests, and the retained experimental DOS
+cross-build. Use a fresh build directory when changing compilers or generators.
+
+## Quick Start: A Multi-File Project
+
+Create these two source files. This example writes 42 to a host-agreed RAM
+address rather than treating registers after `STOP` as a result API.
 
 ```c
 // main.dc
-
-// Forward declare the function from another file.
 word add(word a, word b);
 
 void main() {
-    word result = add(30, 12);
-    // After this, R0 would hold the value 42.
+    volatile word* output = (volatile word*)0x0100;
+    *output = add(30, 12);
 }
 ```
 
 ```c
 // math.dc
-
 word add(word a, word b) {
     return a + b;
 }
 ```
 
-## Building from Source
+Place `discoc.toml` alongside them:
 
-This project uses C++23. Build helpers are available for Windows, Linux, and
-macOS, with CMake/Make/Ninja and direct GCC/Clang options.
+```toml
+[project]
+name = "multifile"
+target = "gsu"
+sources = ["main.dc", "math.dc"]
 
-```powershell
-# Windows: build and run the test suite
-.\build.cmd -Test
+[target.gsu]
+memory_mapping = "lorom"
+execution_memory = "ram"
+origin = 0x700900
+ram_bank = 0x00
+stack_pointer = 0x2000
 
-# Windows: build directly with g++, without configuring CMake
-.\build.cmd -Backend Direct -Compiler g++
+[runtime]
+initialize = true
+
+[output]
+directory = "build"
+binary = "multifile.bin"
+assembly = "final.s"
 ```
+
+Then run:
 
 ```bash
-# Linux/macOS: build and run the test suite
-bash build.sh --test
-
-# Alternatively, use Make or compile directly with GCC/Clang
-make test
-bash build.sh --backend direct --compiler clang++
+discc build
+# Equivalent explicit selection:
+discc --project discoc.toml
 ```
 
-See [Building DiscoC](docs/building.md) for prerequisites, compiler selection,
-output paths, static linking, direct-build tests, and DOS cross-compilation.
-The following manual CMake workflow remains supported:
+This produces `build/0-main.o`, `build/1-math.o`,
+`build/multifile.bin`, and `build/final.s`. The result is stored at
+`$70:0100`; load the payload at `$70:0900` and enter there with the host setup
+described below.
+
+To build the repository's original multi-file example from the repository root:
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/DiscoLabOfficial/DiscoC.git
-cd DiscoC
-
-# 2. Configure the build using CMake
-mkdir build
-cd build
-cmake ..
-
-# 3. Build the executables (discc, discas, and discld)
-cmake --build .
+discc build --config examples/multifile/discoc.toml
 ```
 
-After a successful build, the `discc`, `discas`, and `discld` executables will be located in the `build/Debug` or `build` directory.
+Configuration precedence is **built-in defaults → manifest → explicit CLI
+options**. Manifest paths resolve relative to the manifest, not the terminal's
+working directory. Sources, libraries, and outputs are explicit; this is not a
+package manager or an incremental build system.
 
-For MinGW on Windows, select its generator explicitly from a terminal where
-the MinGW compiler and `mingw32-make` are available:
+See [Project manifests](docs/project-manifest.md) for the supported TOML subset,
+schema, output-path rules, CLI overrides, and frontend-only project checks.
 
-```powershell
-cmake -S . -B build-mingw -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
-cmake --build build-mingw --parallel
-ctest --test-dir build-mingw --output-on-failure
-```
+## Individual Commands and Assembly Export
 
-Use a fresh build directory when changing generators. The execution tests
-check linked GSU payload results and stack behavior; they do not replace
-testing a complete ROM on an emulator or console.
-
-## Usage
-
-The DiscoC toolchain uses a two-step compile-and-link process.
-
-**1. Compile directly:** Use `discc` to compile each `.dc` source file into an intermediate `.o` object file.
+The separate compile/link workflow remains available for the same source files:
 
 ```bash
-# Compile main.dc into main.o
-./discc ../main.dc -o main.o
-
-# Compile math.dc into math.o
-./discc ../math.dc -o math.o
+discc main.dc -o main.o
+discc math.dc -o math.o
+discld main.o math.o --origin 0x700900 --init-runtime \
+  --ram-bank 0 --stack-pointer 0x2000 --emit-asm final.s -o multifile.bin
 ```
 
-**2. Assemble emitted assembly (optional):** Use `--emit-asm` followed by `discas` when you want to inspect or hand-edit the assembly before linking.
-
-This export comes from the same verified IR backend as direct object generation.
-Without edits, assembling and linking it with the same options produces identical
-payload bytes. For the **final linked** instructions and resolved addresses, use
-`discld --emit-asm final.s` when linking.
+There are two distinct assembly exports:
 
 ```bash
-./discc ../main.dc --emit-asm -o main.s
-./discas main.s -o main.o
+# Relocatable assembly for one compilation unit
+discc main.dc --emit-asm -o main.s
+discas main.s -o main.o
 
-./discc ../math.dc --emit-asm -o math.s
-./discas math.s -o math.o
+# Inspect target-independent IR, or check language rules only
+discc main.dc --emit-ir
+discc --check -Wall -Werror main.dc
+
+# SPC700 currently supports frontend/IR workflows only
+discc --target spc700 --check main.dc
 ```
 
-**3. Inspect the IR/CFG (optional):** Use `--emit-ir` to print the verified intermediate representation without producing an object file.
+Compiler assembly preserves symbols and relocations. Without edits, assembling
+and linking it with the same options produces the same bytes as direct object
+compilation.
+
+`discld --emit-asm final.s`, or `discc build --emit-asm final.s`, exports the
+**final linked payload**, including startup and resolved addresses. Reassemble
+it without adding startup or changing its origin:
 
 ```bash
-./discc ../main.dc --emit-ir
+discas final.s -o reconstructed.o
+discld reconstructed.o -o reconstructed.bin
 ```
 
-**4. Link:** Use `discld` to link all your `.o` files into a final GSU payload.
+`reconstructed.bin` matches the linked payload byte for byte. This is DiscoC
+assembly, not native WLA-DX syntax; `.byte` directives preserve encodings when
+needed.
 
-```bash
-# Link main.o and math.o into the final GSU payload
-./discld main.o math.o -o my_game.bin
-```
+## GSU Placement and Host Integration
 
-The resulting `my_game.bin` is a linked SuperFX/GSU payload, not a complete runnable SNES ROM. It must still be placed into a valid ROM image with the appropriate SNES header, mapping configuration, startup integration, and host-side resources before it can be executed by an emulator or console.
+LoROM with ROM execution at `$00:8000` is the default. HiROM remains an explicit
+`--memory-mapping hirom` choice, independent of RAM/ROM execution.
+Placement belongs in the CLI or manifest, not source-level `set` directives.
 
-### GSU execution placement
+For the quick-start RAM payload, the host must copy it to `$70:0900`, set
+`PBR=$70` and `R15=$0900`, grant the required bus access, and configure the
+other SNES/GSU registers. The bootstrap selects near RAM/stack bank `$70`,
+initializes `R10`, and enters `main`. After normal completion, the host can
+read the word at `$70:0100`.
 
-LoROM with ROM execution at `$00:8000` is the default. To select cartridge RAM
-execution, add the same directive to each `.dc` translation unit:
+The binary is fixed-origin, **not position-independent**. Storing it with
+WLA-DX `.incbin` does not relocate it. Relink to change its execution address;
+the complete payload must fit one accessible program bank.
 
-```c
-set execution_memory = ram; // Default RAM origin: $70:8000
-```
+Mutable globals begin at near RAM offset `$0400` by default; `--ram-origin`
+changes that placement. Use `--init-runtime` for static initialization, or
+explicitly accept the host-owned contract with `--host-initialized-globals`.
+Without runtime initialization, the host also owns the initial stack/data-bank
+setup.
 
-An explicit `set code_start_address = 0x710000;` overrides the default origin.
-HiROM remains available via `set memory_mapping = hirom;`; it is not the default
-and is separate from the ROM/RAM execution choice. RAM execution requires a
-host-side loader and GSU initialization; it does not automatically relocate
-ROM-qualified data into usable RAM storage. See [target configuration](docs/architecture.md#target-configuration).
+Far data accesses do not implement interbank code calls. RAM execution does not
+yet provide separate ROM placement for ROM-qualified constants. The host remains
+responsible for real cartridge capacity, memory reservations, stack space, and
+valid ROM integration. See [GSU loading and startup](docs/gsu-loading.md).
 
-Alternatively, choose the execution origin at link time, without changing source
-directives:
+## Freestanding Libraries and Examples
 
-```bash
-./discld main.o math.o --origin 0x706000 --init-runtime \
-  --ram-bank 0 --stack-pointer 0x2000 --emit-asm final.s -o payload.bin
-```
+`lib/core` provides near-RAM byte copy/move/fill routines and signed Q8.8/Q12.4
+fixed-point helpers. Fixed-point aliases are transparent integer types with
+explicit scaling helpers, not new primitive types or floating-point support.
+`lib/targets/gsu` contains target-specific graphics wrappers.
 
-Copy this payload to `$70:6000`, set `PBR=$70` and `R15=$6000`, and grant the
-required GSU bus access. The optional bootstrap selects data/stack bank `$70`,
-initializes `R10`, and jumps to `main`. Without `--init-runtime`, initialization
-remains the host's responsibility. The binary is **fixed-origin**, not
-position-independent; ROM `.incbin` storage placement does not relocate it.
-See [GSU loading and startup](docs/gsu-loading.md) for the full contract and a
-RAM-result example. Native WLA-DX output is not currently supported.
+Import a library's `.dci` interface and explicitly compile/link its matching
+`.dc` implementation, or list it in `project.sources`. Importing an interface
+does not automatically add an implementation to the build.
 
-## Project Roadmap
+Useful examples:
 
-This project is not as actively developed. You can view our roadmap and upcoming features in the `ROADMAP.md` file.
+- [Language core](examples/language_core/README.md): qualifiers, globals,
+  numeric operators, and lexical plotting.
+- [Module interfaces](examples/language_modules/README.md): shared types,
+  declarations, and multi-file linking.
+- [Fixed-point and memory helpers](examples/fixed_point/README.md): portable
+  core modules and explicit library linking.
+- [RAM result](examples/ram_result/README.md): host-visible output and startup.
+
+See the [freestanding library contract](docs/freestanding-library.md) for API,
+rounding, overflow, and memory-access limits.
+
+## Validation and Current Limits
+
+CTest covers language conformance, negative diagnostics, parser/object
+hardening, IR verification, multi-file linking, placement boundaries, project
+manifests, assembly/binary equivalence, and GSU execution regressions.
+Optional sanitizer and fuzzing configurations are documented in
+[Testing](docs/testing.md).
+
+Execution tests use an instruction-level GSU model, not a complete SNES
+emulator or physical hardware. Test a complete ROM in its deployment environment.
+
+SPC700 machine emission and DSP libraries, interbank calls, aggregate-by-value
+ABI support, function pointers, and unions remain future work. Inline assembly
+and interrupt/naked/section/calling-convention attributes have
+[design contracts](docs/inline-assembly-contract.md), not implemented source
+semantics. BF16/FP16 and wider fixed-point arithmetic are also deferred.
+
+See [ROADMAP.MD](ROADMAP.MD) for completed milestones and future work.
 
 ## Technical Documentation
 
-Detailed design and format documentation is available in the [`docs/`](docs/) directory:
-
-* [`architecture.md`](docs/architecture.md) — compiler pipeline, backends, ABI, and ownership boundaries.
-* [`ir-cfg.md`](docs/ir-cfg.md) — the typed intermediate representation and control-flow graph model.
-* [`object-format.md`](docs/object-format.md) — relocatable object-file layout and linker behavior.
-* [`testing.md`](docs/testing.md) — CTest regressions, sanitizer checks, and optional fuzzing.
-* [`building.md`](docs/building.md) — Windows/Linux/macOS build helpers and direct compiler options.
-* [`assembler.md`](docs/assembler.md) — the `discas` input language and supported assembly workflow.
-* [`gsu-loading.md`](docs/gsu-loading.md) — execution origins, RAM/stack initialization, and final assembly export.
-* [`spc700-target.md`](docs/spc700-target.md) — SPC-700 target model, ABI proposal, and initial language subset.
+- [Language specification](docs/language-spec.md): supported semantics and
+  compatibility limits.
+- [Project manifests](docs/project-manifest.md): TOML configuration and builds.
+- [Architecture](docs/architecture.md): compiler pipeline, ABI, and ownership.
+- [IR and CFG](docs/ir-cfg.md): intermediate representation and verification.
+- [Object format](docs/object-format.md): serialization and relocation contracts.
+- [Assembler](docs/assembler.md): supported assembly syntax and workflows.
+- [GSU loading](docs/gsu-loading.md): execution origins and host initialization.
+- [SPC700 foundation](docs/spc700-target.md): target model and planned backend.
+- [Building](docs/building.md) and [Testing](docs/testing.md): build paths and
+  regression tooling.
 
 ## License
 

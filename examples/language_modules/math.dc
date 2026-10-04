@@ -1,0 +1,7 @@
+module MathImplementation;
+import "math.dci";
+struct State math_state = {0, ELEMENTS};
+word add(word a, word b) {
+    math_state.value = a + b;
+    return math_state.value;
+}

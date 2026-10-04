@@ -30,7 +30,7 @@ IRCodeGenerator::IRCodeGenerator(
       m_config(config) {}
 
 void IRCodeGenerator::fail(const std::string& message, const Token& source) const {
-    throw CompilerError(message, source.line_number, source.col_number);
+    throw CompilerError(message, source);
 }
 
 void IRCodeGenerator::emitByte(std::uint8_t byte) {
@@ -59,7 +59,17 @@ void IRCodeGenerator::emitMove(std::uint8_t destination, std::uint8_t source) {
     emitByte(static_cast<std::uint8_t>(0x10 | destination));
 }
 
+void IRCodeGenerator::emitStackGuard(std::size_t required, const Token& source) {
+    if (required > 65535u) fail("Stack requirement exceeds one bank.", source);
+    const auto patch = m_object_file.code_section.size();
+    emitRegisterLiteral(3, 0);
+    addRelocation(std::string(GSUAbi::StackLimitPrefix) + std::to_string(required), patch, RelocationType::ADDR16_RAM);
+    emitByte(0xba); emitByte(0x3f); emitByte(0x63);
+    emitGuard(13, 2);
+}
+
 void IRCodeGenerator::emitPush(std::uint8_t reg) {
+    emitStackGuard(2, Token(TokenType::UNKNOWN, "", 0, 0));
     if (reg != 0) {
         emitByte(static_cast<std::uint8_t>(0x20 | reg));
     }
@@ -117,6 +127,9 @@ void IRCodeGenerator::emitAdjustStack(std::size_t bytes, bool add, const Token& 
 void IRCodeGenerator::emitFunctionEpilogue() {
     emitMove(GSUAbi::StackPointerRegister, GSUAbi::FramePointerRegister);
     if (m_current_function->name == "main") {
+        // A scalar-only entry may call a checked callee from another unit.
+        // Normal STOP always clears its volatile scratch/fault category.
+        emitRegisterLiteral(GSUAbi::AddressFaultRegister, 0);
         emitByte(static_cast<std::uint8_t>(OpCode::STOP));
         emitByte(static_cast<std::uint8_t>(OpCode::NOP));
         return;
@@ -135,10 +148,12 @@ void IRCodeGenerator::buildRegisterAllocation(const IRFunction& function) {
     // R0 is the expression accumulator, R1/R3 are backend temporaries, R9 is
     // the frame pointer, and R10-R15 have ABI or hardware roles. R5, R7, and
     // R8 are general-purpose registers for the current backend operations.
-    m_register_allocator.run(function, {5, 7, 8});
+    m_register_allocator = LinearScanAllocator{};
+    if (!m_checked_pointer_mode) m_register_allocator.run(function, {5, 7, 8});
 }
 
 bool IRCodeGenerator::usesRegisterAllocation(IRValueId value) const {
+    if (m_spill_offsets.count(value.value)) return false;
     const auto location = m_register_allocator.find(value);
     const auto uses = m_use_counts.find(value.value);
     return location != nullptr && location->has_register &&
@@ -152,7 +167,7 @@ void IRCodeGenerator::saveLiveRegistersForCall(
     for (const auto& pair : m_register_allocator.locations()) {
         const auto& location = pair.second;
         const auto uses = m_use_counts.find(pair.first);
-        if (!location.has_register || uses == m_use_counts.end() || uses->second <= 1 ||
+        if (m_spill_offsets.count(pair.first) || !location.has_register || uses == m_use_counts.end() || uses->second <= 1 ||
             location.start > m_current_instruction_position ||
             location.end < m_current_instruction_position ||
             (instruction.result.isValid() && pair.first == instruction.result.value)) {
@@ -202,22 +217,15 @@ void IRCodeGenerator::addRelocation(const std::string& symbol, std::size_t patch
 }
 
 void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
-    if (instruction.operation == "index") {
-        if (instruction.operands.size() != 2) {
-            fail("IR codegen: indexed address must have base and index operands.", instruction.source);
-        }
-        materialize(instruction.operands[1]);
-        if (instruction.immediate == 2) {
-            emitByte(static_cast<std::uint8_t>(OpCode::ALT2));
-            emitByte(static_cast<std::uint8_t>(OpCode::ADD_R));
-            emitByte(static_cast<std::uint8_t>(OpCode::ROL));
-        }
-        emitPush(0);
-        materialize(instruction.operands[0]);
-        emitPop(scratchRegister());
-        emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
+    if (instruction.operation == "temporary") {
+        emitMove(0, 9);
+        emitImmediateArithmetic(0x60, -instruction.immediate, instruction.source);
         return;
     }
+    // Indexing is the typed PointerOffset opcode, never an untyped legacy
+    // string operation with its own competing stride/direction semantics.
+    if (!instruction.operation.empty() && instruction.operation != "member")
+        fail("IR codegen: unsupported address operation.", instruction.source);
 
     if (instruction.operation == "member") {
         if (instruction.operands.size() != 1) {
@@ -225,6 +233,11 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
         }
         materialize(instruction.operands[0]);
         if (instruction.immediate > 0) {
+            if (m_checked_pointer_mode) {
+                if (instruction.immediate > 65535) fail("IR codegen: member offset exceeds one bank.", instruction.source);
+                emitCompare(0, static_cast<std::uint16_t>(65536 - instruction.immediate));
+                emitGuard(12, 3);
+            }
             emitMove(scratchRegister(), 0);
             emitLiteral(instruction.immediate);
             emitByte(static_cast<std::uint8_t>(0x50 | scratchRegister()));
@@ -232,15 +245,13 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
         return;
     }
 
-    if (instruction.symbol == "plot_x") {
-        emitMove(0, 1);
+    if (m_data_manager.hasSymbol(instruction.symbol) &&
+        m_data_manager.getEntries().at(instruction.symbol).storage == AddressSpace::RAM) {
+        const auto patch = m_object_file.code_section.size();
+        emitRegisterLiteral(0, 0);
+        addRelocation(m_data_manager.getEntries().at(instruction.symbol).link_name, patch, RelocationType::ADDR16_RAM);
         return;
     }
-    if (instruction.symbol == "plot_y") {
-        emitMove(0, 2);
-        return;
-    }
-
     const auto function_symbols = m_all_local_symbols.find(m_current_function->name);
     if (function_symbols != m_all_local_symbols.end() && instruction.symbol_id.isValid()) {
         const auto symbol = function_symbols->second.find(instruction.symbol_id);
@@ -250,6 +261,12 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
                 emitImmediateArithmetic(0x50, symbol->second.stackOffset, instruction.source);
             } else if (symbol->second.stackOffset < 0) {
                 emitImmediateArithmetic(0x60, std::abs(symbol->second.stackOffset), instruction.source);
+            }
+            if (symbol->second.type.alignment > 2) {
+                const auto alignment = symbol->second.type.alignment;
+                emitImmediateArithmetic(0x50, alignment - 1, instruction.source);
+                emitRegisterLiteral(3, static_cast<std::uint16_t>(~(alignment - 1)));
+                emitByte(0x73); // AND R3 rounds this allocation's padded base upward.
             }
             return;
         }
@@ -262,7 +279,9 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
         const auto patch_offset = m_object_file.code_section.size();
         emitByte(static_cast<std::uint8_t>(OpCode::IWT));
         emitWord(0);
-        addRelocation(instruction.symbol, patch_offset, RelocationType::ADDR16_IWT);
+        const auto name = m_data_manager.hasSymbol(instruction.symbol) ? m_data_manager.getEntries().at(instruction.symbol).link_name :
+            m_global_function_symbols.at(instruction.symbol).link_name;
+        addRelocation(name, patch_offset, RelocationType::ADDR16_IWT);
         return;
     }
 
@@ -276,68 +295,49 @@ void IRCodeGenerator::emitLoadIndirect(const IRInstruction& instruction) {
     }
     const auto& address = producer(instruction.operands[0], instruction.source);
     materialize(instruction.operands[0]);
-    if (address.opcode == IROpcode::Address &&
-        (address.symbol == "plot_x" || address.symbol == "plot_y")) {
-        return;
+    if (instruction.type.base == BaseType::STRUCT && instruction.type.pointer_level == 0)
+        fail("IR codegen: aggregate by-value loads are not supported.", instruction.source);
+    const bool far_address = isFarPointer(address.type);
+    if (m_checked_pointer_mode && !(address.opcode == IROpcode::Address &&
+        address.operation.empty() && address.symbol_id.isValid()))
+        emitAddressCheck(address.type, instruction.type.sizeInBytes);
+    if (far_address) emitSelectBank(4, address.type.space);
+    else if (address.type.space == AddressSpace::ROM) {
+        emitNearBank(3, AddressSpace::ROM);
+        emitSelectBank(3, AddressSpace::ROM);
     }
-    if (instruction.operation == "far") {
-        // A far pointer is laid out as bank byte at +0 and word offset at
-        // +2.  Keep the bank and offset in target registers while R0 is
-        // reused to address the pointer fields, matching the GSU ABI.
-        const std::uint8_t bank_reg = m_isInPlottingContext ? 3 : 1;
-        const std::uint8_t offset_reg = m_isInPlottingContext ? 4 : 2;
-        const std::uint8_t pointer_reg = m_isInPlottingContext ? 6 : 3;
-
-        emitByte(static_cast<std::uint8_t>(0x20 | bank_reg));
-        emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
-        emitByte(0x40);
-        emitMove(pointer_reg, 0);
-
-        emitLiteral(2);
-        emitByte(static_cast<std::uint8_t>(0x50 | pointer_reg));
-        emitByte(static_cast<std::uint8_t>(0x20 | offset_reg));
-        emitByte(0x40);
-
-        emitByte(static_cast<std::uint8_t>(instruction.type.space == AddressSpace::ROM
-                                                 ? OpCode::ALT3
-                                                 : OpCode::ALT2));
-        emitByte(static_cast<std::uint8_t>(0x20 | bank_reg));
-        emitByte(static_cast<std::uint8_t>(OpCode::GETC));
-
-        if (instruction.type.space == AddressSpace::ROM) {
-            emitMove(14, offset_reg);
-            if (usesByteStorage(instruction.type)) {
-                emitByte(static_cast<std::uint8_t>(OpCode::GETB));
-            } else {
-                emitByte(static_cast<std::uint8_t>(OpCode::GETB));
-                emitByte(0xDE);
-                emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
-                emitByte(static_cast<std::uint8_t>(OpCode::GETB));
+    emitMove(3, 0);
+    const auto load_word = [&](std::uint8_t destination, bool byte) {
+        if (address.type.space == AddressSpace::ROM) {
+            emitMove(14, 3);
+            emitByte(static_cast<std::uint8_t>(0x10 | destination));
+            emitByte(0xef);
+            if (!byte) {
+                emitByte(0xde);
+                // GETBH merges the high byte with the destination's low byte.
+                emitByte(static_cast<std::uint8_t>(0xb0 | destination));
+                emitByte(static_cast<std::uint8_t>(0x10 | destination));
+                emitByte(0x3d); emitByte(0xef);
             }
-        } else if (usesByteStorage(instruction.type)) {
-            emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
-            emitByte(static_cast<std::uint8_t>(0x40 | offset_reg));
         } else {
-            emitByte(static_cast<std::uint8_t>(0x40 | offset_reg));
+            emitByte(static_cast<std::uint8_t>(0x10 | destination));
+            if (byte) emitByte(0x3d);
+            emitByte(0x43);
         }
-        return;
+    };
+    if (isFarPointer(instruction.type)) {
+        load_word(4, false);
+        emitByte(0xd3); emitByte(0xd3);
     }
-    if (instruction.type.space == AddressSpace::ROM) {
-        emitMove(14, 0);
-        if (usesByteStorage(instruction.type)) {
-            emitByte(static_cast<std::uint8_t>(OpCode::GETB));
-        } else {
-            emitByte(static_cast<std::uint8_t>(OpCode::GETB));
-            emitByte(0xDE);
-            emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
-            emitByte(static_cast<std::uint8_t>(OpCode::GETB));
-        }
-        return;
+    load_word(0, usesByteStorage(instruction.type));
+    if (far_address) {
+        emitNearBank(3, address.type.space);
+        emitSelectBank(3, address.type.space);
     }
-    if (usesByteStorage(instruction.type)) {
-        emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
-    }
-    emitByte(0x40);
+    if (instruction.type.pointer_level > 0) {
+        const auto element = pointeeType(instruction.type);
+        emitPointerValueCheck(instruction.type, element.sizeInBytes > 0 ? element.sizeInBytes : 1);
+    } else if (instruction.type.base == BaseType::BOOL) emitBoolNormalization();
 }
 
 void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
@@ -348,17 +348,17 @@ void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
     const auto right = instruction.operands[1];
     std::int64_t immediate = 0;
     const bool right_immediate = constantValue(right, immediate) && immediate >= 0 && immediate <= 15;
+    const auto right_literal = immediate;
     const bool left_immediate = constantValue(left, immediate) && immediate >= 0 && immediate <= 15;
 
     std::uint8_t op_base = 0;
     if (instruction.operation == "+") op_base = 0x50;
     else if (instruction.operation == "-") op_base = 0x60;
-    else if (instruction.operation == "*") op_base = 0x80;
 
     if (op_base != 0 && right_immediate) {
         materialize(left);
         emitByte(static_cast<std::uint8_t>(OpCode::ALT2));
-        emitByte(static_cast<std::uint8_t>(op_base | immediate));
+        emitByte(static_cast<std::uint8_t>(op_base | right_literal));
         return;
     }
     if (op_base != 0 && left_immediate &&
@@ -374,6 +374,11 @@ void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
     materialize(left);
     emitPop(scratchRegister());
 
+    if (instruction.operation == "&" || instruction.operation == "|" || instruction.operation == "^" ||
+        instruction.operation == "<<" || instruction.operation == ">>" || instruction.operation == "/" || instruction.operation == "%") {
+        emitIntegerOperation(instruction);
+        return;
+    }
     if (instruction.operation == ">" || instruction.operation == "<" ||
         instruction.operation == ">=" || instruction.operation == "<=" ||
         instruction.operation == "==" || instruction.operation == "!=") {
@@ -396,7 +401,7 @@ void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
             fixups.push_back({patch_offset, label, instruction.source});
         };
 
-        const bool unsigned_comparison = instruction.type.is_unsigned;
+        const bool unsigned_comparison = producer(left, instruction.source).type.is_unsigned;
         const auto equal = static_cast<std::uint8_t>(OpCode::BEQ);
         const auto not_equal = static_cast<std::uint8_t>(OpCode::BNE);
         const auto less = static_cast<std::uint8_t>(
@@ -437,8 +442,24 @@ void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
         emitByte(static_cast<std::uint8_t>(op_base | scratchRegister()));
         return;
     }
+    if (instruction.operation == "*") {
+        // MULT consumes only eight bits. LMULT's low word is the full
+        // modular product for either signedness.
+        emitMove(6, scratchRegister());
+        emitByte(0x3d); emitByte(0x9f);
+        emitMove(0, 4);
+        return;
+    }
     fail("IR codegen: unsupported binary operation '" + instruction.operation + "'.",
          instruction.source);
+}
+
+void IRCodeGenerator::emitBoolNormalization() {
+    const auto zero = localLabel(), end = localLabel();
+    emitCompare(0, 0);
+    emitLocalJump(zero, 9);
+    emitLiteral(1); emitLocalJump(end);
+    bindLabel(zero); emitLiteral(0); bindLabel(end);
 }
 
 void IRCodeGenerator::emitCast(const IRInstruction& instruction) {
@@ -447,7 +468,33 @@ void IRCodeGenerator::emitCast(const IRInstruction& instruction) {
     }
     const auto& source = producer(instruction.operands[0], instruction.source);
     materialize(instruction.operands[0]);
-    if (instruction.type.sizeInBytes == 2 && source.type.sizeInBytes == 1 &&
+    if (instruction.type.pointer_level > 0) {
+        if (source.operation == "null") return;
+        if (!needsPointerSpill(instruction)) return;
+        const auto nonnull = localLabel(), done = localLabel();
+        emitCompare(0, 0); emitLocalJump(nonnull, 8);
+        if (isFarPointer(source.type)) { emitCompare(4, 0); emitLocalJump(nonnull, 8); }
+        if (isFarPointer(instruction.type)) emitRegisterLiteral(4, 0);
+        emitLocalJump(done);
+        bindLabel(nonnull);
+        if (isFarPointer(source.type) && !isFarPointer(instruction.type)) {
+            emitNearBank(3, instruction.type.space);
+            emitByte(0xb4); emitByte(0x3f); emitByte(0x63);
+            emitGuard(9, 4);
+        } else if (!isFarPointer(source.type) && isFarPointer(instruction.type)) {
+            emitNearBank(4, instruction.type.space);
+        }
+        const auto element = pointeeType(instruction.type);
+        emitAddressCheck(instruction.type, element.sizeInBytes > 0 ? element.sizeInBytes : 1);
+        bindLabel(done);
+        return;
+    }
+    if (instruction.type.base == BaseType::BOOL) {
+        emitBoolNormalization();
+    } else if (instruction.type.sizeInBytes == 1) {
+        emitByte(0x9e); // Explicit narrowing discards the high bits.
+        if (!instruction.type.is_unsigned) emitByte(0x95);
+    } else if (instruction.type.sizeInBytes == 2 && source.type.sizeInBytes == 1 &&
         !source.type.is_unsigned) {
         emitByte(static_cast<std::uint8_t>(OpCode::SEX));
     }
@@ -456,10 +503,15 @@ void IRCodeGenerator::emitCast(const IRInstruction& instruction) {
 void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
     std::vector<std::uint8_t> saved_registers;
     saveLiveRegistersForCall(instruction, saved_registers);
+    if (m_isInPlottingContext) { emitPush(1); emitPush(2); }
+    std::size_t argument_bytes = 0;
     for (auto argument = instruction.operands.rbegin();
          argument != instruction.operands.rend(); ++argument) {
         materialize(*argument);
         emitPush(0);
+        const bool far = isFarPointer(producer(*argument, instruction.source).type);
+        if (far) emitPush(4); // bank is first in the callee's ascending parameter layout.
+        argument_bytes += far ? 4 : 2;
     }
     emitByte(0x94);
     const auto patch_offset = m_object_file.code_section.size();
@@ -473,8 +525,8 @@ void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
         std::numeric_limits<std::size_t>::max() / GSUAbi::ParameterSlotSize) {
         fail("IR codegen: call argument area is too large.", instruction.source);
     }
-    emitAdjustStack(instruction.operands.size() * GSUAbi::ParameterSlotSize,
-                    true, instruction.source);
+    emitAdjustStack(argument_bytes, true, instruction.source);
+    if (m_isInPlottingContext) { emitPop(2); emitPop(1); }
     restoreRegistersAfterCall(saved_registers);
 }
 
@@ -484,7 +536,36 @@ void IRCodeGenerator::emitStoreIndirect(const IRInstruction& instruction) {
     }
     const auto address = instruction.operands[0];
     const auto value = instruction.operands[1];
+    const auto& target = producer(address, instruction.source);
     const bool byte = usesByteStorage(instruction.type);
+    if (m_checked_pointer_mode) {
+        const auto& pointer = producer(address, instruction.source).type;
+        if (pointer.space == AddressSpace::ROM)
+            fail("IR codegen: cannot store through a ROM address.", instruction.source);
+        if (instruction.type.base == BaseType::STRUCT && instruction.type.pointer_level == 0)
+            fail("IR codegen: aggregate by-value stores are not supported.", instruction.source);
+        materialize(value);
+        emitPush(0);
+        if (isFarPointer(instruction.type)) emitPush(4);
+        materialize(address);
+        if (!(target.opcode == IROpcode::Address && target.operation.empty() && target.symbol_id.isValid()))
+            emitAddressCheck(pointer, instruction.type.sizeInBytes);
+        emitMove(3, 0);
+        if (isFarPointer(pointer)) emitMove(6, 4);
+        if (isFarPointer(instruction.type)) emitPop(4);
+        emitPop(0);
+        if (isFarPointer(pointer)) emitSelectBank(6, AddressSpace::RAM);
+        if (isFarPointer(instruction.type)) {
+            emitStore(3, 4, false);
+            emitByte(0xd3); emitByte(0xd3);
+        }
+        emitStore(3, 0, byte);
+        if (isFarPointer(pointer)) {
+            emitNearBank(3, AddressSpace::RAM);
+            emitSelectBank(3, AddressSpace::RAM);
+        }
+        return;
+    }
 
     if (instruction.operation == "declare") {
         materialize(value);
@@ -519,6 +600,10 @@ void IRCodeGenerator::emitHardwareLoop(const IRInstruction& instruction) {
 
 void IRCodeGenerator::materialize(IRValueId value) {
     const auto& instruction = producer(value, Token(TokenType::UNKNOWN, "", 0, 0));
+    if (m_spill_offsets.count(value.value) && value.value != m_emitting_value.value) {
+        emitSpill(value, true);
+        return;
+    }
     const auto* location = m_register_allocator.find(value);
     if (location != nullptr && !location->has_register && !location->rematerializable) {
         fail("IR codegen: value with observable effects requires a spill slot.",
@@ -534,11 +619,23 @@ void IRCodeGenerator::materialize(IRValueId value) {
     }
 
     switch (instruction.opcode) {
+        case IROpcode::PlotCoordinateRead:
+            emitMove(0, instruction.immediate == 0 ? 1 : 2);
+            break;
         case IROpcode::Constant:
-            emitLiteral(instruction.immediate);
+            if (isFarPointer(instruction.type)) {
+                emitLiteral(instruction.immediate & 0xffff);
+                emitRegisterLiteral(4, static_cast<std::uint16_t>(instruction.immediate >> 16));
+            } else emitLiteral(instruction.immediate);
             break;
         case IROpcode::Address:
             emitAddress(instruction);
+            break;
+        case IROpcode::PointerCompare:
+            emitPointerCompare(instruction);
+            break;
+        case IROpcode::PointerOffset:
+            emitPointerOffset(instruction);
             break;
         case IROpcode::Load:
         case IROpcode::LoadIndirect:
@@ -548,6 +645,20 @@ void IRCodeGenerator::materialize(IRValueId value) {
             emitBinary(instruction);
             break;
         case IROpcode::Unary: {
+            if (instruction.operation == "!") {
+                materialize(instruction.operands.front());
+                emitByte(0x3f); emitByte(0xc1); // XOR #1, canonical bool.
+                break;
+            }
+            if (instruction.operation == "~") {
+                materialize(instruction.operands.front());
+                emitByte(0x4f);
+                if (usesByteStorage(instruction.type)) {
+                    emitByte(0x9e);
+                    if (!instruction.type.is_unsigned) emitByte(0x95);
+                }
+                break;
+            }
             std::int64_t literal = 0;
             if (instruction.operation == "-" && constantValue(instruction.operands.front(), literal)) {
                 emitLiteral(-literal);
@@ -555,6 +666,10 @@ void IRCodeGenerator::materialize(IRValueId value) {
                 materialize(instruction.operands.front());
                 emitByte(0x4F);
                 emitByte(0xD0);
+            }
+            if (usesByteStorage(instruction.type)) {
+                emitByte(0x9e);
+                if (!instruction.type.is_unsigned) emitByte(0x95);
             }
             break;
         }
@@ -572,6 +687,7 @@ void IRCodeGenerator::materialize(IRValueId value) {
         emitMove(location->physical_register, 0);
         m_materialized_values.insert(value.value);
     }
+    if (m_spill_offsets.count(value.value)) emitSpill(value, false);
     m_active_values.erase(value.value);
 }
 
@@ -792,14 +908,17 @@ void IRCodeGenerator::patchLocalBranches(const std::vector<LocalBranchFixup>& fi
 
 void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
     switch (instruction.opcode) {
+        case IROpcode::PlotCoordinateWrite:
+            materialize(instruction.operands.front());
+            emitMove(instruction.immediate == 0 ? 1 : 2, 0);
+            break;
         case IROpcode::StoreIndirect:
             emitStoreIndirect(instruction);
             break;
         case IROpcode::PlotBegin:
-            m_isInPlottingContext = true;
-            break;
         case IROpcode::PlotEnd:
-            m_isInPlottingContext = false;
+            // Context belongs to each IR instruction, not the order in which
+            // blocks happen to be emitted (return/break can skip plot.end).
             break;
         case IROpcode::Plot:
             if (instruction.operands.size() != 2) fail("IR codegen: plot shape is invalid.", instruction.source);
@@ -817,6 +936,9 @@ void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
             materialize(instruction.operands.front());
             emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
             emitByte(0x4E);
+            break;
+        case IROpcode::Cache:
+            emitByte(static_cast<std::uint8_t>(OpCode::CACHE));
             break;
         case IROpcode::Rpix:
             emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
@@ -856,14 +978,22 @@ void IRCodeGenerator::emitBlock(const IRBasicBlock& block) {
     m_materialized_values.clear();
     for (const auto& instruction : block.instructions) {
         m_current_instruction_position = m_emission_position++;
+        m_isInPlottingContext = instruction.in_plot_context;
         // A void call has no SSA result, but it is still a side effect that
         // must be emitted when it appears as an expression statement.
         if (instruction.opcode == IROpcode::Call &&
-            instruction.type.base == BaseType::VOID) {
+            isVoidValue(instruction.type)) {
             emitCall(instruction);
             continue;
         }
         if (instruction.producesValue()) {
+            if (m_spill_offsets.count(instruction.result.value)) {
+                m_emitting_value = instruction.result;
+                materialize(instruction.result);
+                m_emitting_value = IRValueId{};
+                continue;
+            }
+            if (m_checked_pointer_mode) continue;
             if (instruction.opcode == IROpcode::Call &&
                 instruction.result.isValid() &&
                 m_use_counts[instruction.result.value] == 0) {
@@ -914,27 +1044,66 @@ ObjectFile IRCodeGenerator::generateInternal(const IRModule& module) {
         m_current_instruction_position = 0;
         m_emission_position = 0;
         m_isInPlottingContext = false;
+        m_spill_offsets.clear();
+        m_emitting_value = IRValueId{};
+        m_local_label_serial = 0;
+        m_checked_pointer_mode = function.return_type.pointer_level > 0;
+        for (const auto& parameter : function.parameters)
+            m_checked_pointer_mode = m_checked_pointer_mode || parameter.type.pointer_level > 0;
 
         for (const auto& block : function.blocks) {
             for (const auto& instruction : block.instructions) {
+                if (instruction.memory_volatile || instruction.in_plot_context) m_checked_pointer_mode = true;
                 if (instruction.result.isValid()) {
                     m_values[instruction.result.value] = &instruction;
+                    if (instruction.opcode == IROpcode::PointerOffset ||
+                        (instruction.type.pointer_level > 0 && instruction.opcode != IROpcode::Address) ||
+                        instruction.type.pointer_level > 1 || isFarPointer(instruction.type))
+                        m_checked_pointer_mode = true;
                 }
                 for (const auto operand : instruction.operands) {
                     ++m_use_counts[operand.value];
                 }
             }
         }
+        int frame_bytes = function.total_local_alloc_size;
+        {
+            for (const auto& value : m_values) {
+                const auto opcode = value.second->opcode;
+                const bool observable = opcode == IROpcode::PlotCoordinateRead || opcode == IROpcode::LoadIndirect || opcode == IROpcode::Load || opcode == IROpcode::Call;
+                const bool arithmetic_check = opcode == IROpcode::Binary &&
+                    (value.second->operation == "/" || value.second->operation == "%" || value.second->operation == "<<" || value.second->operation == ">>");
+                if (!observable && !arithmetic_check && !(m_checked_pointer_mode && needsPointerSpill(*value.second))) continue;
+                const auto width = isFarPointer(value.second->type) ? 4 : 2;
+                if (frame_bytes > 65526 - width)
+                    fail("IR codegen: checked pointer frame exceeds one RAM bank.", value.second->source);
+                frame_bytes += width;
+                m_spill_offsets.emplace(value.first, -frame_bytes);
+            }
+            if (!m_spill_offsets.empty()) frame_bytes += 2; // Empty word below the last spill.
+        }
         buildRegisterAllocation(function);
 
         const auto function_offset = static_cast<std::uint32_t>(m_object_file.code_section.size());
-        m_object_file.symbol_table.push_back({function.name, SymbolSection::CODE, function_offset});
+        m_object_file.symbol_table.push_back({function.link_name.empty() ? function.name : function.link_name, SymbolSection::CODE, function_offset});
+        if (function.is_cached) emitByte(static_cast<std::uint8_t>(OpCode::CACHE));
+        emitStackGuard(static_cast<std::size_t>(frame_bytes) + 4, Token(TokenType::UNKNOWN, function.name, 1, 1));
+        if (m_checked_pointer_mode) {
+            emitMove(0, 10);
+            emitByte(0x3e); emitByte(0x71);
+            emitGuard(9, 1);
+            std::size_t parameters = 0;
+            for (const auto& parameter : function.parameters)
+                parameters += isFarPointer(parameter.type) ? 4 : 2;
+            emitCompare(10, static_cast<std::uint16_t>(65535u - parameters));
+            emitGuard(12, 2);
+        }
 
         emitPush(GSUAbi::LinkRegister);
         emitPush(GSUAbi::FramePointerRegister);
         emitMove(GSUAbi::FramePointerRegister, GSUAbi::StackPointerRegister);
-        if (function.total_local_alloc_size > 0) {
-            emitAdjustStack(static_cast<std::size_t>(function.total_local_alloc_size), false,
+        if (frame_bytes > 0) {
+            emitAdjustStack(static_cast<std::size_t>(frame_bytes), false,
                             Token(TokenType::UNKNOWN, "", 0, 0));
         }
 
@@ -953,8 +1122,24 @@ ObjectFile IRCodeGenerator::generateInternal(const IRModule& module) {
 
     for (const auto& pair : m_data_manager.getEntries()) {
         const auto& entry = pair.second;
+        if (entry.is_extern) continue;
+        if (entry.storage == AddressSpace::RAM) {
+            const auto alignment = static_cast<std::uint8_t>(std::max(2, entry.type.alignment));
+            m_object_file.ram_alignment = std::max(m_object_file.ram_alignment, alignment);
+            while (m_object_file.ram_section.size() % alignment) m_object_file.ram_section.push_back(0);
+            if (entry.bytes.size() > 65536u - m_object_file.ram_section.size())
+                fail("Static storage exceeds one RAM bank.", Token(TokenType::UNKNOWN, entry.label, 1, 1));
+            m_object_file.symbol_table.push_back({entry.link_name, SymbolSection::RAM,
+                static_cast<std::uint32_t>(m_object_file.ram_section.size())});
+            m_object_file.ram_section.insert(m_object_file.ram_section.end(), entry.bytes.begin(), entry.bytes.end());
+            continue;
+        }
+        m_object_file.data_alignment = 2;
+        // Every compiler-emitted data object starts on a word boundary.
+        // The linker also aligns concatenated DATA sections to two bytes.
+        if (m_object_file.data_section.size() & 1u) m_object_file.data_section.push_back(0);
         const auto offset = static_cast<std::uint32_t>(m_object_file.data_section.size());
-        m_object_file.symbol_table.push_back({entry.label, SymbolSection::DATA, offset});
+        m_object_file.symbol_table.push_back({entry.link_name, SymbolSection::DATA, offset});
         m_object_file.data_section.insert(m_object_file.data_section.end(),
                                           entry.bytes.begin(), entry.bytes.end());
     }

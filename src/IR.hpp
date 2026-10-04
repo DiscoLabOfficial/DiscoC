@@ -31,6 +31,8 @@ struct IRBlockId {
 enum class IROpcode {
     Constant,
     Address,
+    PointerOffset,
+    PointerCompare,
     Load,
     LoadIndirect,
     Store,
@@ -39,12 +41,15 @@ enum class IROpcode {
     Unary,
     Cast,
     Call,
+    PlotCoordinateRead,
+    PlotCoordinateWrite,
     PlotBegin,
     PlotEnd,
     Plot,
     SetColor,
     CMode,
     Rpix,
+    Cache,
     HardwareLoop,
     HardwareLoopEnd,
     Branch,
@@ -67,6 +72,8 @@ struct IRInstruction {
     std::string operation;
     std::string symbol;
     SymbolId symbol_id;
+    bool memory_volatile = false;
+    bool in_plot_context = false;
     Token source = {TokenType::UNKNOWN, "", 0, 0};
 
     bool isTerminator() const;
@@ -81,6 +88,7 @@ struct IRBasicBlock {
 
 struct IRFunction {
     std::string name;
+    std::string link_name;
     Type return_type;
     std::vector<Parameter> parameters;
     int total_local_alloc_size = 0;
@@ -93,6 +101,7 @@ struct IRFunction {
 
 struct IRModule {
     std::vector<IRFunction> functions;
+    TargetKind target = TargetKind::GSU;
 };
 
 class IRVerifier {
@@ -108,10 +117,23 @@ private:
 // verified before the target-specific backend consumes it.
 class IRLowerer : public Visitor {
 public:
+    explicit IRLowerer(TargetKind target = TargetKind::GSU) : m_target(target) {}
     IRModule lower(const std::vector<std::unique_ptr<Stmt>>& program);
 
     void visit(LiteralExpr& expr, const Type* context) override;
     void visit(VariableExpr& expr, const Type* context) override;
+    void visit(PlotCoordinateExpr& expr, const Type* context) override;
+    void visit(LayoutQueryExpr& expr, const Type* context) override;
+    void visit(NullExpr& expr, const Type* context) override;
+    void visit(InitializerListExpr& expr, const Type* context) override;
+    void visit(StringExpr& expr, const Type* context) override;
+    void visit(UpdateExpr& expr, const Type* context) override;
+    void visit(ForStmt& stmt) override;
+    void visit(ContinueStmt& stmt) override;
+    void visit(FallthroughStmt& stmt) override;
+    void visit(EnumDeclStmt& stmt) override;
+    void visit(StaticAssertStmt& stmt) override;
+    void visit(TypeAliasDeclStmt& stmt) override;
     void visit(BinaryExpr& expr, const Type* context) override;
     void visit(AssignExpr& expr, const Type* context) override;
     void visit(UnaryExpr& expr, const Type* context) override;
@@ -129,6 +151,7 @@ public:
     void visit(WhileStmt& stmt) override;
     void visit(ExpressionStmt& stmt) override;
     void visit(PlotStmt& stmt) override;
+    void visit(PlotBlockStmt& stmt) override;
     void visit(PlotBeginStmt& stmt) override;
     void visit(PlotEndStmt& stmt) override;
     void visit(SetColorStmt& stmt) override;
@@ -150,6 +173,7 @@ private:
     IRValueId createValue();
     IRValueId lowerExpression(Expr& expr);
     IRValueId lowerAddress(Expr& expr);
+    IRValueId lowerLogical(BinaryExpr& expr);
     IRValueId emitValue(IROpcode opcode, const Type& type, const Token& source,
                         const std::vector<IRValueId>& operands = {},
                         const std::string& operation = {},
@@ -165,11 +189,14 @@ private:
     void lowerSwitchBody(SwitchStmt& stmt, IRValueId condition, IRBlockId end_block);
     void requireFunction(const Token& source) const;
 
+    TargetKind m_target;
     IRModule m_module;
     std::size_t m_current_function = 0;
     IRBlockId m_current_block;
     IRValueId m_last_value;
     std::vector<IRBlockId> m_break_targets;
+    std::vector<IRBlockId> m_continue_targets;
+    bool m_plot_context = false;
 };
 
 std::string dumpIR(const IRModule& module);

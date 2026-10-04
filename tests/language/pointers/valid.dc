@@ -1,0 +1,1 @@
+struct S { word value; }; void main() { struct S data = {42}; struct S* p = &data; p->value++; word* empty = null; bool equal = empty == null; unsigned word address = (unsigned word)p; struct S* recovered = (struct S*)address; }

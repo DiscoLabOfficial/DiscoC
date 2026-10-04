@@ -1,0 +1,2 @@
+// error: Interfaces allow
+import "body.dci";

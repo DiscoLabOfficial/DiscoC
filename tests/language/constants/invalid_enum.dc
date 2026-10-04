@@ -1,0 +1,2 @@
+// error: Enum already defined
+enum Mode { A }; enum Mode { B };

@@ -1,0 +1,2 @@
+// error: Unsupported attribute
+@does_not_exist void main() {}

@@ -1,0 +1,2 @@
+// error: misaligned word access
+@packed struct Bad { byte a; word b; }; void main() { struct Bad data; data.b = 3; }

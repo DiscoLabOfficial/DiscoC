@@ -2,6 +2,7 @@
 #include "Parser.hpp"
 #include "SPC700Target.hpp"
 #include "CompilerError.hpp"
+#include "Placement.hpp"
 
 #include <iostream>
 #include <stdexcept>
@@ -47,37 +48,34 @@ int main() {
         }
 
         expectPlacement("", MemoryMapping::LoROM, 0x008000);
-        expectPlacement("set execution_memory = rom;", MemoryMapping::LoROM, 0x008000);
-        expectPlacement("set memory_mapping = lorom;", MemoryMapping::LoROM, 0x008000);
-        expectPlacement("set memory_mapping = hirom;", MemoryMapping::HiROM, 0x408000);
-        expectPlacement("set execution_memory = ram;", MemoryMapping::LoROM, 0x708000);
-        expectPlacement("set execution_memory = ram; set memory_mapping = lorom;",
-                        MemoryMapping::LoROM, 0x708000);
-        expectPlacement("set memory_mapping = hirom; set execution_memory = ram;",
-                        MemoryMapping::HiROM, 0x708000);
-        expectPlacement("set execution_memory = ram; set memory_mapping = hirom;",
-                        MemoryMapping::HiROM, 0x708000);
-        expectPlacement("set execution_memory = ram; set execution_memory = rom;",
-                        MemoryMapping::LoROM, 0x008000);
-        expectPlacement("set code_start_address = 0x710000; set execution_memory = ram;",
-                        MemoryMapping::LoROM, 0x710000);
-        expectPlacement("set execution_memory = ram; set code_start_address = 0x710000;",
-                        MemoryMapping::LoROM, 0x710000);
-        expectPlacement("set code_start_address = 0x709000; set memory_mapping = lorom; set execution_memory = ram;",
-                        MemoryMapping::LoROM, 0x709000);
-        expectPlacement("set code_start_address = 0x409000; set memory_mapping = hirom;",
-                        MemoryMapping::HiROM, 0x409000);
-        // Existing full-address placement remains valid without the new selector.
-        expectPlacement("set code_start_address = 0x708000;", MemoryMapping::LoROM, 0x708000);
-        expectDiagnostic("set execution_memory = wram;", "'rom' or 'ram'");
-        expectDiagnostic("set execution_memory = ram", "Expect ';'");
-        expectDiagnostic("set execution_memory = ram; set code_start_address = 0x8000;",
-                         "does not match selected execution memory");
-        expectDiagnostic("set code_start_address = 0x708000; set execution_memory = rom;",
-                         "does not match selected execution memory");
-        expectDiagnostic("set execution_memory = ram; set code_start_address = 0x7E8000;",
-                         "does not match selected execution memory");
-        expectDiagnostic("set execution_memory = ram;", "only supported for GSU", TargetKind::SPC700);
+        expectDiagnostic("set execution_memory = ram;", "Source-level set configuration");
+        expectDiagnostic("set memory_mapping = hirom;", "Source-level set configuration");
+        expectDiagnostic("set code_start_address = 0x710000;", "Source-level set configuration");
+        for (const auto mapping : {MemoryMapping::LoROM, MemoryMapping::HiROM}) {
+            for (const auto memory : {PlacementOptions::Execution::Automatic, PlacementOptions::Execution::Rom, PlacementOptions::Execution::Ram}) {
+                PlacementOptions options; options.mapping = mapping; options.execution = memory;
+                CompilerConfig placement; applyPlacement(placement, options);
+                const auto expected = memory == PlacementOptions::Execution::Ram ? 0x708000u :
+                    mapping == MemoryMapping::LoROM ? 0x8000u : 0x408000u;
+                if (placement.mapping != mapping || placement.code_start_address != expected)
+                    throw std::runtime_error("Incorrect CLI placement defaults.");
+                options.origin = memory == PlacementOptions::Execution::Ram ? 0x710000u : 0x409000u;
+                options.explicit_origin = true; applyPlacement(placement, options);
+                if (placement.code_start_address != options.origin) throw std::runtime_error("Explicit origin was lost.");
+            }
+        }
+        for (const auto origin : {0x1000000u, 0x7e8000u, 0x8000u}) {
+            PlacementOptions options; options.origin = origin; options.explicit_origin = true; options.execution = PlacementOptions::Execution::Ram;
+            bool rejected = false;
+            try { CompilerConfig placement; applyPlacement(placement, options); }
+            catch (const std::runtime_error&) { rejected = true; }
+            if (!rejected) throw std::runtime_error("Invalid placement accepted.");
+        }
+        PlacementOptions spc_options; spc_options.execution = PlacementOptions::Execution::Ram;
+        bool rejected = false;
+        try { CompilerConfig placement; placement.target = TargetKind::SPC700; applyPlacement(placement, spc_options); }
+        catch (const std::runtime_error&) { rejected = true; }
+        if (!rejected) throw std::runtime_error("GSU options accepted for SPC700.");
 
         if (SPC700Target::DataLayout::AddressBits != 16 ||
             SPC700Target::DataLayout::PointerBytes != 2 ||

@@ -98,7 +98,10 @@ void ObjectFile::read_vec(std::istream& in, std::vector<T>& vec,
 // Main I/O Methods
 
 void ObjectFile::write(const std::string& path) {
-    if (code_section.size() > MaxSectionBytes || data_section.size() > MaxSectionBytes) {
+    if (!data_alignment || data_alignment > 128 || (data_alignment & (data_alignment - 1)) ||
+        !ram_alignment || ram_alignment > 128 || (ram_alignment & (ram_alignment - 1)))
+        throw std::runtime_error("Object file: section alignment must be a power of two in 1..128.");
+    if (code_section.size() > MaxSectionBytes || data_section.size() > MaxSectionBytes || ram_section.size() > 65536) {
         throw std::runtime_error("Object file section exceeds the supported size limit.");
     }
     if (symbol_table.size() > MaxSymbolCount || relocation_table.size() > MaxRelocationCount) {
@@ -129,10 +132,13 @@ void ObjectFile::write(const std::string& path) {
     const auto mapping = static_cast<uint8_t>(config.mapping);
     write_u8(out, mapping);
     write_u32_le(out, config.code_start_address);
+    write_u8(out, data_alignment);
+    write_u8(out, ram_alignment);
 
     // Write sections
     write_vec(out, code_section);
     write_vec(out, data_section);
+    write_vec(out, ram_section);
 
     // Write symbol table
     uint32_t sym_count = static_cast<uint32_t>(symbol_table.size());
@@ -180,7 +186,7 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
     }
 
     const uint8_t version = read_u8(in, "format version");
-    if (version != CurrentFormatVersion) {
+    if (version != 3 && version != 4 && version != 5 && version != CurrentFormatVersion) {
         throw std::runtime_error("File has an unsupported DiscoC object format version: " + path);
     }
 
@@ -196,9 +202,20 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
         throw std::runtime_error("File has an invalid target configuration: " + path);
     }
     obj.config.mapping = static_cast<MemoryMapping>(mapping);
+    if (version >= 4) {
+        obj.data_alignment = read_u8(in, "DATA alignment");
+        if (!obj.data_alignment || obj.data_alignment > (version >= 6 ? 128 : 2) || (obj.data_alignment & (obj.data_alignment - 1)))
+            throw std::runtime_error("Object file: invalid DATA alignment.");
+    }
     
+    if (version >= 6) {
+        obj.ram_alignment = read_u8(in, "RAM alignment");
+        if (!obj.ram_alignment || obj.ram_alignment > 128 || (obj.ram_alignment & (obj.ram_alignment - 1)))
+            throw std::runtime_error("Object file: invalid RAM alignment.");
+    }
     read_vec(in, obj.code_section, MaxSectionBytes, "code section");
     read_vec(in, obj.data_section, MaxSectionBytes, "data section");
+    if (version >= 5) read_vec(in, obj.ram_section, 65536u, "RAM section");
 
     const uint32_t sym_count = read_u32_le(in, "symbol count");
     if (sym_count > MaxSymbolCount) {
@@ -213,13 +230,13 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
         obj.symbol_table[i].name = read_string(in, "symbol name");
         uint8_t section = 0;
         section = read_u8(in, "symbol section");
-        if (section > static_cast<uint8_t>(SymbolSection::DATA)) {
+        if (section > static_cast<uint8_t>(version >= 5 ? SymbolSection::RAM : SymbolSection::DATA)) {
             throw std::runtime_error("Object file has an invalid symbol section: " + path);
         }
         obj.symbol_table[i].section = static_cast<SymbolSection>(section);
         obj.symbol_table[i].offset = read_u32_le(in, "symbol offset");
         const auto section_size = obj.symbol_table[i].section == SymbolSection::CODE
-            ? obj.code_section.size() : obj.data_section.size();
+            ? obj.code_section.size() : obj.symbol_table[i].section == SymbolSection::DATA ? obj.data_section.size() : obj.ram_section.size();
         if (obj.symbol_table[i].offset > section_size) {
             throw std::runtime_error("Object file has a symbol outside its section: " + path);
         }
@@ -244,7 +261,7 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
         obj.relocation_table[i].section_to_patch = static_cast<SymbolSection>(section);
         obj.relocation_table[i].patch_offset = read_u32_le(in, "relocation offset");
         const uint8_t type = read_u8(in, "relocation type");
-        if (type > static_cast<uint8_t>(RelocationType::ADDR24_OFFSET)) {
+        if (type > static_cast<uint8_t>(version >= 5 ? RelocationType::ADDR16_RAM : RelocationType::ADDR24_OFFSET)) {
             throw std::runtime_error("Object file has an invalid relocation type: " + path);
         }
         obj.relocation_table[i].type = static_cast<RelocationType>(type);

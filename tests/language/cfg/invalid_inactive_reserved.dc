@@ -1,0 +1,3 @@
+// error: reserved; its ABI/lowering contract is not implemented
+@cfg(gsu) @naked void gsu_only() {}
+@cfg(spc700) @naked void spc_only() {}

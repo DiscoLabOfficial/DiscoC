@@ -1,0 +1,6 @@
+import "left.dci";
+import "right.dci";
+@align((Shared)4)
+struct Packet { u8 tag; Shared value; };
+static_assert(alignof(struct Packet) == 4);
+void main() { Left a = 42; Right b = a; Shared c = b; }

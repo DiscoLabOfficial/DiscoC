@@ -41,4 +41,5 @@ private:
 
     void number(char first_digit);
     void identifier();
+    void quotedLiteral(char quote);
 };

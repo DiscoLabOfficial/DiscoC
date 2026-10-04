@@ -1,0 +1,2 @@
+// error: Struct initializer requires members
+struct S { word a; }; void main() { struct S a; struct S b = a; }

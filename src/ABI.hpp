@@ -4,10 +4,17 @@
 #include <cstdint>
 
 // Stable compiler-side names for the GSU calling convention. The convention
-// intentionally remains compatible with the existing stack-frame layout.
+// retains the scalar stack-frame layout; far argument slots are four bytes.
 namespace GSUAbi {
+constexpr const char* StackLimitPrefix = "__disco_stack_limit_";
 
 constexpr std::uint8_t ReturnValueRegister = 0;
+// Far returns: R0 = offset, R4 = zero-extended bank. R6 is a volatile
+// temporary; on a checked-address STOP it reports the failure category.
+constexpr std::uint8_t FarBankRegister = 4;
+constexpr std::uint8_t AddressFaultRegister = 6;
+constexpr const char* NearRamBankSymbol = "__disco_near_ram_bank";
+constexpr const char* NearRomBankSymbol = "__disco_near_rom_bank";
 constexpr std::uint8_t FramePointerRegister = 9;
 constexpr std::uint8_t StackPointerRegister = 10;
 constexpr std::uint8_t LinkRegister = 11;
@@ -24,7 +31,7 @@ constexpr int FirstParameterOffset = 6;
 
 // R9 and R11 are saved by every non-entry function. Allocated value registers
 // are caller-saved and must be protected around calls when their values remain
-// live. R0, R1, and R3 are volatile backend registers.
+// live. R0, R1, R3, R4, and R6 are volatile backend registers.
 constexpr std::uint8_t FirstAllocatedValueRegister = 5;
 
 } // namespace GSUAbi

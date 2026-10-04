@@ -1,0 +1,3 @@
+// error: const-qualified
+type Read = const i16*;
+void main() { Read pointer = (Read)0x100; *pointer = 1; }

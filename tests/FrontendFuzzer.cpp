@@ -2,6 +2,7 @@
 #include "Lexer.hpp"
 #include "ObjectFile.hpp"
 #include "Parser.hpp"
+#include "ProjectManifest.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -35,6 +36,12 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         (void)ObjectFile::readBytes(bytes);
     } catch (...) {
         // Invalid object bytes are an expected fuzzing result.
+    }
+
+    try {
+        (void)DiscoProject::Manifest::parse(input, "fuzz.toml");
+    } catch (...) {
+        // Invalid or unsupported manifest syntax is an expected fuzzing result.
     }
 
     return 0;

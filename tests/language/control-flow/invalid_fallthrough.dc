@@ -1,0 +1,2 @@
+// error: fallthrough must
+void main() { fallthrough; }

@@ -1,0 +1,2 @@
+// error: Duplicate attribute
+@cache @cache void main() {}

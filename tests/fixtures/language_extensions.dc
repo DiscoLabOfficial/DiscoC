@@ -1,0 +1,21 @@
+const word TILE = 8;
+const word WIDTH = 32;
+constexpr word AREA = WIDTH * TILE;
+enum Mode { MODE_4BPP = 2, MODE_8BPP = 1 << 4 };
+@packed struct Header { byte tag; byte length; };
+@align(8) struct State { word value; byte mode; };
+word buffer[AREA];
+struct State state;
+static_assert(sizeof(struct Header) == 2);
+static_assert(alignof(struct State) == 8);
+static_assert(sizeof(struct State) == 8);
+static_assert(offsetof(struct State, mode) == 2);
+@target(gsu) void main() {
+    struct State local;
+    local.value = 149;
+    state.value = local.value;
+    state.mode = (byte)MODE_4BPP;
+    buffer[3] = WIDTH * TILE;
+    switch (16) { case 1 << 4: buffer[4] = state.value; break; default: buffer[4] = 0; }
+    *(word*)0x100 = buffer[3] + buffer[4];
+}

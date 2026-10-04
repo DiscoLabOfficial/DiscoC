@@ -1,0 +1,2 @@
+// error: address space
+void main() { word* p = null; rom word* q = (rom word*)p; }

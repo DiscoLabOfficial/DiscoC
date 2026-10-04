@@ -1,0 +1,6 @@
+// Internal functions are object-local; other units may reuse this name.
+internal word identity(word value) { return value ^ 0; }
+
+export word add(word left, word right) {
+    return identity(left + right);
+}

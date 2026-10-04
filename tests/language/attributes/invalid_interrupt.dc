@@ -1,0 +1,2 @@
+// error: reserved; its ABI/lowering contract is not implemented
+@interrupt void main() {}

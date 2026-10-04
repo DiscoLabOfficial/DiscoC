@@ -1,0 +1,3 @@
+module AliasLeft;
+import "shared.dci";
+type Left = Shared;

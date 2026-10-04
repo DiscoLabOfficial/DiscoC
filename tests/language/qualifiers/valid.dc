@@ -1,0 +1,1 @@
+void main() { const word a = 42; const word* p = &a; volatile word* port = (volatile word*)0x100; *port = *p; *port; *port; }

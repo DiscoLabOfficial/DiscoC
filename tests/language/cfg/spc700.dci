@@ -1,0 +1,2 @@
+module ConfiguredSPC700;
+type TargetValue = u16;

@@ -1,0 +1,2 @@
+// error: constant expression
+word get(); constexpr word value = get();

@@ -1,0 +1,2 @@
+// error: signed/unsigned
+void main() { word a = 1; unsigned word b = 1; a + b; }

@@ -1,0 +1,13 @@
+module Main;
+import "math.dci";
+@align(16) struct Buffer { word words[4]; };
+struct Buffer buffer = {{1, 2, 3, 4}};
+void main() {
+    word values[] = {46, 103};
+    *(word*)0x100 = add(values[0], values[1]);
+    *(word*)0x102 = (word)alignof(struct Buffer);
+    for (word i = 0; i < 4; i++) {
+        if (i == 2) continue;
+        buffer.words[i] += math_state.count;
+    }
+}

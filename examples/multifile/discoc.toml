@@ -1,0 +1,19 @@
+[project]
+name = "multifile"
+target = "gsu" # "superfx" is an accepted alias.
+sources = ["main.dc", "math.dc"]
+
+[target.gsu]
+memory_mapping = "lorom"
+execution_memory = "ram"
+origin = 0x700900
+ram_bank = 0x00
+stack_pointer = 0x2000
+
+[runtime]
+initialize = true
+
+[output]
+directory = "build"
+binary = "multifile.bin"
+assembly = "final.s"

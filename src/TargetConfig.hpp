@@ -7,6 +7,33 @@ enum class TargetKind : std::uint8_t {
     SPC700 = 1
 };
 
+enum class TargetCapability { Graphics, InstructionCache, HardwareLoops, FarData };
+
+inline bool supportsCapability(TargetKind target, TargetCapability capability) {
+    switch (target) {
+        case TargetKind::GSU:
+            switch (capability) {
+                case TargetCapability::Graphics:
+                case TargetCapability::InstructionCache:
+                case TargetCapability::HardwareLoops:
+                case TargetCapability::FarData: return true;
+            }
+            break;
+        case TargetKind::SPC700: return false;
+    }
+    return false;
+}
+
+inline const char* capabilityName(TargetCapability capability) {
+    switch (capability) {
+        case TargetCapability::Graphics: return "graphics";
+        case TargetCapability::InstructionCache: return "instruction-cache";
+        case TargetCapability::HardwareLoops: return "hardware-loops";
+        case TargetCapability::FarData: return "far-data";
+    }
+    return "unknown";
+}
+
 // Target placement is part of the object-file contract.  Keeping it in a
 // small standalone header lets both the compiler and linker share the same
 // representation without making ObjectFile depend on Parser.

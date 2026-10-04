@@ -1,0 +1,5 @@
+@cfg(gsu) import "gsu.dci";
+@cfg(spc700) import "spc700.dci";
+@cfg(gsu) i16 selected() { return 149; }
+@cfg(spc700) i16 selected() { return 42; }
+void main() { selected(); }

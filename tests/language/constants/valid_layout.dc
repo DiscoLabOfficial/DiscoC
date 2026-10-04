@@ -1,0 +1,3 @@
+struct Pair { word a; word b; };
+enum Size { PAIR_BYTES = (word)sizeof(struct Pair) };
+static_assert(PAIR_BYTES == 4);

@@ -1,0 +1,3 @@
+// error: Misaligned
+@align(8) struct State { word value; };
+void main() { struct State* pointer = (struct State*)0x104; }

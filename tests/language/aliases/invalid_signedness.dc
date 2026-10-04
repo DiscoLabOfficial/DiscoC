@@ -1,0 +1,2 @@
+// error: Signedness is fixed by a type alias
+unsigned i8 value;

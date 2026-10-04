@@ -1,4 +1,6 @@
+#include "IntegerLiteral.hpp"
 #include "IR.hpp"
+#include "GsuPointer.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -16,8 +18,11 @@ constexpr std::uint32_t MaxIRValuesPerFunction = 1'000'000;
 
 bool isValueOpcode(IROpcode opcode) {
     switch (opcode) {
+        case IROpcode::PlotCoordinateRead:
         case IROpcode::Constant:
         case IROpcode::Address:
+        case IROpcode::PointerOffset:
+        case IROpcode::PointerCompare:
         case IROpcode::Load:
         case IROpcode::LoadIndirect:
         case IROpcode::Binary:
@@ -48,6 +53,8 @@ std::string opcodeName(IROpcode opcode) {
     switch (opcode) {
         case IROpcode::Constant: return "const";
         case IROpcode::Address: return "address";
+        case IROpcode::PointerOffset: return "pointer.offset";
+        case IROpcode::PointerCompare: return "pointer.compare";
         case IROpcode::Load: return "load";
         case IROpcode::LoadIndirect: return "load.indirect";
         case IROpcode::Store: return "store";
@@ -56,12 +63,15 @@ std::string opcodeName(IROpcode opcode) {
         case IROpcode::Unary: return "unary";
         case IROpcode::Cast: return "cast";
         case IROpcode::Call: return "call";
+        case IROpcode::PlotCoordinateRead: return "plot.coordinate.read";
+        case IROpcode::PlotCoordinateWrite: return "plot.coordinate.write";
         case IROpcode::PlotBegin: return "plot.begin";
         case IROpcode::PlotEnd: return "plot.end";
         case IROpcode::Plot: return "plot";
         case IROpcode::SetColor: return "setcolor";
         case IROpcode::CMode: return "cmode";
         case IROpcode::Rpix: return "rpix";
+        case IROpcode::Cache: return "cache";
         case IROpcode::HardwareLoop: return "hardware_loop";
         case IROpcode::HardwareLoopEnd: return "hardware_loop.end";
         case IROpcode::Branch: return "br";
@@ -82,21 +92,23 @@ std::string typeName(const Type& type) {
 void verifyTarget(const IRFunction& function, IRBlockId target, const Token& source) {
     if (!target.isValid() || target.value >= function.blocks.size()) {
         throw CompilerError("IR verifier: branch target is outside the function.",
-                            source.line_number, source.col_number);
+                            source);
     }
 }
 
 bool isVoidType(const Type& type) {
-    return type.base == BaseType::VOID;
+    return type.base == BaseType::VOID && type.pointer_level == 0;
 }
 
 bool isIntegerType(const Type& type) {
     return type.pointer_level == 0 &&
-           (type.base == BaseType::BYTE || type.base == BaseType::WORD);
+           (type.base == BaseType::BYTE || type.base == BaseType::WORD || type.base == BaseType::BOOL);
 }
 
 bool isLegalBinaryOperation(const std::string& operation) {
     return operation == "+" || operation == "-" || operation == "*" ||
+           operation == "%" || operation == "&" || operation == "|" || operation == "^" ||
+           operation == "<<" || operation == ">>" ||
            operation == "/" || operation == ">" || operation == "<" ||
            operation == ">=" || operation == "<=" || operation == "==" ||
            operation == "!=";
@@ -109,7 +121,7 @@ bool sameValueType(const Type& left, const Type& right) {
            left.pointer_level == right.pointer_level &&
            left.array_size == right.array_size &&
            (left.pointer_level == 0 ||
-            (left.is_far == right.is_far && left.space == right.space));
+            (samePointerLayers(left, right) && left.space == right.space));
 }
 
 } // namespace
@@ -120,15 +132,38 @@ bool IRInstruction::isTerminator() const {
 
 bool IRInstruction::producesValue() const {
     return isValueOpcode(opcode) &&
-           !(opcode == IROpcode::Call && type.base == BaseType::VOID);
+           !(opcode == IROpcode::Call && isVoidValue(type));
 }
 
 void IRVerifier::fail(const std::string& message, const Token& source) {
-    throw CompilerError(message, source.line_number, source.col_number);
+    throw CompilerError(message, source);
 }
 
 void IRVerifier::verify(const IRModule& module) {
+    const auto check_type = [&](const Type& type, const Token& source) {
+        if ((isFarPointer(type) || std::find(type.pointer_reach.begin(), type.pointer_reach.end(), true) != type.pointer_reach.end()) &&
+            !supportsCapability(module.target, TargetCapability::FarData))
+            fail("IR verifier: target lacks far-data capability.", source);
+    };
     for (const auto& function : module.functions) {
+        check_type(function.return_type, Token(TokenType::UNKNOWN, function.name, 1, 1));
+        for (const auto& parameter : function.parameters) check_type(parameter.type, parameter.name);
+        if (function.is_cached && !supportsCapability(module.target, TargetCapability::InstructionCache))
+            fail("IR verifier: target lacks instruction-cache capability.", Token(TokenType::UNKNOWN, "", 1, 1));
+        for (const auto& block : function.blocks) for (const auto& instruction : block.instructions) {
+            check_type(instruction.type, instruction.source);
+            const auto opcode = instruction.opcode;
+            const bool graphics = instruction.in_plot_context || opcode == IROpcode::PlotCoordinateRead ||
+                opcode == IROpcode::PlotCoordinateWrite || opcode == IROpcode::PlotBegin || opcode == IROpcode::PlotEnd ||
+                opcode == IROpcode::Plot || opcode == IROpcode::SetColor || opcode == IROpcode::CMode || opcode == IROpcode::Rpix;
+            if (graphics && !supportsCapability(module.target, TargetCapability::Graphics))
+                fail("IR verifier: target lacks graphics capability.", instruction.source);
+            if (opcode == IROpcode::Cache && !supportsCapability(module.target, TargetCapability::InstructionCache))
+                fail("IR verifier: target lacks instruction-cache capability.", instruction.source);
+            if ((opcode == IROpcode::HardwareLoop || opcode == IROpcode::HardwareLoopEnd) &&
+                !supportsCapability(module.target, TargetCapability::HardwareLoops))
+                fail("IR verifier: target lacks hardware-loops capability.", instruction.source);
+        }
         verifyFunction(function);
     }
 }
@@ -148,6 +183,20 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
         fail("IR verifier: function entry block must be block zero.",
              Token(TokenType::UNKNOWN, "", 0, 0));
     }
+
+    const auto verifyPointerType = [&](const Type& type, const Token& source, int maximum_depth) {
+        if (type.pointer_level < 0 || type.pointer_level > maximum_depth ||
+            (!type.pointer_reach.empty() && type.pointer_reach.size() != static_cast<std::size_t>(type.pointer_level)) ||
+            (!type.pointer_spaces.empty() && type.pointer_spaces.size() != static_cast<std::size_t>(type.pointer_level)) ||
+            (!type.pointee_qualifiers.empty() && type.pointee_qualifiers.size() != static_cast<std::size_t>(type.pointer_level)) ||
+            (!type.pointer_reach.empty() && type.is_far != type.pointer_reach.back()) ||
+            (!type.pointer_spaces.empty() && type.space != type.pointer_spaces.back()) ||
+            (type.pointer_level > 0 && type.sizeInBytes != (isFarPointer(type) ? 4 : 2)))
+            fail("IR verifier: invalid pointer representation or layer metadata.", source);
+    };
+    verifyPointerType(function.return_type, Token(TokenType::UNKNOWN, "", 0, 0), MaxPointerDepth);
+    for (const auto& parameter : function.parameters)
+        verifyPointerType(parameter.type, Token(TokenType::UNKNOWN, "", 0, 0), MaxPointerDepth);
 
     struct Definition {
         std::size_t block = 0;
@@ -173,6 +222,26 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
         for (std::size_t instruction_index = 0;
              instruction_index < block.instructions.size(); ++instruction_index) {
             const auto& instruction = block.instructions[instruction_index];
+            const auto& type = instruction.type;
+            if (instruction.memory_volatile && instruction.opcode != IROpcode::LoadIndirect &&
+                instruction.opcode != IROpcode::StoreIndirect)
+                fail("IR verifier: volatile metadata on a non-memory instruction.", instruction.source);
+            if (instruction.operation == "null" && instruction.opcode == IROpcode::Constant &&
+                (instruction.immediate != 0 || type.pointer_level == 0 || !instruction.operands.empty()))
+                fail("IR verifier: invalid null pointer constant.", instruction.source);
+            verifyPointerType(type, instruction.source,
+                instruction.opcode == IROpcode::Address ? MaxAddressPointerDepth : MaxPointerDepth);
+            if (instruction.opcode == IROpcode::Constant && type.pointer_level > 0 && instruction.operation != "null") {
+                try {
+                    if (instruction.immediate < 0 || instruction.immediate > (isFarPointer(type) ? 0xffffff : 0xffff))
+                        throw std::runtime_error("Pointer address exceeds its representation.");
+                    const auto element = pointeeType(type);
+                    GsuPointer::validate(static_cast<std::uint32_t>(instruction.immediate), type.space, isFarPointer(type),
+                                          element.sizeInBytes > 0 ? element.sizeInBytes : 1, storageAlignment(element));
+                } catch (const std::exception& error) {
+                    fail(std::string("IR verifier: invalid pointer constant: ") + error.what(), instruction.source);
+                }
+            }
             if (instruction.isTerminator() &&
                 instruction_index + 1 != block.instructions.size()) {
                 fail("IR verifier: instruction appears after a terminator.", instruction.source);
@@ -371,20 +440,76 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
             }
 
             switch (instruction.opcode) {
+                case IROpcode::Cache:
+                    if (!instruction.operands.empty() || !instruction.targets.empty()) fail("IR verifier: cache has no operands or targets.", instruction.source);
+                    break;
+                case IROpcode::PlotCoordinateRead:
+                case IROpcode::PlotCoordinateWrite:
+                    if (!instruction.in_plot_context || instruction.immediate < 0 || instruction.immediate > 1 ||
+                        instruction.type.pointer_level != 0 || instruction.type.base != BaseType::WORD ||
+                        instruction.type.is_unsigned || instruction.operands.size() !=
+                            (instruction.opcode == IROpcode::PlotCoordinateRead ? 0u : 1u) ||
+                        (instruction.opcode == IROpcode::PlotCoordinateWrite &&
+                         !sameValueType(instruction.type, definitionType(instruction.operands.front(), instruction.source))))
+                        fail("IR verifier: invalid plot coordinate access.", instruction.source);
+                    break;
+                case IROpcode::Address:
+                    if (instruction.type.pointer_level == 0 ||
+                        (instruction.operation.empty() &&
+                         (!instruction.operands.empty() || instruction.symbol.empty())) ||
+                        (instruction.operation == "member" &&
+                         (instruction.operands.size() != 1 || instruction.immediate < 0 ||
+                          instruction.immediate > 65528 ||
+                          definitionType(instruction.operands[0], instruction.source).pointer_level == 0)) ||
+                        (instruction.operation == "temporary" && (!instruction.operands.empty() || instruction.immediate >= 0 ||
+                            instruction.immediate < -function.total_local_alloc_size || instruction.immediate % 2 != 0)) ||
+                        (!instruction.operation.empty() && instruction.operation != "member" && instruction.operation != "temporary"))
+                        fail("IR verifier: address has an invalid operation or operands.", instruction.source);
+                    break;
+                case IROpcode::PointerCompare:
+                    if (instruction.operands.size() != 2 || instruction.type.base != BaseType::BOOL || instruction.type.pointer_level != 0 ||
+                        (instruction.operation != "==" && instruction.operation != "!=") ||
+                        definitionType(instruction.operands[0], instruction.source).pointer_level == 0 ||
+                        definitionType(instruction.operands[1], instruction.source).pointer_level == 0 ||
+                        definitionType(instruction.operands[0], instruction.source).space != definitionType(instruction.operands[1], instruction.source).space ||
+                        isFarPointer(definitionType(instruction.operands[0], instruction.source)) != isFarPointer(definitionType(instruction.operands[1], instruction.source)))
+                        fail("IR verifier: incompatible pointer comparison.", instruction.source);
+                    break;
+                case IROpcode::PointerOffset:
+                    if (instruction.operands.size() != 2 || instruction.immediate <= 0 ||
+                        instruction.immediate > 65528 ||
+                        definitionType(instruction.operands[0], instruction.source).pointer_level == 0 ||
+                        !sameValueType(instruction.type, definitionType(instruction.operands[0], instruction.source)) ||
+                        !isIntegerType(definitionType(instruction.operands[1], instruction.source)) ||
+                        (instruction.operation != "+" && instruction.operation != "-"))
+                        fail("IR verifier: pointer.offset has incompatible operands or stride.", instruction.source);
+                    if ((instruction.type.base != BaseType::STRUCT || instruction.type.pointer_level > 1) &&
+                        instruction.immediate != pointeeType(instruction.type).sizeInBytes)
+                        fail("IR verifier: pointer.offset stride does not match the pointee.", instruction.source);
+                    break;
                 case IROpcode::LoadIndirect:
                     if (instruction.operands.size() != 1 ||
-                        definitionType(instruction.operands.front(), instruction.source).pointer_level == 0) {
+                        definitionType(instruction.operands.front(), instruction.source).pointer_level == 0 ||
+                        !sameValueType(instruction.type, pointeeType(definitionType(instruction.operands.front(), instruction.source)))) {
                         fail("IR verifier: load.indirect requires one pointer operand.", instruction.source);
                     }
+                    if (instruction.memory_volatile != pointeeType(definitionType(instruction.operands.front(), instruction.source)).is_volatile)
+                        fail("IR verifier: volatile load metadata does not match its address.", instruction.source);
                     break;
                 case IROpcode::StoreIndirect:
                     if (instruction.operands.size() != 2 ||
                         definitionType(instruction.operands.front(), instruction.source).pointer_level == 0 ||
                         isVoidType(definitionType(instruction.operands.back(), instruction.source)) ||
                         !sameValueType(instruction.type,
-                                       definitionType(instruction.operands.back(), instruction.source))) {
+                                       definitionType(instruction.operands.back(), instruction.source)) ||
+                        !sameValueType(instruction.type, pointeeType(definitionType(instruction.operands.front(), instruction.source))) ||
+                        definitionType(instruction.operands.front(), instruction.source).space == AddressSpace::ROM) {
                         fail("IR verifier: store.indirect has incompatible operands.", instruction.source);
                     }
+                    if (instruction.memory_volatile != pointeeType(definitionType(instruction.operands.front(), instruction.source)).is_volatile)
+                        fail("IR verifier: volatile store metadata does not match its address.", instruction.source);
+                    if (pointeeType(definitionType(instruction.operands.front(), instruction.source)).is_const && instruction.operation != "declare")
+                        fail("IR verifier: store through a const-qualified address.", instruction.source);
                     break;
                 case IROpcode::Binary:
                     if (instruction.operands.size() != 2 || instruction.operation.empty() ||
@@ -393,8 +518,9 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                         !isLegalBinaryOperation(instruction.operation) ||
                         !isIntegerType(definitionType(instruction.operands[0], instruction.source)) ||
                         !isIntegerType(definitionType(instruction.operands[1], instruction.source)) ||
-                        !sameValueType(definitionType(instruction.operands[0], instruction.source),
-                                       definitionType(instruction.operands[1], instruction.source)) ||
+                        ((instruction.operation != "<<" && instruction.operation != ">>") &&
+                         !sameValueType(definitionType(instruction.operands[0], instruction.source),
+                                       definitionType(instruction.operands[1], instruction.source))) ||
                         !isIntegerType(instruction.type)) {
                         fail("IR verifier: binary instruction has invalid operands.", instruction.source);
                     }
@@ -504,7 +630,7 @@ IRValueId IRLowerer::emitValue(IROpcode opcode, const Type& type, const Token& s
     instruction.symbol_id = symbol_id;
     instruction.immediate = immediate;
     if (isValueOpcode(opcode) &&
-        !(opcode == IROpcode::Call && type.base == BaseType::VOID)) {
+        !(opcode == IROpcode::Call && isVoidValue(type))) {
         instruction.result = createValue();
     }
     const auto result = instruction.result;
@@ -513,9 +639,10 @@ IRValueId IRLowerer::emitValue(IROpcode opcode, const Type& type, const Token& s
 }
 
 void IRLowerer::emitInstruction(IRInstruction instruction) {
+    instruction.in_plot_context = m_plot_context;
     if (isTerminated()) {
         throw CompilerError("IR lowering: cannot append instruction after a terminator.",
-                            instruction.source.line_number, instruction.source.col_number);
+                            instruction.source);
     }
     currentBlock().instructions.push_back(std::move(instruction));
 }
@@ -547,25 +674,27 @@ bool IRLowerer::isTerminated() const {
 void IRLowerer::requireFunction(const Token& source) const {
     if (m_module.functions.empty()) {
         throw CompilerError("IR lowering: statement is outside a function.",
-                            source.line_number, source.col_number);
+                            source);
     }
 }
 
 IRValueId IRLowerer::lowerExpression(Expr& expr) {
     expr.accept(*this, nullptr);
-    if (!m_last_value.isValid() && expr.result_type.base != BaseType::VOID) {
+    if (!m_last_value.isValid() && !isVoidValue(expr.result_type)) {
         throw CompilerError("IR lowering: expression did not produce a value.",
-                            expr.token.line_number, expr.token.col_number);
+                            expr.token);
     }
     return m_last_value;
 }
 
 IRValueId IRLowerer::lowerAddress(Expr& expr) {
-    Type address_type = expr.result_type;
-    address_type.pointer_level += 1;
-    address_type.sizeInBytes = 2;
+    Type address_type = expr.address_type.pointer_level > 0 ? expr.address_type :
+        pointerTo(expr.result_type, expr.result_type.space);
 
     if (auto* variable = dynamic_cast<VariableExpr*>(&expr)) {
+        if (variable->is_array_decay) address_type = expr.result_type;
+        else if (expr.address_type.pointer_level == 0)
+            address_type = pointerTo(expr.result_type, variable->symbol_id.isValid() ? AddressSpace::RAM : expr.result_type.space);
         return emitValue(IROpcode::Address, address_type, expr.token, {}, {},
                          variable->token.lexeme, 0, variable->symbol_id);
     }
@@ -574,9 +703,7 @@ IRValueId IRLowerer::lowerAddress(Expr& expr) {
     }
     if (auto* subscript = dynamic_cast<SubscriptExpr*>(&expr)) {
         IRValueId base;
-        if (dynamic_cast<VariableExpr*>(subscript->array.get()) ||
-            dynamic_cast<MemberAccessExpr*>(subscript->array.get()) ||
-            dynamic_cast<SubscriptExpr*>(subscript->array.get())) {
+        if (subscript->array->result_type.array_size > 0) {
             base = lowerAddress(*subscript->array);
         } else {
             base = lowerExpression(*subscript->array);
@@ -584,10 +711,10 @@ IRValueId IRLowerer::lowerAddress(Expr& expr) {
         const auto index = lowerExpression(*subscript->index);
         if (subscript->element_size <= 0) {
             throw CompilerError("IR lowering: subscript has no validated element stride.",
-                                subscript->token.line_number, subscript->token.col_number);
+                                subscript->token);
         }
         const auto element_size = subscript->element_size;
-        return emitValue(IROpcode::Address, address_type, expr.token, {base, index}, "index",
+        return emitValue(IROpcode::PointerOffset, address_type, expr.token, {base, index}, "+",
                          {}, element_size);
     }
     if (auto* member = dynamic_cast<MemberAccessExpr*>(&expr)) {
@@ -597,7 +724,7 @@ IRValueId IRLowerer::lowerAddress(Expr& expr) {
     }
 
     throw CompilerError("IR lowering: expression is not an assignable address.",
-                        expr.token.line_number, expr.token.col_number);
+                        expr.token);
 }
 
 void IRLowerer::lowerStatementList(const std::vector<std::unique_ptr<Stmt>>& statements) {
@@ -611,9 +738,11 @@ void IRLowerer::lowerStatementList(const std::vector<std::unique_ptr<Stmt>>& sta
 
 IRModule IRLowerer::lower(const std::vector<std::unique_ptr<Stmt>>& program) {
     m_module = IRModule{};
+    m_module.target = m_target;
     m_current_block = IRBlockId{};
     m_last_value = IRValueId{};
     m_break_targets.clear();
+    m_continue_targets.clear();
 
     for (const auto& statement : program) {
         if (auto* function = dynamic_cast<FunctionDeclStmt*>(statement.get())) {
@@ -624,29 +753,128 @@ IRModule IRLowerer::lower(const std::vector<std::unique_ptr<Stmt>>& program) {
 }
 
 void IRLowerer::visit(LiteralExpr& expr, const Type*) {
-    const auto value = std::stoll(expr.token.lexeme, nullptr, 0);
+    const auto value = expr.token.type == TokenType::KEYWORD_TRUE ? 1 :
+        expr.token.type == TokenType::KEYWORD_FALSE ? 0 : DiscoNumeric::parse(expr.token.lexeme, nullptr, 0);
     m_last_value = emitValue(IROpcode::Constant, expr.result_type, expr.token, {}, {}, {}, value);
 }
 
+void IRLowerer::visit(PlotCoordinateExpr& expr, const Type*) {
+    m_last_value = emitValue(IROpcode::PlotCoordinateRead, expr.result_type, expr.token, {}, {}, {}, expr.is_y ? 1 : 0);
+}
+
+void IRLowerer::visit(InitializerListExpr&, const Type*) { throw CompilerError("Unresolved initializer list reached IR lowering.", 1, 1); }
+void IRLowerer::visit(StringExpr&, const Type*) { throw CompilerError("Unresolved string storage reached IR lowering.", 1, 1); }
+void IRLowerer::visit(NullExpr& expr, const Type*) {
+    m_last_value = emitValue(IROpcode::Constant, expr.result_type, expr.token, {}, "null", {}, 0);
+}
+void IRLowerer::visit(UpdateExpr& expr, const Type*) {
+    const auto* coordinate = dynamic_cast<const PlotCoordinateExpr*>(expr.target.get());
+    IRValueId address;
+    if (!coordinate) address = lowerAddress(*expr.target);
+    const auto old_value = coordinate ? lowerExpression(*expr.target) :
+        emitValue(IROpcode::LoadIndirect, expr.target->result_type, expr.token, {address});
+    if (!coordinate) currentBlock().instructions.back().memory_volatile = expr.target->result_type.is_volatile;
+    auto operand = old_value;
+    if (!sameValueType(expr.target->result_type, expr.operation_type))
+        operand = emitValue(IROpcode::Cast, expr.operation_type, expr.token, {operand});
+    const auto rhs = lowerExpression(*expr.value);
+    auto value = emitValue(expr.pointer_stride ? IROpcode::PointerOffset : IROpcode::Binary,
+        expr.operation_type, expr.token, {operand, rhs}, expr.operation.lexeme, {}, expr.pointer_stride);
+    if (!sameValueType(expr.operation_type, expr.result_type))
+        value = emitValue(IROpcode::Cast, expr.result_type, expr.token, {value});
+    IRInstruction store;
+    store.opcode = coordinate ? IROpcode::PlotCoordinateWrite : IROpcode::StoreIndirect;
+    store.type = expr.result_type;
+    store.operands = coordinate ? std::vector<IRValueId>{value} : std::vector<IRValueId>{address, value};
+    store.immediate = coordinate && coordinate->is_y ? 1 : 0;
+    store.memory_volatile = !coordinate && expr.target->result_type.is_volatile;
+    store.operation = "assign"; store.source = expr.token;
+    emitInstruction(std::move(store));
+    m_last_value = expr.postfix ? old_value : value;
+}
+
+void IRLowerer::visit(LayoutQueryExpr& expr, const Type*) {
+    m_last_value = emitValue(IROpcode::Constant, expr.result_type, expr.token, {}, {}, {}, expr.constant_value);
+}
+void IRLowerer::visit(EnumDeclStmt&) {}
+void IRLowerer::visit(StaticAssertStmt&) {}
+void IRLowerer::visit(TypeAliasDeclStmt&) {}
+
 void IRLowerer::visit(VariableExpr& expr, const Type*) {
+    if (expr.is_constant) {
+        m_last_value = emitValue(IROpcode::Constant, expr.result_type, expr.token, {}, {}, {}, expr.constant_value);
+        return;
+    }
     const auto address = lowerAddress(expr);
+    if (expr.is_array_decay) { m_last_value = address; return; }
     m_last_value = emitValue(IROpcode::LoadIndirect, expr.result_type, expr.token, {address});
+    currentBlock().instructions.back().memory_volatile = expr.result_type.is_volatile;
 }
 
 void IRLowerer::visit(BinaryExpr& expr, const Type*) {
+    if (expr.token.type == TokenType::AND_AND || expr.token.type == TokenType::OR_OR) {
+        m_last_value = lowerLogical(expr);
+        return;
+    }
     const auto left = lowerExpression(*expr.left);
     const auto right = lowerExpression(*expr.right);
-    m_last_value = emitValue(IROpcode::Binary, expr.result_type, expr.token, {left, right},
-                             expr.token.lexeme);
+    m_last_value = emitValue(expr.left->result_type.pointer_level > 0 && expr.pointer_stride == 0 ? IROpcode::PointerCompare :
+                             expr.pointer_stride > 0 ? IROpcode::PointerOffset : IROpcode::Binary,
+                             expr.result_type, expr.token, {left, right}, expr.token.lexeme,
+                             {}, expr.pointer_stride);
+}
+
+IRValueId IRLowerer::lowerLogical(BinaryExpr& expr) {
+    auto& function = currentFunction();
+    if (function.total_local_alloc_size == 0) function.total_local_alloc_size = 2;
+    if (function.total_local_alloc_size > 65524)
+        throw CompilerError("Logical expression frame exceeds one bank.", expr.token);
+    function.total_local_alloc_size += 2;
+    const Type boolean{BaseType::BOOL, "", 1, false};
+    const auto address = emitValue(IROpcode::Address, pointerTo(boolean, AddressSpace::RAM),
+        expr.token, {}, "temporary", {}, -(function.total_local_alloc_size - 2));
+    const auto left = lowerExpression(*expr.left);
+    const auto rhs = createBlock("logical.rhs"), skip = createBlock("logical.skip"), end = createBlock("logical.end");
+    const bool conjunction = expr.token.type == TokenType::AND_AND;
+    emitConditionalBranch(left, conjunction ? rhs : skip, conjunction ? skip : rhs, expr.token);
+    const auto store = [&](IRValueId value) {
+        IRInstruction instruction;
+        instruction.opcode = IROpcode::StoreIndirect;
+        instruction.type = boolean;
+        instruction.operands = {address, value};
+        instruction.source = expr.token;
+        emitInstruction(std::move(instruction));
+    };
+    m_current_block = skip;
+    store(emitValue(IROpcode::Constant, boolean, expr.token, {}, {}, {}, conjunction ? 0 : 1));
+    emitBranch(end, expr.token);
+    m_current_block = rhs;
+    store(lowerExpression(*expr.right));
+    emitBranch(end, expr.token);
+    m_current_block = end;
+    return emitValue(IROpcode::LoadIndirect, boolean, expr.token, {address});
 }
 
 void IRLowerer::visit(AssignExpr& expr, const Type*) {
+    if (const auto* coordinate = dynamic_cast<const PlotCoordinateExpr*>(expr.name.get())) {
+        const auto value = lowerExpression(*expr.value);
+        IRInstruction instruction;
+        instruction.opcode = IROpcode::PlotCoordinateWrite;
+        instruction.type = expr.result_type;
+        instruction.operands = {value};
+        instruction.immediate = coordinate->is_y ? 1 : 0;
+        instruction.source = expr.token;
+        emitInstruction(std::move(instruction));
+        m_last_value = value;
+        return;
+    }
     const auto address = lowerAddress(*expr.name);
     const auto value = lowerExpression(*expr.value);
     IRInstruction instruction;
     instruction.opcode = IROpcode::StoreIndirect;
     instruction.type = expr.result_type;
     instruction.operation = "assign";
+    instruction.memory_volatile = expr.name->result_type.is_volatile;
     instruction.operands = {address, value};
     instruction.source = expr.token;
     emitInstruction(std::move(instruction));
@@ -654,6 +882,12 @@ void IRLowerer::visit(AssignExpr& expr, const Type*) {
 }
 
 void IRLowerer::visit(UnaryExpr& expr, const Type*) {
+    if (expr.token.type == TokenType::MINUS && dynamic_cast<LiteralExpr*>(expr.right.get()) &&
+        expr.right->token.type == TokenType::LITERAL_INTEGER) {
+        m_last_value = emitValue(IROpcode::Constant, expr.result_type, expr.token, {}, {}, {},
+            -DiscoNumeric::parse(expr.right->token.lexeme, nullptr, 0));
+        return;
+    }
     const auto value = lowerExpression(*expr.right);
     m_last_value = emitValue(IROpcode::Unary, expr.result_type, expr.token, {value},
                              expr.token.lexeme);
@@ -667,9 +901,9 @@ void IRLowerer::visit(DereferenceExpr& expr, const Type*) {
     const auto address = lowerExpression(*expr.right);
     IRInstruction instruction;
     instruction.opcode = IROpcode::LoadIndirect;
+    instruction.memory_volatile = expr.result_type.is_volatile;
     instruction.type = expr.result_type;
     instruction.operands = {address};
-    instruction.operation = expr.right->result_type.is_far ? "far" : "";
     instruction.source = expr.token;
     instruction.result = createValue();
     m_last_value = instruction.result;
@@ -679,25 +913,27 @@ void IRLowerer::visit(DereferenceExpr& expr, const Type*) {
 void IRLowerer::visit(SubscriptExpr& expr, const Type*) {
     const auto address = lowerAddress(expr);
     m_last_value = emitValue(IROpcode::LoadIndirect, expr.result_type, expr.token, {address});
+    currentBlock().instructions.back().memory_volatile = expr.result_type.is_volatile;
 }
 
 void IRLowerer::visit(MemberAccessExpr& expr, const Type*) {
     const auto address = lowerAddress(expr);
     m_last_value = emitValue(IROpcode::LoadIndirect, expr.result_type, expr.token, {address});
+    currentBlock().instructions.back().memory_volatile = expr.result_type.is_volatile;
 }
 
 void IRLowerer::visit(CallExpr& expr, const Type*) {
     auto* callee = dynamic_cast<VariableExpr*>(expr.callee.get());
     if (!callee) {
         throw CompilerError("IR lowering: dynamic function calls are not supported.",
-                            expr.token.line_number, expr.token.col_number);
+                            expr.token);
     }
     std::vector<IRValueId> arguments;
     for (const auto& argument : expr.arguments) {
         arguments.push_back(lowerExpression(*argument));
     }
     m_last_value = emitValue(IROpcode::Call, expr.result_type, expr.token, arguments, {},
-                             callee->token.lexeme);
+                             expr.resolved_symbol.empty() ? callee->token.lexeme : expr.resolved_symbol);
 }
 
 void IRLowerer::visit(CastExpr& expr, const Type*) {
@@ -723,19 +959,30 @@ void IRLowerer::visit(ReturnStmt& stmt) {
 }
 
 void IRLowerer::visit(VarDeclStmt& stmt) {
+    if (stmt.is_global || stmt.is_constexpr) return;
     requireFunction(stmt.token);
-    if (!stmt.initializer) {
+    if (!stmt.initializer && stmt.aggregate_initializers.empty()) {
         return;
     }
     VariableExpr variable(stmt.token);
     variable.result_type = stmt.type;
     variable.symbol_id = stmt.symbol_id;
     const auto address = lowerAddress(variable);
+    for (const auto& element : stmt.aggregate_initializers) {
+        const auto target = emitValue(IROpcode::Address, pointerTo(element.type, AddressSpace::RAM),
+            stmt.token, {address}, "member", {}, element.offset);
+        const auto value = lowerExpression(*element.value);
+        IRInstruction store; store.opcode = IROpcode::StoreIndirect; store.type = element.type;
+        store.operands = {target, value}; store.operation = "declare"; store.source = stmt.token;
+        store.memory_volatile = element.type.is_volatile; emitInstruction(std::move(store));
+    }
+    if (!stmt.initializer) return;
     const auto value = lowerExpression(*stmt.initializer);
     IRInstruction instruction;
     instruction.opcode = IROpcode::StoreIndirect;
     instruction.type = stmt.type;
     instruction.operation = "declare";
+    instruction.memory_volatile = stmt.type.is_volatile;
     instruction.operands = {address, value};
     instruction.source = stmt.token;
     emitInstruction(std::move(instruction));
@@ -743,11 +990,13 @@ void IRLowerer::visit(VarDeclStmt& stmt) {
 
 void IRLowerer::visit(FunctionDeclStmt& stmt) {
     if (stmt.is_prototype) return;
+    m_plot_context = false;
 
     m_module.functions.push_back({});
     m_current_function = m_module.functions.size() - 1;
     auto& function = currentFunction();
     function.name = stmt.token.lexeme;
+    function.link_name = stmt.link_name;
     function.return_type = stmt.returnType;
     function.parameters = stmt.params;
     function.total_local_alloc_size = stmt.total_local_alloc_size;
@@ -758,20 +1007,21 @@ void IRLowerer::visit(FunctionDeclStmt& stmt) {
     lowerStatementList(stmt.body);
 
     if (!isTerminated()) {
-        if (stmt.returnType.base == BaseType::VOID) {
+        if (isVoidValue(stmt.returnType)) {
             IRInstruction instruction;
             instruction.opcode = IROpcode::ReturnVoid;
             instruction.source = stmt.token;
             emitInstruction(std::move(instruction));
         } else {
             throw CompilerError("IR lowering: non-void function reaches its end.",
-                                stmt.token.line_number, stmt.token.col_number);
+                                stmt.token);
         }
     }
 }
 
 void IRLowerer::visit(IfStmt& stmt) {
     requireFunction(stmt.token);
+    const bool incoming_plot_context = m_plot_context;
     const auto condition = lowerExpression(*stmt.condition);
     const auto then_block = createBlock("if.then");
     const auto else_block = stmt.elseBranch ? createBlock("if.else") : IRBlockId{};
@@ -782,11 +1032,13 @@ void IRLowerer::visit(IfStmt& stmt) {
     m_current_block = then_block;
     stmt.thenBranch->accept(*this);
     const bool then_terminated = isTerminated();
+    const bool then_plot_context = m_plot_context;
     if (!then_terminated) {
         emitBranch(end_block, stmt.token);
     }
 
     if (stmt.elseBranch) {
+        m_plot_context = incoming_plot_context;
         m_current_block = else_block;
         stmt.elseBranch->accept(*this);
         const bool else_terminated = isTerminated();
@@ -803,12 +1055,46 @@ void IRLowerer::visit(IfStmt& stmt) {
     } else {
         m_current_block = end_block;
     }
+    m_plot_context = stmt.elseBranch ? then_plot_context : incoming_plot_context;
 }
 
 void IRLowerer::visit(BlockStmt& stmt) {
     requireFunction(stmt.token);
     lowerStatementList(stmt.statements);
 }
+
+void IRLowerer::visit(ForStmt& stmt) {
+    requireFunction(stmt.token);
+    if (stmt.initializer) stmt.initializer->accept(*this);
+    const auto condition_block = createBlock("for.condition"), body_block = createBlock("for.body");
+    const auto increment_block = createBlock("for.increment"), end_block = createBlock("for.end");
+    emitBranch(condition_block, stmt.token);
+    m_current_block = condition_block;
+    if (stmt.is_cached) { IRInstruction cache; cache.opcode = IROpcode::Cache; cache.source = stmt.token; emitInstruction(std::move(cache)); }
+    emitConditionalBranch(lowerExpression(*stmt.condition), body_block, end_block, stmt.token);
+    m_current_block = body_block;
+    m_break_targets.push_back(end_block); m_continue_targets.push_back(increment_block);
+    stmt.body->accept(*this);
+    m_continue_targets.pop_back(); m_break_targets.pop_back();
+    if (!isTerminated()) emitBranch(increment_block, stmt.token);
+    bool increment_reachable = false;
+    for (const auto& block : currentFunction().blocks) for (const auto& instruction : block.instructions)
+        for (const auto target : instruction.targets) if (target.value == increment_block.value) increment_reachable = true;
+    m_current_block = increment_block;
+    if (increment_reachable) {
+        if (stmt.increment) lowerExpression(*stmt.increment);
+        emitBranch(condition_block, stmt.token);
+    } else {
+        IRInstruction unreachable; unreachable.opcode = IROpcode::Unreachable; unreachable.source = stmt.token;
+        emitInstruction(std::move(unreachable));
+    }
+    m_current_block = end_block;
+}
+void IRLowerer::visit(ContinueStmt& stmt) {
+    if (m_continue_targets.empty()) throw CompilerError("IR lowering: continue outside loop.", stmt.token);
+    emitBranch(m_continue_targets.back(), stmt.token);
+}
+void IRLowerer::visit(FallthroughStmt&) {}
 
 void IRLowerer::visit(WhileStmt& stmt) {
     requireFunction(stmt.token);
@@ -818,16 +1104,19 @@ void IRLowerer::visit(WhileStmt& stmt) {
     emitBranch(condition_block, stmt.token);
 
     m_current_block = condition_block;
+    if (stmt.is_cached) { IRInstruction cache; cache.opcode = IROpcode::Cache; cache.source = stmt.token; emitInstruction(std::move(cache)); }
     const auto condition = lowerExpression(*stmt.condition);
     emitConditionalBranch(condition, body_block, end_block, stmt.token);
 
     m_break_targets.push_back(end_block);
+    m_continue_targets.push_back(condition_block);
     m_current_block = body_block;
     stmt.body->accept(*this);
     if (!isTerminated()) {
         emitBranch(condition_block, stmt.token);
     }
     m_break_targets.pop_back();
+    m_continue_targets.pop_back();
     m_current_block = end_block;
 }
 
@@ -847,8 +1136,23 @@ void IRLowerer::visit(PlotStmt& stmt) {
     emitInstruction(std::move(instruction));
 }
 
+void IRLowerer::visit(PlotBlockStmt& stmt) {
+    m_plot_context = true;
+    PlotBeginStmt begin;
+    begin.token = stmt.token;
+    visit(begin);
+    stmt.body->accept(*this);
+    m_plot_context = false;
+    if (!isTerminated()) {
+        PlotEndStmt end;
+        end.token = stmt.token;
+        visit(end);
+    }
+}
+
 void IRLowerer::visit(PlotBeginStmt& stmt) {
     requireFunction(stmt.token);
+    m_plot_context = true;
     IRInstruction instruction;
     instruction.opcode = IROpcode::PlotBegin;
     instruction.source = stmt.token;
@@ -857,6 +1161,7 @@ void IRLowerer::visit(PlotBeginStmt& stmt) {
 
 void IRLowerer::visit(PlotEndStmt& stmt) {
     requireFunction(stmt.token);
+    m_plot_context = false;
     IRInstruction instruction;
     instruction.opcode = IROpcode::PlotEnd;
     instruction.source = stmt.token;
@@ -899,7 +1204,7 @@ void IRLowerer::visit(HardwareLoopStmt& stmt) {
     stmt.body->accept(*this);
     if (isTerminated()) {
         throw CompilerError("IR lowering: hardware loop body cannot terminate with return or branch.",
-                            stmt.token.line_number, stmt.token.col_number);
+                            stmt.token);
     }
     IRInstruction end;
     end.opcode = IROpcode::HardwareLoopEnd;
@@ -924,10 +1229,10 @@ void IRLowerer::lowerSwitchBody(SwitchStmt& stmt, IRValueId condition, IRBlockId
             const auto* literal = dynamic_cast<LiteralExpr*>(case_stmt->value.get());
             if (!literal) {
                 throw CompilerError("IR lowering: switch cases must be integer literals.",
-                                    case_stmt->token.line_number, case_stmt->token.col_number);
+                                    case_stmt->token);
             }
             arms.push_back({createBlock("switch.case"), index, false,
-                            std::stoll(literal->token.lexeme, nullptr, 0)});
+                            DiscoNumeric::parse(literal->token.lexeme, nullptr, 0)});
         } else if (dynamic_cast<DefaultStmt*>(stmt.body->statements[index].get())) {
             arms.push_back({createBlock("switch.default"), index, true, 0});
         }
@@ -993,7 +1298,7 @@ void IRLowerer::visit(BreakStmt& stmt) {
     requireFunction(stmt.token);
     if (m_break_targets.empty()) {
         throw CompilerError("IR lowering: break is outside a loop or switch.",
-                            stmt.token.line_number, stmt.token.col_number);
+                            stmt.token);
     }
     emitBranch(m_break_targets.back(), stmt.token);
 }
@@ -1011,6 +1316,7 @@ std::string dumpIR(const IRModule& module) {
                     output << "%" << instruction.result.value << " = ";
                 }
                 output << opcodeName(instruction.opcode);
+                if (instruction.memory_volatile) output << " volatile";
                 if (!instruction.operation.empty()) {
                     output << " " << instruction.operation;
                 }

@@ -1,0 +1,2 @@
+// error: Imports must precede
+void main() {} import "math.dci";

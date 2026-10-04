@@ -1,0 +1,78 @@
+module DiscoCoreFixed;
+import "fixed.dci";
+
+internal u16 dc_fixed_magnitude(i16 value) {
+    u16 bits = (u16)value;
+    if (value < 0) return 0 - bits;
+    return bits;
+}
+
+// Retain the full 32-bit unsigned product as two words. Multiplying raw Q
+// values as one word and then shifting would lose the fractional carry.
+internal u16 dc_fixed_product(u16 left, u16 right, u16 fraction_bits) {
+    u16 left_low = left & 255;
+    u16 left_high = left >> 8;
+    u16 right_low = right & 255;
+    u16 right_high = right >> 8;
+    u16 cross_left = left_low * right_high;
+    u16 cross_right = left_high * right_low;
+    u16 low = left_low * right_low;
+    u16 high = left_high * right_high + (cross_left >> 8) + (cross_right >> 8);
+    u16 next = low + (cross_left << 8);
+    if (next < low) high++;
+    low = next;
+    next = low + (cross_right << 8);
+    if (next < low) high++;
+    low = next;
+    return (low >> fraction_bits) | (high << (16 - fraction_bits));
+}
+
+internal u16 dc_fixed_quotient(u16 numerator, u16 denominator, u16 fraction_bits) {
+    // Magnitudes of signed words are <= 32768, so doubling a remainder
+    // below the denominator fits an unsigned word without losing a carry.
+    // The language's division-by-zero fault is deliberately preserved.
+    u16 whole = numerator / denominator;
+    u16 remainder = numerator - whole * denominator;
+    u16 fraction = 0;
+    for (u16 bit = 0; bit < fraction_bits; bit++) {
+        remainder <<= 1;
+        fraction <<= 1;
+        if (remainder >= denominator) {
+            remainder -= denominator;
+            fraction |= 1;
+        }
+    }
+    return (whole << fraction_bits) | fraction;
+}
+
+internal i16 dc_fixed_mul(i16 left, i16 right, u16 fraction_bits) {
+    u16 result = dc_fixed_product(dc_fixed_magnitude(left), dc_fixed_magnitude(right), fraction_bits);
+    if ((left < 0) != (right < 0)) result = 0 - result;
+    return (i16)result;
+}
+
+internal i16 dc_fixed_div(i16 left, i16 right, u16 fraction_bits) {
+    u16 result = dc_fixed_quotient(dc_fixed_magnitude(left), dc_fixed_magnitude(right), fraction_bits);
+    if ((left < 0) != (right < 0)) result = 0 - result;
+    return (i16)result;
+}
+
+internal i16 dc_fixed_to_int(i16 value, u16 fraction_bits) {
+    u16 result = dc_fixed_magnitude(value) >> fraction_bits;
+    if (value < 0) result = 0 - result;
+    return (i16)result;
+}
+
+q8_8 dc_q8_8_from_int(i16 value) { return (i16)((u16)value << 8); }
+i16 dc_q8_8_to_int(q8_8 value) { return dc_fixed_to_int(value, 8); }
+q8_8 dc_q8_8_add(q8_8 left, q8_8 right) { return left + right; }
+q8_8 dc_q8_8_sub(q8_8 left, q8_8 right) { return left - right; }
+q8_8 dc_q8_8_mul(q8_8 left, q8_8 right) { return dc_fixed_mul(left, right, 8); }
+q8_8 dc_q8_8_div(q8_8 left, q8_8 right) { return dc_fixed_div(left, right, 8); }
+
+q12_4 dc_q12_4_from_int(i16 value) { return (i16)((u16)value << 4); }
+i16 dc_q12_4_to_int(q12_4 value) { return dc_fixed_to_int(value, 4); }
+q12_4 dc_q12_4_add(q12_4 left, q12_4 right) { return left + right; }
+q12_4 dc_q12_4_sub(q12_4 left, q12_4 right) { return left - right; }
+q12_4 dc_q12_4_mul(q12_4 left, q12_4 right) { return dc_fixed_mul(left, right, 4); }
+q12_4 dc_q12_4_div(q12_4 left, q12_4 right) { return dc_fixed_div(left, right, 4); }

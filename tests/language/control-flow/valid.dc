@@ -1,0 +1,1 @@
+void main() { for (word i = 0; i < 4; i++) { if (i == 2) continue; } word n = 0; while (n < 4) { ++n; continue; } switch (1) { case 1 << 0: n += 1; fallthrough; case 2: n += 2; break; default: break; } }

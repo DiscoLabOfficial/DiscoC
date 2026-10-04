@@ -1,0 +1,1 @@
+module Math; constexpr word SIZE = 8; struct Sample { word value; }; extern word counter; word add(word a, word b);

@@ -1,0 +1,2 @@
+// error: Type alias already declared or reserved
+type u8 = word;

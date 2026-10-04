@@ -1,0 +1,2 @@
+// error: Cannot implicitly convert
+void main() { word w = 300; byte b = w; }

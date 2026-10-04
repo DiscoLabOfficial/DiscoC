@@ -1,0 +1,2 @@
+// error: Compound|Update
+void main() { bool b = true; b++; }

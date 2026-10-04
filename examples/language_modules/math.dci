@@ -1,0 +1,6 @@
+module Math;
+constexpr word ELEMENTS = 8;
+enum Mode { MODE_4BPP = 2, MODE_8BPP = 4 };
+@align(8) struct State { word value; word count; };
+extern struct State math_state;
+word add(word a, word b);

@@ -1,0 +1,2 @@
+// error: exactly one byte
+void main() { byte c = 'AB'; }

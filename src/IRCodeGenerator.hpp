@@ -44,6 +44,7 @@ private:
     void emitLiteral(std::int64_t value);
     void emitMove(std::uint8_t destination, std::uint8_t source);
     void emitPush(std::uint8_t reg);
+    void emitStackGuard(std::size_t required, const Token& source);
     void emitPop(std::uint8_t reg);
     void emitStore(std::uint8_t address_reg, std::uint8_t value_reg, bool byte);
     void emitImmediateArithmetic(std::uint8_t op_base, std::int64_t value,
@@ -66,11 +67,28 @@ private:
     void materialize(IRValueId value);
     void emitAddress(const IRInstruction& instruction);
     void emitBinary(const IRInstruction& instruction);
+    void emitIntegerOperation(const IRInstruction& instruction);
     void emitCall(const IRInstruction& instruction);
     void emitCast(const IRInstruction& instruction);
+    void emitBoolNormalization();
     void emitLoadIndirect(const IRInstruction& instruction);
     void emitStoreIndirect(const IRInstruction& instruction);
     void emitHardwareLoop(const IRInstruction& instruction);
+    void emitRegisterLiteral(std::uint8_t reg, std::uint16_t value);
+    void emitNearBank(std::uint8_t reg, AddressSpace space);
+    void emitSelectBank(std::uint8_t reg, AddressSpace space);
+    void emitAddressCheck(const Type& pointer, int width);
+    void emitGuard(std::uint8_t success_branch, std::uint16_t fault);
+    void emitAddressFault(std::uint16_t fault);
+    void emitCompare(std::uint8_t left, std::uint16_t right);
+    std::string localLabel();
+    void bindLabel(const std::string& name);
+    void emitLocalJump(const std::string& name, std::uint8_t condition = 5);
+    void emitPointerValueCheck(const Type& type, int width);
+    void emitPointerCompare(const IRInstruction& instruction);
+    void emitPointerOffset(const IRInstruction& instruction);
+    void emitSpill(IRValueId value, bool load);
+    bool needsPointerSpill(const IRInstruction& instruction) const;
     void addRelocation(const std::string& symbol, std::size_t patch_offset,
                        RelocationType type);
     void fail(const std::string& message, const Token& source) const;
@@ -100,4 +118,8 @@ private:
     std::size_t m_emission_position = 0;
     bool m_isInPlottingContext = false;
     bool m_force_long_branches = false;
+    bool m_checked_pointer_mode = false;
+    IRValueId m_emitting_value;
+    std::map<std::uint32_t, int> m_spill_offsets;
+    std::size_t m_local_label_serial = 0;
 };

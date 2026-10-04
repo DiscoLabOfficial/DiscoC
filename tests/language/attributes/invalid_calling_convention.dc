@@ -1,0 +1,2 @@
+// error: reserved; its ABI/lowering contract is not implemented
+@calling_convention(gsu) void main() {}

@@ -1,0 +1,3 @@
+constexpr word LENGTH = 8;
+rom const byte name[LENGTH] = "PLAYER";
+static_assert(sizeof(name) == 8);

@@ -1,0 +1,2 @@
+// error: power of two
+@align(3) struct Bad { word a; };

@@ -1,0 +1,3 @@
+// target: gsu
+// error: does not match
+@target(spc700) void main() {}

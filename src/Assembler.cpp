@@ -16,7 +16,7 @@
 
 namespace {
 
-enum class Section { None, Code, Data };
+enum class Section { None, Code, Data, Ram };
 
 struct ParsedLine {
     int line_number = 0;
@@ -164,9 +164,12 @@ private:
     std::vector<BranchFixup> m_branch_fixups;
     ObjectFile m_object;
     CompilerConfig m_config;
+    std::uint8_t m_data_alignment = 1;
+    std::uint8_t m_ram_alignment = 2;
     std::set<std::string> m_config_definitions;
     std::size_t m_code_size = 0;
     std::size_t m_data_size = 0;
+    std::size_t m_ram_size = 0;
     std::set<int> m_relaxed_branch_lines;
     std::map<int, std::size_t> m_code_offsets_by_line;
 
@@ -177,16 +180,16 @@ private:
     }
 
     static SymbolSection symbolSection(Section section) {
-        return section == Section::Code ? SymbolSection::CODE : SymbolSection::DATA;
+        return section == Section::Code ? SymbolSection::CODE : section == Section::Data ? SymbolSection::DATA : SymbolSection::RAM;
     }
 
-    static std::size_t& offsetFor(Section section, std::size_t& code, std::size_t& data) {
+    static std::size_t& offsetFor(Section section, std::size_t& code, std::size_t& data, std::size_t& ram) {
         if (section == Section::Code) return code;
-        return data;
+        return section == Section::Data ? data : ram;
     }
 
-    static std::size_t currentOffset(Section section, std::size_t code, std::size_t data) {
-        return section == Section::Code ? code : data;
+    static std::size_t currentOffset(Section section, std::size_t code, std::size_t data, std::size_t ram) {
+        return section == Section::Code ? code : section == Section::Data ? data : ram;
     }
 
     void parseConfigDefinition(const std::string& rest, int line_number) {
@@ -195,7 +198,8 @@ private:
         if (!(definition >> name >> value) || (definition >> extra)) {
             fail(".define expects one reserved configuration name and value.", line_number);
         }
-        if (name != "__DISCO_MEMORY_MAPPING" && name != "__DISCO_CODE_START_ADDRESS") {
+        if (name != "__DISCO_MEMORY_MAPPING" && name != "__DISCO_CODE_START_ADDRESS" &&
+            name != "__DISCO_DATA_ALIGNMENT" && name != "__DISCO_RAM_ALIGNMENT") {
             fail("unsupported .define name '" + name + "'.", line_number);
         }
         if (!m_config_definitions.insert(name).second) {
@@ -209,6 +213,12 @@ private:
                 m_config.code_start_address = m_config.mapping == MemoryMapping::LoROM
                     ? 0x008000u : 0x408000u;
             }
+        } else if (name == "__DISCO_DATA_ALIGNMENT" || name == "__DISCO_RAM_ALIGNMENT") {
+            std::int64_t alignment = 0;
+            if (!parseNumber(value, alignment) || alignment < 1 || alignment > 128 || (alignment & (alignment - 1)))
+                fail("Section alignment must be a power of two in 1..128.", line_number);
+            if (name == "__DISCO_DATA_ALIGNMENT") m_data_alignment = static_cast<std::uint8_t>(alignment);
+            else m_ram_alignment = static_cast<std::uint8_t>(alignment);
         } else {
             std::int64_t address = 0;
             if (!parseNumber(value, address) || address < 0 || address > 0xFFFFFF) {
@@ -262,6 +272,7 @@ private:
                 const auto name = lower(line.operands.front());
                 if (name == "\"code\"") current = Section::Code;
                 else if (name == "\"data\"") current = Section::Data;
+                else if (name == "\"ram\"") current = Section::Ram;
                 else fail("unsupported segment " + line.operands.front() + ".", line_number);
             }
         }
@@ -272,11 +283,11 @@ private:
         if (line.section == Section::None) fail("statement appears before a .segment directive.", line.line_number);
     }
 
-    void defineLabel(const ParsedLine& line, std::size_t code, std::size_t data) {
+    void defineLabel(const ParsedLine& line, std::size_t code, std::size_t data, std::size_t ram) {
         if (line.label.empty()) return;
         requireSection(line);
         if (m_symbols.count(line.label)) fail("duplicate label '" + line.label + "'.", line.line_number);
-        m_symbols.emplace(line.label, SymbolDefinition{symbolSection(line.section), currentOffset(line.section, code, data)});
+        m_symbols.emplace(line.label, SymbolDefinition{symbolSection(line.section), currentOffset(line.section, code, data, ram)});
     }
 
     void firstPass() {
@@ -284,8 +295,9 @@ private:
         m_code_offsets_by_line.clear();
         std::size_t code = 0;
         std::size_t data = 0;
+        std::size_t ram = 0;
         for (const auto& line : m_lines) {
-            defineLabel(line, code, data);
+            defineLabel(line, code, data, ram);
             if (line.operation.empty() || line.operation == ".segment" || line.operation == ".export" ||
                 line.operation == ".setcpu" || line.operation == ".include" || line.operation == ".define") {
                 if (line.operation == ".export") {
@@ -302,15 +314,18 @@ private:
             }
             if (line.operation == ".byte" || line.operation == ".word") {
                 if (line.operands.empty()) fail(line.operation + " expects at least one value.", line.line_number);
-                auto& offset = offsetFor(line.section, code, data);
+                auto& offset = offsetFor(line.section, code, data, ram);
                 offset += line.operands.size() * (line.operation == ".byte" ? 1u : 2u);
             } else {
-                auto& offset = offsetFor(line.section, code, data);
+                if (line.section == Section::Ram) fail("RAM initial images contain data directives, not instructions.", line.line_number);
+                auto& offset = offsetFor(line.section, code, data, ram);
                 offset += encodeInstruction(line, nullptr, false);
             }
         }
         m_code_size = code;
         m_data_size = data;
+        if (ram > 65536u) fail("RAM initial image exceeds one bank.", 1);
+        m_ram_size = ram;
     }
 
     void relaxBranches() {
@@ -349,8 +364,11 @@ private:
     void secondPass() {
         m_object = ObjectFile();
         m_object.config = m_config;
+        m_object.data_alignment = m_data_alignment;
+        m_object.ram_alignment = m_ram_alignment;
         m_object.code_section.reserve(m_code_size);
         m_object.data_section.reserve(m_data_size);
+        m_object.ram_section.reserve(m_ram_size);
 
         for (const auto& line : m_lines) {
             if (line.operation.empty() || line.operation == ".segment" || line.operation == ".export" ||
@@ -365,7 +383,7 @@ private:
     }
 
     std::vector<uint8_t>* output(Section section) {
-        return section == Section::Code ? &m_object.code_section : &m_object.data_section;
+        return section == Section::Code ? &m_object.code_section : section == Section::Data ? &m_object.data_section : &m_object.ram_section;
     }
 
     static void emitByte(std::vector<uint8_t>* output, uint8_t value) {
@@ -444,6 +462,10 @@ private:
             if (name.size() > 6 && name.compare(0, 5, "lo24(") == 0 && name.back() == ')') {
                 name = name.substr(5, name.size() - 6);
                 relocation = RelocationType::ADDR24_OFFSET;
+            }
+            if (name.size() > 5 && name.compare(0, 4, "ram(") == 0 && name.back() == ')') {
+                name = name.substr(4, name.size() - 5);
+                relocation = RelocationType::ADDR16_RAM;
             }
             if (!isIdentifier(name)) fail("invalid symbolic immediate '" + operand + "'.", line.line_number);
             emitWord(out, 0);
@@ -798,13 +820,10 @@ private:
         for (auto& relocation : m_object.relocation_table) {
             const auto symbol = m_symbols.find(relocation.target_symbol_name);
             if (symbol == m_symbols.end() || m_exports.count(symbol->first) != 0) continue;
-            if (symbol->second.section != SymbolSection::CODE) {
-                fail("absolute references to local DATA labels require .export.", 1);
-            }
             const auto name = symbol->first;
             relocation.target_symbol_name = std::string(1, InternalSymbolPrefix) + name;
             if (added.insert(name).second) m_object.symbol_table.push_back({
-                relocation.target_symbol_name, SymbolSection::CODE,
+                relocation.target_symbol_name, symbol->second.section,
                 static_cast<uint32_t>(symbol->second.offset)});
         }
         for (const auto& line : m_lines) {

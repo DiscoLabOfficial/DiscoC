@@ -1,0 +1,2 @@
+// error: unsigned word
+void main() { word address = 256; word* p = (word*)address; }

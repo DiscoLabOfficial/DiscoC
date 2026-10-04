@@ -1,0 +1,1 @@
+module Main; import "math.dci"; import "math.dci"; void main() { word result = add(12, 30); }

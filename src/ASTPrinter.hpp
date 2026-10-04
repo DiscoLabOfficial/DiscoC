@@ -10,6 +10,18 @@ public:
 
     void visit(LiteralExpr& expr, const Type* context) override;
     void visit(VariableExpr& expr, const Type* context) override;
+    void visit(PlotCoordinateExpr& expr, const Type* context) override;
+    void visit(LayoutQueryExpr& expr, const Type* context) override;
+    void visit(NullExpr& expr, const Type* context) override;
+    void visit(InitializerListExpr& expr, const Type* context) override;
+    void visit(StringExpr& expr, const Type* context) override;
+    void visit(UpdateExpr& expr, const Type* context) override;
+    void visit(ForStmt& stmt) override;
+    void visit(ContinueStmt& stmt) override;
+    void visit(FallthroughStmt& stmt) override;
+    void visit(EnumDeclStmt& stmt) override;
+    void visit(StaticAssertStmt& stmt) override;
+    void visit(TypeAliasDeclStmt& stmt) override;
     void visit(BinaryExpr& expr, const Type* context) override;
     void visit(AssignExpr& expr, const Type* context) override;
     void visit(SubscriptExpr& expr, const Type* context) override;
@@ -31,6 +43,7 @@ public:
     void visit(WhileStmt& stmt) override;
     void visit(ExpressionStmt& stmt) override;
 	void visit(PlotStmt& stmt) override;
+    void visit(PlotBlockStmt& stmt) override;
 	void visit(PlotBeginStmt& stmt) override;
 	void visit(PlotEndStmt& stmt) override;
     void visit(SetColorStmt& stmt) override;

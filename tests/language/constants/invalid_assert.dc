@@ -1,0 +1,2 @@
+// error: Static assertion failed
+static_assert(1 == 2);

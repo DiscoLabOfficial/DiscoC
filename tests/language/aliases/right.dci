@@ -1,0 +1,3 @@
+module AliasRight;
+import "shared.dci";
+type Right = Shared;

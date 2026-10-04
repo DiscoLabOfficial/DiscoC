@@ -33,13 +33,20 @@ The current representation is SSA-like rather than a complete SSA implementation
 ### Values and memory
 
 * `constant` creates a literal value.
-* `address` materializes a local, parameter, global data, function, member, or indexed address.
-* `load.indirect` reads through an address.
-* `store.indirect` writes through an address.
+* `address` materializes local, parameter, global, member, or compiler-temporary storage.
+* `pointer.offset` applies the analyzed element stride and checked address reach.
+* `pointer.compare` compares offset and bank (far) and produces bool.
+* `load.indirect` reads through a typed address, carrying verified volatility.
+* `store.indirect` writes through a typed, writable address, also carrying volatility.
 * `binary`, `unary`, and `cast` represent typed expression operations.
 * `call` represents a named function call and may produce a value.
 
 ### Hardware operations
+
+The module records its target. Capabilities are verified independently of the
+analyzer, including graphics, cache, hardware loops and far data. Explicit
+`plot.coordinate.read/write` replace magic source symbol names; coordinate reads
+are snapshotted like observable loads. `cache` records instruction-cache requests.
 
 The IR has explicit operations for target-visible statements such as `plot`, `set_color`, `cmode`, `rpix`, and hardware loops. This keeps their side effects visible to the backend rather than hiding them in AST-specific code-generation visitors.
 
@@ -50,6 +57,13 @@ The IR has explicit operations for target-visible statements such as `plot`, `se
 * `switch` has one condition, one target per case, and an optional default target.
 * `return` and `return.void` terminate a function path.
 * `unreachable` marks a merge block that cannot be reached after both branches terminate.
+
+For statements have separate condition, body, increment and exit blocks.
+Their continue target is the increment block; while continues target the
+condition. Switch break targets do not override loop continuation. Compound
+updates lower one address, one load and one store rather than duplicating AST
+l-values. Constants/layout queries and interface headers disappear before
+machine lowering; aggregate initializers become ordered scalar stores.
 
 ## Basic-block invariants
 
@@ -121,6 +135,16 @@ Expressions are lowered recursively. L-values are lowered through `lowerAddress`
 
 `if`, `while`, and `switch` create dedicated blocks and explicit edges. `break` resolves to the nearest active loop or switch exit block. Hardware-loop lowering emits a start instruction, lowers the body, and emits a matching hardware-loop end marker.
 
+Logical AND/OR lower to conditional branches rather than eager binary
+instructions. A word-aligned temporary holds their canonical bool result.
+Comparisons and logical negation produce bool. Access types preserve per-layer
+const/volatile qualifiers; the verifier checks memory flags and pointee types
+and rejects ROM/const stores except permitted const declaration initialization.
+
+Lexical plot context is per-instruction metadata, independent of block emission
+order. Plot blocks can leave through break or return without needing a closing
+hardware instruction on that edge.
+
 The lowerer limits the number of generated blocks and values per function. These limits prevent malformed or adversarial source from growing one IR function without bound.
 
 ## Verification boundary
@@ -155,7 +179,9 @@ When adding an instruction or pass:
 6. Add a source example covering success and invalid forms.
 7. Re-run `--emit-ir`, object compilation, assembly emission, and linking.
 
-The backend materializes expression trees on demand and uses a linear-scan
-allocator for reusable values. Introducing phi nodes, explicit spill slots, or
-multi-pass optimization should preserve the existing ID and verifier
-invariants.
+The backend retains loads/calls and potentially faulting arithmetic at their
+definitions in explicit aligned spill slots. Pure expressions may be
+materialized on demand; scalar allocation is conservative, with checked
+pointer/volatile/plot functions using the spill path. Introducing phi nodes or
+multi-pass optimization must preserve IDs, memory effects, evaluation order,
+and verifier invariants.
