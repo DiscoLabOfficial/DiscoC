@@ -98,6 +98,8 @@ void ObjectFile::read_vec(std::istream& in, std::vector<T>& vec,
 // Main I/O Methods
 
 void ObjectFile::write(const std::string& path) {
+    config.bitmap.validate();
+    if (config.bitmap.enabled && config.target != TargetKind::GSU) throw std::runtime_error("Bitmap configuration requires GSU.");
     if (!data_alignment || data_alignment > 128 || (data_alignment & (data_alignment - 1)) ||
         !ram_alignment || ram_alignment > 128 || (ram_alignment & (ram_alignment - 1)))
         throw std::runtime_error("Object file: section alignment must be a power of two in 1..128.");
@@ -134,6 +136,13 @@ void ObjectFile::write(const std::string& path) {
     write_u32_le(out, config.code_start_address);
     write_u8(out, data_alignment);
     write_u8(out, ram_alignment);
+    write_u8(out, config.bitmap.enabled ? 1 : 0);
+    if (config.bitmap.enabled) {
+        write_u8(out, config.bitmap.object_mode ? 1 : 0);
+        write_u8(out, config.bitmap.depth);
+        write_u32_le(out, config.bitmap.height);
+        write_u32_le(out, config.bitmap.base);
+    }
 
     // Write sections
     write_vec(out, code_section);
@@ -186,7 +195,7 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
     }
 
     const uint8_t version = read_u8(in, "format version");
-    if (version != 3 && version != 4 && version != 5 && version != CurrentFormatVersion) {
+    if (version < 3 || version > CurrentFormatVersion) {
         throw std::runtime_error("File has an unsupported DiscoC object format version: " + path);
     }
 
@@ -212,6 +221,22 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
         obj.ram_alignment = read_u8(in, "RAM alignment");
         if (!obj.ram_alignment || obj.ram_alignment > 128 || (obj.ram_alignment & (obj.ram_alignment - 1)))
             throw std::runtime_error("Object file: invalid RAM alignment.");
+    }
+    if (version >= 7) {
+        const auto enabled = read_u8(in, "bitmap presence");
+        if (enabled > 1) throw std::runtime_error("Object file: invalid bitmap presence flag.");
+        obj.config.bitmap.enabled = enabled != 0;
+        if (enabled) {
+            const auto mode = read_u8(in, "bitmap mode");
+            if (mode > 1 || obj.config.target != TargetKind::GSU) throw std::runtime_error("Object file: invalid bitmap target/mode.");
+            obj.config.bitmap.object_mode = mode != 0;
+            obj.config.bitmap.depth = read_u8(in, "bitmap depth");
+            const auto height = read_u32_le(in, "bitmap height");
+            if (height > 256) throw std::runtime_error("Object file: invalid bitmap height.");
+            obj.config.bitmap.height = static_cast<std::uint16_t>(height);
+            obj.config.bitmap.base = read_u32_le(in, "bitmap base");
+            obj.config.bitmap.validate();
+        }
     }
     read_vec(in, obj.code_section, MaxSectionBytes, "code section");
     read_vec(in, obj.data_section, MaxSectionBytes, "data section");

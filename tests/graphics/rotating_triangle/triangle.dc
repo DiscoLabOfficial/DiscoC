@@ -1,0 +1,101 @@
+// One frame per invocation. The SNES host supplies phase 0..63 at $70:F002,
+// restarts this fixed-origin RAM payload, and presents it only after STOP.
+bitmap main_screen {
+    mode bitmap;
+    size 256x192;
+    depth 2bpp;
+    base 0x0000;
+}
+
+word sine_q6(word phase) {
+    // A local RAM table avoids a ROM fetch while the CPU owns the ROM bus.
+    // Values represent round(64*sin(i*pi/32)), mirrored into four quadrants.
+    word quarter[17] = { 0, 6, 12, 19, 24, 30, 36, 41, 45,
+                         49, 53, 56, 59, 61, 63, 64, 64 };
+    phase &= 63;
+    word index = phase & 15;
+    if ((phase & 16) != 0) { index = 16 - index; }
+    word value = quarter[index];
+    if ((phase & 32) != 0) { value = -value; }
+    return value;
+}
+
+word floor_div(word value, word positive_divisor) {
+    word quotient = value / positive_divisor;
+    if (value < 0 && value % positive_divisor != 0) { quotient--; }
+    return quotient;
+}
+
+word main() {
+    use bitmap main_screen;
+    word phase = *(volatile word*)0xF002 & 63;
+    word sine = sine_q6(phase);
+    word cosine = sine_q6(phase + 16);
+    word pixels = 0;
+    word white = 0;
+    word black = 0;
+
+    // Clear only the 14x14 tile area that can contain any rotated pose.
+    // The previous invocation flushed its pixel caches before STOP.
+    for (word column = 9; column < 23; column++) {
+        unsigned word address = (unsigned word)(column * 384 + 80);
+        word* tile_words = (word*)address;
+        @cache
+        for (word i = 0; i < 112; i++) { tile_words[i] = 0; }
+    }
+
+    // Three local-space triangle half-planes, transformed into screen space.
+    word horizontal[3] = { -sine, cosine + cosine + sine, -cosine - cosine + sine };
+    word vertical[3] = { cosine, sine + sine - cosine, -sine - sine - cosine };
+    word boundary[3] = { 2048, 3072, 3072 };
+    plot {
+        options;
+        for (word y = 40; y < 152; y++) {
+            word dy = y - 96;
+            word left = -56;
+            word right = 55;
+            for (word edge = 0; edge < 3; edge++) {
+                word a = horizontal[edge];
+                word b = boundary[edge] - dy * vertical[edge];
+                if (a > 0) {
+                    word limit = floor_div(b, a);
+                    if (limit < right) { right = limit; }
+                } else if (a < 0) {
+                    word limit = -floor_div(b, -a);
+                    if (limit > left) { left = limit; }
+                } else if (b < 0) {
+                    left = 1; right = 0;
+                }
+            }
+            if (left <= right) {
+                // Inverse rotation about (128,96). Keep six fractional bits;
+                // all intermediates fit a signed word. Walk the accepted span
+                // instead of testing all three edges again for every pixel.
+                word u = left * cosine + dy * sine;
+                word v = -left * sine + dy * cosine;
+                at (128 + left, y);
+                @cache
+                for (word x = left; x <= right; x++) {
+                    // Bit 9 of Q6 is an eight-pixel checker cell. Sampling
+                    // local u/v rotates the pattern with the geometry.
+                    word shade = 1 + (((u ^ v) & 512) >> 9);
+                    color shade;
+                    white += shade - 1;
+                    black += 2 - shade;
+                    pixel; // PLOT alone advances the hardware X cursor.
+                    pixels++;
+                    u += cosine;
+                    v -= sine;
+                }
+            }
+        }
+        flush; // Drain the pixel caches before the CPU's VBlank DMA.
+    }
+
+    // Mailbox and diagnostics sit outside framebuffer, payload and stack.
+    *(volatile word*)0xF000 = pixels;
+    *(volatile word*)0xF004 = white;
+    *(volatile word*)0xF006 = black;
+    *(volatile word*)0xF008 = phase;
+    return pixels;
+}

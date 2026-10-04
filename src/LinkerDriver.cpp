@@ -183,7 +183,13 @@ int runLinker(std::vector<std::string> arguments) {
                 throw std::runtime_error(
                     "Input objects use incompatible target configurations.");
             }
+            if (candidate.bitmap.enabled) {
+                if (config.bitmap.enabled && config.bitmap != candidate.bitmap)
+                    throw std::runtime_error("Input objects select conflicting host bitmap configurations.");
+                config.bitmap = candidate.bitmap;
+            }
         }
+        config.bitmap.validate();
         if (initialize_runtime && config.target != TargetKind::GSU)
             throw std::runtime_error("Runtime initialization is only supported for GSU.");
         std::vector<std::uint8_t> final_ram;
@@ -295,6 +301,19 @@ int runLinker(std::vector<std::string> arguments) {
         }
         if (config.target == TargetKind::GSU)
             GsuMemoryMap::validatePayload(config.code_start_address, final_code.size(), final_data.size());
+        if (config.bitmap.enabled) {
+            const std::uint64_t begin = 0x700000u + config.bitmap.base;
+            const auto end = begin + config.bitmap.sizeBytes();
+            const auto overlaps = [&](std::uint64_t address, std::uint64_t bytes) {
+                return bytes && address < end && address + bytes > begin;
+            };
+            if (overlaps(config.code_start_address, final_code.size() + final_data.size()))
+                throw std::runtime_error("Bitmap framebuffer overlaps the linked RAM payload.");
+            if (overlaps(0x700000u + (ram_bank << 16) + ram_origin, final_ram.size()))
+                throw std::runtime_error("Bitmap framebuffer overlaps static RAM.");
+            if (initialize_runtime && overlaps(0x700000u + (ram_bank << 16) + stack_pointer, 2))
+                throw std::runtime_error("Bitmap framebuffer overlaps the initial stack word.");
+        }
         if (!final_ram.empty()) {
             const auto ram_start = 0x700000u | (ram_bank << 16) | ram_origin;
             const auto ram_end = static_cast<std::uint64_t>(ram_start) + final_ram.size();
@@ -348,7 +367,13 @@ int runLinker(std::vector<std::string> arguments) {
                     if (reloc.type != RelocationType::ADDR16_RAM || config.target != TargetKind::GSU)
                         throw std::runtime_error("Stack-limit symbol requires a GSU RAM relocation.");
                     const auto required = parseOptionNumber(reloc.target_symbol_name.substr(std::string(GSUAbi::StackLimitPrefix).size()), 65535);
-                    const auto floor = final_ram.empty() ? 0u : static_cast<std::uint32_t>((ram_origin + final_ram.size() + 1u) & ~1u);
+                    auto floor = final_ram.empty() ? 0u : static_cast<std::uint32_t>((ram_origin + final_ram.size() + 1u) & ~1u);
+                    if (config.bitmap.enabled) {
+                        const auto bank_base = ram_bank * 65536u;
+                        const auto screen_end = config.bitmap.base + config.bitmap.sizeBytes();
+                        if (config.bitmap.base < bank_base + stack_pointer && screen_end > bank_base)
+                            floor = std::max(floor, screen_end - bank_base);
+                    }
                     if (floor > 65535u - required) throw std::runtime_error("Static storage leaves no room for the requested stack frame.");
                     target_addr = 0x700000u | (ram_bank << 16) | (floor + required);
                 } else if (reloc.target_symbol_name == GSUAbi::NearRamBankSymbol ||
@@ -450,6 +475,10 @@ int runLinker(std::vector<std::string> arguments) {
         }
 
         std::cout << "Successfully linked payload. Total size: " << final_rom.size() << " bytes." << std::endl;
+        if (config.bitmap.enabled)
+            std::cout << "SNES host bitmap configuration: SCBR=" << static_cast<unsigned>(config.bitmap.scbr())
+                      << ", SCMR mode bits=" << static_cast<unsigned>(config.bitmap.scmr())
+                      << " (host must add ROM/RAM ownership bits)." << std::endl;
 
     } catch (const std::runtime_error& e) {
         std::cerr << "\nLinker Error: " << e.what() << std::endl;

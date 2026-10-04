@@ -8,17 +8,19 @@ The format is intentionally small and implementation-owned. It is not ELF, SNES 
 
 All multi-byte integer fields are serialized explicitly in little-endian byte
 order, independent of the host architecture. The current format version is
-6. The format is serialized in this order:
+7. The format is serialized in this order:
 
 | Field | Encoding |
 | --- | --- |
 | Magic | 5 ASCII bytes: `DISCO` |
-| Format version | `uint8_t`: currently `6` |
+| Format version | `uint8_t`: currently `7` |
 | Target | `uint8_t`: `0` = GSU, `1` = SPC700 |
 | Memory mapping | `uint8_t`: `0` = LoROM, `1` = HiROM |
 | Code start address | `uint32_t` |
 | DATA alignment | `uint8_t`: power of two from 1 to 128 (introduced in v4; generalized in v6) |
 | RAM alignment | `uint8_t`: power of two from 1 to 128 (version 6) |
+| Bitmap present | `uint8_t`: 0 or 1 (version 7) |
+| Bitmap profile, if present | `uint8_t` OBJ flag, `uint8_t` depth, `uint32_t` height, `uint32_t` base |
 | Code section | `uint32_t` byte count, followed by raw code bytes |
 | Data section | `uint32_t` byte count, followed by raw data bytes |
 | RAM initialization image | `uint32_t` byte count, followed by initial RAM bytes (version 5) |
@@ -26,6 +28,14 @@ order, independent of the host architecture. The current format version is
 | Symbols | Repeated symbol records |
 | Relocation count | `uint32_t` |
 | Relocations | Repeated relocation records |
+
+Bitmap metadata records the selected SNES host configuration, not instructions.
+The OBJ flag is 0/1; depth is 2/4/8; height is 128/160/192 for bitmap or 256
+for OBJ. Base is a 1024-byte-aligned offset from `$70:0000`; the complete
+framebuffer must fit 128 KiB. Metadata is GSU-only. It survives compiler,
+assembler and final linked assembly exports. The linker merges identical
+profiles, rejects conflicts, and checks framebuffer overlap with static RAM,
+RAM payloads and initialized stack placement. See [GSU graphics](gsu-graphics.md).
 
 ### Symbol record
 
@@ -83,7 +93,7 @@ emits CODE relocations for calls and global addresses.
 7. Applies relocations.
 8. Writes code, alignment padding, and data to the output file.
 
-Version 6 allocates each object's RAM image with its declared alignment, from
+Versions 6/7 allocate each object's RAM image with its declared alignment, from
 `--ram-origin` in `--ram-bank`. RAM bytes are not appended to ROM DATA.
 `--init-runtime` encodes zeroing/nonzero initialization in startup; otherwise
 nonempty RAM requires `--host-initialized-globals`. Public/private RAM targets
@@ -154,9 +164,10 @@ Compiler bank restoration uses reserved `__disco_near_ram_bank` and
 `--rom-bank`. Input definitions of these symbols are rejected. They are not
 ordinary exported objects or executable targets.
 Reserved `__disco_stack_limit_<bytes>` references resolve to the aligned static
-RAM end plus the required stack space. They enforce frame/push checks before
+RAM end (and selected framebuffer end below the stack) plus the required stack space. They enforce frame/push checks before
 stack traffic and cannot be defined by input objects. Without RAM allocation
-their floor is zero. These checks do not reserve unrelated host resources.
+their floor is zero unless selected bitmap metadata raises it. These checks
+do not reserve unrelated host resources.
 
 RAM execution requires copying the payload to cartridge RAM and matching the
 configured program bank/PC. ROM-qualified accesses still require ROM-resident
@@ -182,9 +193,12 @@ The linker's `.bin` output is the final linked GSU payload for the object set. I
 
 The reader accepts version 3 as packed DATA (alignment 1) and version 4 with
 DATA alignment, both without a RAM image. Version 5 includes RAM with default
-alignment 2. Writers emit version 6, which records RAM alignment explicitly.
-Versions 3/4 cannot contain RAM symbols or relocation type 4. Other versions and
-invalid alignment bytes are rejected. RAM images are bounded to 64 KiB. Rebuild
+alignment 2. Version 6 records RAM alignment explicitly. Writers emit version 7,
+which additionally records optional host bitmap metadata. Versions 3 through 6
+have no bitmap field; the reader supplies an unselected profile.
+Versions 3/4 cannot contain RAM symbols or relocation type 4. Other versions,
+invalid alignment bytes, truncated bitmap records, invalid flags and invalid
+profiles are rejected. RAM images are bounded to 64 KiB. Rebuild
 compiler objects when changing the pointer ABI: reading an old container does
 not make its old far argument layout ABI-compatible, and cross-unit signatures
 are not stored or checked by this format.

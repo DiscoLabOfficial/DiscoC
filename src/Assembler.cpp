@@ -148,6 +148,9 @@ class AssemblerImpl {
 public:
     ObjectFile assemble(const std::string& source) {
         m_lines = parse(source);
+        if (m_config.bitmap.enabled && (m_config_definitions.count("__DISCO_BITMAP_SCBR") == 0 || m_config_definitions.count("__DISCO_BITMAP_SCMR") == 0))
+            fail("Bitmap metadata requires both SCBR and SCMR definitions.", 1);
+        m_config.bitmap.validate();
         firstPass();
         relaxBranches();
         secondPass();
@@ -199,13 +202,25 @@ private:
             fail(".define expects one reserved configuration name and value.", line_number);
         }
         if (name != "__DISCO_MEMORY_MAPPING" && name != "__DISCO_CODE_START_ADDRESS" &&
-            name != "__DISCO_DATA_ALIGNMENT" && name != "__DISCO_RAM_ALIGNMENT") {
+            name != "__DISCO_DATA_ALIGNMENT" && name != "__DISCO_RAM_ALIGNMENT" &&
+            name != "__DISCO_BITMAP_SCBR" && name != "__DISCO_BITMAP_SCMR") {
             fail("unsupported .define name '" + name + "'.", line_number);
         }
         if (!m_config_definitions.insert(name).second) {
             fail("duplicate configuration definition '" + name + "'.", line_number);
         }
-        if (name == "__DISCO_MEMORY_MAPPING") {
+        if (name == "__DISCO_BITMAP_SCBR" || name == "__DISCO_BITMAP_SCMR") {
+            std::int64_t number = 0;
+            if (!parseNumber(value, number) || number < 0 || number > 255) fail("Invalid bitmap register value.", line_number);
+            m_config.bitmap.enabled = true;
+            if (name == "__DISCO_BITMAP_SCBR") m_config.bitmap.base = static_cast<std::uint32_t>(number) << 10;
+            else {
+                if ((number & ~0x27) || (number & 3) == 2) fail("Invalid bitmap SCMR mode bits (ownership bits are host-owned).", line_number);
+                m_config.bitmap.depth = (number & 3) == 3 ? 8 : (number & 3) == 1 ? 4 : 2;
+                m_config.bitmap.object_mode = (number & 0x24) == 0x24;
+                m_config.bitmap.height = m_config.bitmap.object_mode ? 256 : number & 0x20 ? 192 : number & 4 ? 160 : 128;
+            }
+        } else if (name == "__DISCO_MEMORY_MAPPING") {
             if (value == "lorom") m_config.mapping = MemoryMapping::LoROM;
             else if (value == "hirom") m_config.mapping = MemoryMapping::HiROM;
             else fail("memory mapping must be lorom or hirom.", line_number);

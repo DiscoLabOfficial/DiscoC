@@ -11,6 +11,13 @@ void Token::print() const {
 
 std::string to_string(TokenType type) {
     switch (type) {
+        case TokenType::KEYWORD_CURSOR: return "KEYWORD_CURSOR";
+        case TokenType::KEYWORD_PIXEL: return "KEYWORD_PIXEL";
+        case TokenType::KEYWORD_OPTIONS: return "KEYWORD_OPTIONS";
+        case TokenType::KEYWORD_READ_PIXEL: return "KEYWORD_READ_PIXEL";
+        case TokenType::KEYWORD_FLUSH: return "KEYWORD_FLUSH";
+        case TokenType::KEYWORD_BITMAP: return "KEYWORD_BITMAP";
+        case TokenType::KEYWORD_USE: return "KEYWORD_USE";
         case TokenType::KEYWORD_STRUCT: return "KEYWORD_STRUCT";
         case TokenType::KEYWORD_CONST: return "KEYWORD_CONST";
         case TokenType::KEYWORD_TYPE: return "KEYWORD_TYPE";

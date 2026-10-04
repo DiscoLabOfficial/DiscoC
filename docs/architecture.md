@@ -119,7 +119,7 @@ Before emission, `IRCodeGenerator` runs a linear-scan allocation over the
 verified `IRValueId` live intervals. Reused values may reside in `R5`, `R7`, or
 `R8`; `R0` remains the expression accumulator and `R1`/`R3` remain backend
 temporaries. Pure values can be materialized/rematerialized at their use site.
-All loads/calls are evaluated at their IR definition and retained in aligned
+All loads/calls/RPIX results are evaluated at their IR definition and retained in aligned
 frame slots, regardless of use count. Potentially faulting division/shifts are
 also evaluated there. This preserves observable order and unused volatile
 accesses. Calls preserve allocated live values; scalar argument layout is
@@ -143,6 +143,14 @@ an aligned temporary. Each instruction carries lexical plot-context metadata,
 so return/break and block emission order cannot leak plotting state.
 Software integer division uses a bounded 16-step core; shifts validate counts.
 Integer overflow/casts follow the modular contract in the language specification.
+
+Stateful graphics IR tracks R1/R2 cursor access, COLR/POR updates, ROM-buffer
+dependencies and pixel-cache effects. `pixel` emits one PLOT, relying on its
+hardware R1 increment. `read_pixel` and `flush` share RPIX with value/discard
+forms; both stay observable. The backend uses GETC only for a direct final ROM
+byte, configuring ROMB/R14 and restoring a temporary far bank. Other colors
+evaluate normally and use COLOR. Bitmap configuration is owned module/object
+metadata for host SCMR/SCBR setup, not a stream of GSU writes.
 
 Comparisons are materialized as `0` or `1` values before they are consumed by
 control flow. Signed relations use the GSU signed branch conditions and
@@ -169,11 +177,15 @@ branches that exceed the short displacement range are relaxed by the assembler
 or canonical IR backend into object-relative absolute jumps.
 
 The linker lays out CODE then ROM DATA in the payload. Object versions 4
-through 6 record DATA alignment. Version 5 introduced static RAM; version 6
-adds its explicit alignment. RAM is allocated separately from `--ram-origin`
+through 7 record DATA alignment. Version 5 introduced static RAM; version 6
+adds its explicit alignment; version 7 adds optional bitmap host metadata.
+RAM is allocated separately from `--ram-origin`
 in the near RAM bank; optional startup zeroes/initializes it. Padding is included in each symbol/relocation base.
 Internal names are object-scoped across CODE, DATA, and RAM; external lookup
 cannot resolve them from another object.
+Selected bitmap profiles must agree across objects. The linker validates their
+framebuffer reservations against RAM payloads, static data and initial stack
+placement, and includes known framebuffer boundaries in stack-floor checks.
 Both the canonical IR backend and `discas` re-emit out-of-range local branches
 using object-relative absolute jumps; short branches retain their compact encoding.
 
@@ -328,12 +340,13 @@ This separation is intentional: the AST and IR are compiler-phase data, while `O
 
 The execution regressions use a bounded instruction-level model of the GSU
 prefetch pipeline, register selectors, two RAM banks, RAM instruction fetch,
-RAMB/ROMB, ROM buffer reads and mirror views, stack memory, comparisons, calls, and
-branches. Hand-encoded checks validate the model, and linked payloads validate
+RAMB/ROMB, ROM buffer reads and mirror views, stack memory, comparisons, calls,
+branches, functional instruction caching and pixel-cache/bitplane behavior.
+Hand-encoded checks validate the model, and linked payloads validate
 both the IR backend and assembly path. Unsupported opcodes, invalid program
 reads, mismatched expectations, and instruction-limit exhaustion fail tests.
 This model does not emulate a complete SNES, cache timing, bus ownership,
-graphics, or interrupts; emulator and hardware validation remain necessary.
+PPU display, or interrupts; emulator and hardware validation remain necessary.
 
 The project is pre-release compiler infrastructure. Register allocation is
 still conservative: scalar-only functions rematerialize under register pressure,

@@ -62,6 +62,8 @@ std::unique_ptr<Stmt> moduleInterface(const Stmt& declaration, bool interface_fi
         for (auto& parameter : parameters) parameter.symbol_id = SymbolId{};
         result = std::make_unique<FunctionDeclStmt>(function->token, function->is_cached, function->returnType,
             std::move(parameters), std::vector<std::unique_ptr<Stmt>>{}, true);
+    } else if (const auto* bitmap = dynamic_cast<const BitmapDeclStmt*>(&declaration)) {
+        result = std::make_unique<BitmapDeclStmt>(bitmap->token, bitmap->config);
     } else if (const auto* global = dynamic_cast<const VarDeclStmt*>(&declaration)) {
         const bool constant = global->is_constexpr || (global->type.is_const && !global->type.is_volatile &&
             global->type.pointer_level == 0 && global->type.array_size == 0 && !global->array_extent && !global->inferred_extent);

@@ -24,6 +24,9 @@ private:
     void visit(LiteralExpr&, const Type*) override {}
     void visit(VariableExpr&, const Type*) override {}
     void visit(PlotCoordinateExpr&, const Type*) override {}
+    void visit(ReadPixelExpr&, const Type*) override {}
+    void visit(BitmapDeclStmt&) override {}
+    void visit(UseBitmapStmt&) override {}
     void visit(LayoutQueryExpr&, const Type*) override {}
     void visit(NullExpr&, const Type*) override {}
     void visit(InitializerListExpr&, const Type*) override {}

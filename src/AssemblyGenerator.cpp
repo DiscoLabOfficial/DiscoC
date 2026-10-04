@@ -86,6 +86,12 @@ std::string AssemblyGenerator::generate() const {
         << "\n.define __DISCO_CODE_START_ADDRESS " << hex(m_object.config.code_start_address, 6)
         << "\n.define __DISCO_DATA_ALIGNMENT " << static_cast<unsigned>(m_object.data_alignment)
         << "\n.define __DISCO_RAM_ALIGNMENT " << static_cast<unsigned>(m_object.ram_alignment) << '\n';
+    m_object.config.bitmap.validate();
+    if (m_object.config.bitmap.enabled) {
+        out << "; SNES host writes SCBR and SCMR before starting GSU; OR SCMR with bus ownership bits.\n"
+            << ".define __DISCO_BITMAP_SCBR " << hex(m_object.config.bitmap.scbr())
+            << "\n.define __DISCO_BITMAP_SCMR " << hex(m_object.config.bitmap.scmr()) << '\n';
+    }
     std::set<std::string> names;
     for (const auto& symbol : m_object.symbol_table) names.insert(symbol.name);
     std::map<std::string, std::string> renamed;

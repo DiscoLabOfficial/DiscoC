@@ -622,6 +622,10 @@ void IRCodeGenerator::materialize(IRValueId value) {
         case IROpcode::PlotCoordinateRead:
             emitMove(0, instruction.immediate == 0 ? 1 : 2);
             break;
+        case IROpcode::Rpix:
+            emitByte(0x10); // Explicitly direct the read result to R0, never R1/R2.
+            emitByte(0x3d); emitByte(0x4c);
+            break;
         case IROpcode::Constant:
             if (isFarPointer(instruction.type)) {
                 emitLiteral(instruction.immediate & 0xffff);
@@ -921,26 +925,35 @@ void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
             // blocks happen to be emitted (return/break can skip plot.end).
             break;
         case IROpcode::Plot:
-            if (instruction.operands.size() != 2) fail("IR codegen: plot shape is invalid.", instruction.source);
-            materialize(instruction.operands[1]);
-            emitMove(2, 0);
-            materialize(instruction.operands[0]);
-            emitMove(1, 0);
+            // PLOT reads the persistent cursor and increments R1 in hardware.
             emitByte(0x4C);
             break;
         case IROpcode::SetColor:
             materialize(instruction.operands.front());
-            emitByte(static_cast<std::uint8_t>(OpCode::COLOR_R));
+            if (instruction.operation == "rom.byte") {
+                const auto& address = producer(instruction.operands.front(), instruction.source).type;
+                emitAddressCheck(address, 1);
+                if (isFarPointer(address)) emitSelectBank(4, AddressSpace::ROM);
+                else { emitNearBank(3, AddressSpace::ROM); emitSelectBank(3, AddressSpace::ROM); }
+                emitMove(14, 0);
+                // Writing R14 starts the ROM-buffer fetch. GETC synchronizes
+                // with that buffer in hardware, just like GETB; no address operand.
+                emitByte(0xdf);
+                if (isFarPointer(address)) { emitNearBank(3, AddressSpace::ROM); emitSelectBank(3, AddressSpace::ROM); }
+            } else emitByte(static_cast<std::uint8_t>(OpCode::COLOR_R));
             break;
         case IROpcode::CMode:
-            materialize(instruction.operands.front());
-            emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
-            emitByte(0x4E);
+            if (m_known_plot_options != instruction.immediate) {
+                emitLiteral(instruction.immediate);
+                emitByte(static_cast<std::uint8_t>(OpCode::ALT1)); emitByte(0x4E);
+                m_known_plot_options = static_cast<int>(instruction.immediate);
+            }
             break;
         case IROpcode::Cache:
             emitByte(static_cast<std::uint8_t>(OpCode::CACHE));
             break;
         case IROpcode::Rpix:
+            emitByte(0x10);
             emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
             emitByte(0x4C);
             break;
@@ -975,10 +988,13 @@ void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
 }
 
 void IRCodeGenerator::emitBlock(const IRBasicBlock& block) {
+    // POR is unknown at a CFG join/backedge. Only elide straight-line repeats.
+    m_known_plot_options = -1;
     m_materialized_values.clear();
     for (const auto& instruction : block.instructions) {
         m_current_instruction_position = m_emission_position++;
         m_isInPlottingContext = instruction.in_plot_context;
+        if (instruction.opcode == IROpcode::Call) m_known_plot_options = -1;
         // A void call has no SSA result, but it is still a side effect that
         // must be emitted when it appears as an expression statement.
         if (instruction.opcode == IROpcode::Call &&
@@ -1031,6 +1047,7 @@ void IRCodeGenerator::patchBranches() {
 ObjectFile IRCodeGenerator::generateInternal(const IRModule& module) {
     m_object_file = ObjectFile();
     m_object_file.config = m_config;
+    m_object_file.config.bitmap = module.bitmap;
 
     for (const auto& function : module.functions) {
         m_current_function = &function;
@@ -1070,7 +1087,7 @@ ObjectFile IRCodeGenerator::generateInternal(const IRModule& module) {
         {
             for (const auto& value : m_values) {
                 const auto opcode = value.second->opcode;
-                const bool observable = opcode == IROpcode::PlotCoordinateRead || opcode == IROpcode::LoadIndirect || opcode == IROpcode::Load || opcode == IROpcode::Call;
+                const bool observable = opcode == IROpcode::PlotCoordinateRead || opcode == IROpcode::LoadIndirect || opcode == IROpcode::Load || opcode == IROpcode::Call || value.second->hardwareEffects().observable();
                 const bool arithmetic_check = opcode == IROpcode::Binary &&
                     (value.second->operation == "/" || value.second->operation == "%" || value.second->operation == "<<" || value.second->operation == ">>");
                 if (!observable && !arithmetic_check && !(m_checked_pointer_mode && needsPointerSpill(*value.second))) continue;

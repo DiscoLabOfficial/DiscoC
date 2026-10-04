@@ -296,10 +296,53 @@ void testTargetCapabilities() {
     expectFailure("SPC700 far-data IR", module, "far-data capability");
 }
 
+void testGraphicsEffects() {
+    auto function = baseFunction(voidType());
+    IRInstruction pixel; pixel.opcode = IROpcode::Plot; pixel.in_plot_context = true;
+    IRInstruction flush; flush.opcode = IROpcode::Rpix; flush.type = voidType();
+    IRInstruction end; end.opcode = IROpcode::ReturnVoid;
+    function.blocks[0].instructions = {pixel, flush, end};
+    IRModule module{{function}};
+    expectSuccess("stateful pixel and discarded rpix", module);
+    const auto effects = pixel.hardwareEffects(), read = flush.hardwareEffects();
+    if (effects.reads_registers != 6 || effects.writes_registers != 2 || !effects.reads_color ||
+        !effects.pixel_cache || !read.observable() || read.writes_registers != 0 || !read.reads_framebuffer)
+        throw std::runtime_error("Incorrect PLOT/RPIX effects");
+    module.functions[0].blocks[0].instructions[0].in_plot_context = false;
+    expectFailure("pixel outside context", module, "pixel requires");
+    function.blocks[0].instructions = {constant(1), pixel, end}; function.value_count = 1;
+    function.blocks[0].instructions[1].operands = {IRValueId{1}};
+    expectFailure("pixel with explicit coordinates", IRModule{{function}}, "pixel requires");
+    auto rpix = flush; rpix.type = Type{BaseType::BYTE, "", 1, false}; rpix.result = IRValueId{1}; rpix.in_plot_context = true;
+    function.blocks[0].instructions = {rpix, end};
+    expectSuccess("value-producing rpix", IRModule{{function}});
+    rpix.in_plot_context = false; function.blocks[0].instructions = {rpix, end};
+    expectFailure("read_pixel outside context", IRModule{{function}}, "rpix must");
+    IRInstruction color; color.opcode = IROpcode::SetColor; color.in_plot_context = true;
+    color.operation = "rom.byte"; color.operands = {IRValueId{1}};
+    auto address = constant(1, 0x100); address.type = pointerTo(Type{BaseType::BYTE, "", 1, false}, AddressSpace::RAM);
+    function.blocks[0].instructions = {address, color, end};
+    expectFailure("RAM cannot use GETC color path", IRModule{{function}}, "direct ROM color");
+    Type volatile_byte{BaseType::BYTE, "", 1, false}; volatile_byte.is_volatile = true;
+    address.type = pointerTo(volatile_byte, AddressSpace::ROM);
+    function.blocks[0].instructions = {address, color, end};
+    expectFailure("volatile ROM keeps an ordinary load", IRModule{{function}}, "direct ROM color");
+    const auto rom_effect = color.hardwareEffects();
+    if (!rom_effect.rom_buffer || !rom_effect.writes_color || !rom_effect.reads_por)
+        throw std::runtime_error("GETC must use ROM buffer and update COLR under POR");
+    IRInstruction mode; mode.opcode = IROpcode::CMode; mode.in_plot_context = true; mode.immediate = 32;
+    function.value_count = 0; function.blocks[0].instructions = {mode, end};
+    expectFailure("invalid CMODE mask", IRModule{{function}}, "five-bit POR mask");
+    mode.immediate = 1; mode.targets = {IRBlockId{0}};
+    function.blocks[0].instructions = {mode, end};
+    expectFailure("CMODE is not a control transfer", IRModule{{function}}, "five-bit POR mask");
+}
+
 } // namespace
 
 int main() {
     try {
+        testGraphicsEffects();
         testValidFunction();
         testDuplicateDefinition();
         testUseBeforeDefinition();

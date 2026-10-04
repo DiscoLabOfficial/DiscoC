@@ -117,6 +117,7 @@ private:
     std::size_t m_current_instruction_position = 0;
     std::size_t m_emission_position = 0;
     bool m_isInPlottingContext = false;
+    int m_known_plot_options = -1;
     bool m_force_long_branches = false;
     bool m_checked_pointer_mode = false;
     IRValueId m_emitting_value;

@@ -315,11 +315,11 @@ void checkStaticStorageAndLinkage() {
 
 void checkPlotAndResourceLimits() {
     expectDiagnostic("void main() { plot { plot {} } }", "Cannot nest plotting");
-    expectDiagnostic("void main() { plot { plot_end; } }", "cannot close a lexical");
-    expectDiagnostic("void main() { plot_begin; }", "Unclosed plotting");
+    expectDiagnostic("void main() { plot { plot_end; } }", "Legacy graphics API removed");
+    expectDiagnostic("void main() { plot_begin; }", "Legacy graphics API removed");
     expectDiagnostic("void main() { plot { word n = 1; } n = 2; }", "Use of undeclared symbol");
-    expectDiagnostic("void main() { plot {} plot.x = 1; }", "plotting context");
-    expectDiagnostic("void main() { plot { word* p = &plot.x; } }", "do not have memory addresses");
+    expectDiagnostic("void main() { plot {} cursor.x = 1; }", "plotting context");
+    expectDiagnostic("void main() { plot { word* p = &cursor.x; } }", "do not have memory addresses");
     analyze("word plot_y; word f(word plot_x) { return plot_x; }", [](const Program&, const Analyzer&, const DataSegmentManager&, const IRModule&) {});
     expectDiagnostic("void main() { word n = -true; }", "Unary arithmetic requires");
     expectDiagnostic("void main() { " + std::string(1000, '!') + "true; }", "Parser nesting exceeds");
@@ -328,7 +328,7 @@ void checkPlotAndResourceLimits() {
     std::string chain = "1";
     for (int index = 0; index < 1000; ++index) chain += " + 1";
     expectDiagnostic("void main() { " + chain + "; }", "Expression depth exceeds");
-    analyze("word f() { plot { return 42; } } void main() { if (true) { plot { word n = f(); plot.x = n; } } }",
+    analyze("word f() { plot { return 42; } } void main() { if (true) { plot { word n = f(); cursor.x = n; } } }",
         [](const Program&, const Analyzer&, const DataSegmentManager&, const IRModule& ir) {
             bool call_in_plot = false;
             for (const auto& function : ir.functions)

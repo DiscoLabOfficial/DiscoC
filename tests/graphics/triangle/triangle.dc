@@ -1,0 +1,39 @@
+// RAM-executed scanline triangle. The SNES host clears and displays this bitmap.
+// No ROM palette: this complete payload is copied to cartridge RAM at $70:6000.
+bitmap main_screen {
+    mode bitmap;
+    size 256x192;
+    depth 4bpp;
+    base 0x0000;
+}
+
+word main() {
+    use bitmap main_screen;
+
+    word left_x = 128;
+    word right_x = 128;
+    word pixels = 0;
+
+    plot {
+        options transparent;
+        // Apex (128,48), bottom edge (32,144)..(224,144).
+        // Both edges move one pixel per scanline: widths 1,3,...,193.
+        for (word y = 48; y <= 144; y++) {
+            color 1 + ((y - 48) >> 3);
+            at (left_x, y);
+
+            word width = right_x - left_x + 1;
+            for (word i = 0; i < width; i++) {
+                pixel; // PLOT advances R1; do not increment cursor.x here.
+            }
+            pixels += width;
+            left_x--;
+            right_x++;
+        }
+        flush; // Commit the last partial pixel-cache entries before CPU DMA.
+    }
+
+    // Host-owned diagnostic word, outside framebuffer, code and active stack.
+    *(volatile word*)0xF000 = pixels;
+    return pixels; // 1+3+...+193 = 97*97 = 9409 ($24C1).
+}

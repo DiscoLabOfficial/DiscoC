@@ -142,7 +142,10 @@ void LinearScanAllocator::run(
         // The IR backend materializes lazy values at their use site. Repeating
         // a side-effecting definition once is therefore equivalent for a
         // single-use value; repeating it for multiple uses is not.
-        rematerializable[pair.first] = pure || use_counts[pair.first] <= 1;
+        // A pixel read is also a cache flush: it cannot move across graphics
+        // effects or be dropped even when the SSA result has no users.
+        rematerializable[pair.first] = !definitions.at(pair.first)->hardwareEffects().observable() &&
+            (pure || use_counts[pair.first] <= 1);
     }
 
     std::vector<Interval> ordered;
@@ -154,6 +157,17 @@ void LinearScanAllocator::run(
     });
 
     std::vector<std::uint8_t> free_registers = allocatable_registers;
+    // The cursor and ROM-buffer pointer are persistent hardware state, not
+    // spare scalar temporaries. Reserve their registers for the whole function.
+    std::uint16_t reserved = 0;
+    for (const auto& block : function.blocks) for (const auto& instruction : block.instructions) {
+        const auto effects = instruction.hardwareEffects();
+        reserved |= effects.reads_registers | effects.writes_registers;
+    }
+    free_registers.erase(std::remove_if(free_registers.begin(), free_registers.end(), [&](std::uint8_t reg) {
+        if (reg > 15) throw std::runtime_error("Linear-scan allocator: invalid physical register.");
+        return (reserved & (1u << reg)) != 0;
+    }), free_registers.end());
     std::sort(free_registers.begin(), free_registers.end());
     free_registers.erase(std::unique(free_registers.begin(), free_registers.end()),
                          free_registers.end());

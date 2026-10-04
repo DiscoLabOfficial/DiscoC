@@ -18,6 +18,7 @@ constexpr std::uint32_t MaxIRValuesPerFunction = 1'000'000;
 
 bool isValueOpcode(IROpcode opcode) {
     switch (opcode) {
+        case IROpcode::Rpix:
         case IROpcode::PlotCoordinateRead:
         case IROpcode::Constant:
         case IROpcode::Address:
@@ -63,12 +64,12 @@ std::string opcodeName(IROpcode opcode) {
         case IROpcode::Unary: return "unary";
         case IROpcode::Cast: return "cast";
         case IROpcode::Call: return "call";
-        case IROpcode::PlotCoordinateRead: return "plot.coordinate.read";
-        case IROpcode::PlotCoordinateWrite: return "plot.coordinate.write";
+        case IROpcode::PlotCoordinateRead: return "cursor.read";
+        case IROpcode::PlotCoordinateWrite: return "cursor.write";
         case IROpcode::PlotBegin: return "plot.begin";
         case IROpcode::PlotEnd: return "plot.end";
-        case IROpcode::Plot: return "plot";
-        case IROpcode::SetColor: return "setcolor";
+        case IROpcode::Plot: return "pixel";
+        case IROpcode::SetColor: return "color";
         case IROpcode::CMode: return "cmode";
         case IROpcode::Rpix: return "rpix";
         case IROpcode::Cache: return "cache";
@@ -132,7 +133,7 @@ bool IRInstruction::isTerminator() const {
 
 bool IRInstruction::producesValue() const {
     return isValueOpcode(opcode) &&
-           !(opcode == IROpcode::Call && isVoidValue(type));
+           !((opcode == IROpcode::Call || opcode == IROpcode::Rpix) && isVoidValue(type));
 }
 
 void IRVerifier::fail(const std::string& message, const Token& source) {
@@ -140,6 +141,9 @@ void IRVerifier::fail(const std::string& message, const Token& source) {
 }
 
 void IRVerifier::verify(const IRModule& module) {
+    try { module.bitmap.validate(); } catch (const std::exception& error) { fail(std::string("IR verifier: ") + error.what(), Token(TokenType::UNKNOWN, "", 1, 1)); }
+    if (module.bitmap.enabled && !supportsCapability(module.target, TargetCapability::Graphics))
+        fail("IR verifier: target lacks graphics capability for bitmap configuration.", Token(TokenType::UNKNOWN, "", 1, 1));
     const auto check_type = [&](const Type& type, const Token& source) {
         if ((isFarPointer(type) || std::find(type.pointer_reach.begin(), type.pointer_reach.end(), true) != type.pointer_reach.end()) &&
             !supportsCapability(module.target, TargetCapability::FarData))
@@ -442,6 +446,29 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
             switch (instruction.opcode) {
                 case IROpcode::Cache:
                     if (!instruction.operands.empty() || !instruction.targets.empty()) fail("IR verifier: cache has no operands or targets.", instruction.source);
+                    break;
+                case IROpcode::Plot:
+                    if (!instruction.in_plot_context || !instruction.operands.empty() || !instruction.targets.empty())
+                        fail("IR verifier: pixel requires a plot context and no explicit coordinates.", instruction.source);
+                    break;
+                case IROpcode::Rpix:
+                    if (!instruction.operands.empty() || !instruction.targets.empty() ||
+                        (instruction.producesValue() && (!instruction.in_plot_context || instruction.type.pointer_level != 0 || instruction.type.base != BaseType::BYTE)))
+                        fail("IR verifier: rpix must discard its result or return a byte in a plot context.", instruction.source);
+                    break;
+                case IROpcode::SetColor:
+                    if (!instruction.in_plot_context || instruction.operands.size() != 1 || !instruction.targets.empty())
+                        fail("IR verifier: color requires one source and a plot context.", instruction.source);
+                    if (instruction.operation == "rom.byte") {
+                        const auto& address = definitionType(instruction.operands[0], instruction.source);
+                        if (address.pointer_level == 0 || address.space != AddressSpace::ROM || pointeeType(address).base != BaseType::BYTE || pointeeType(address).pointer_level != 0 || pointeeType(address).is_volatile)
+                            fail("IR verifier: direct ROM color must address a ROM byte.", instruction.source);
+                    } else if (!instruction.operation.empty() || !isIntegerType(definitionType(instruction.operands[0], instruction.source)))
+                        fail("IR verifier: color requires an integer value or direct ROM byte.", instruction.source);
+                    break;
+                case IROpcode::CMode:
+                    if (!instruction.in_plot_context || !instruction.operands.empty() || !instruction.targets.empty() || instruction.immediate < 0 || instruction.immediate > 31)
+                        fail("IR verifier: cmode requires a constant five-bit POR mask in a plot context.", instruction.source);
                     break;
                 case IROpcode::PlotCoordinateRead:
                 case IROpcode::PlotCoordinateWrite:
@@ -761,6 +788,18 @@ void IRLowerer::visit(LiteralExpr& expr, const Type*) {
 void IRLowerer::visit(PlotCoordinateExpr& expr, const Type*) {
     m_last_value = emitValue(IROpcode::PlotCoordinateRead, expr.result_type, expr.token, {}, {}, {}, expr.is_y ? 1 : 0);
 }
+
+void IRLowerer::visit(ReadPixelExpr& expr, const Type*) {
+    if (expr.x) {
+        IRInstruction x; x.opcode = IROpcode::PlotCoordinateWrite; x.type = Type{BaseType::WORD, "", 2, false};
+        x.operands = {lowerExpression(*expr.x)}; x.source = expr.token; emitInstruction(std::move(x));
+        IRInstruction y; y.opcode = IROpcode::PlotCoordinateWrite; y.type = Type{BaseType::WORD, "", 2, false};
+        y.immediate = 1; y.operands = {lowerExpression(*expr.y)}; y.source = expr.token; emitInstruction(std::move(y));
+    }
+    m_last_value = emitValue(IROpcode::Rpix, expr.result_type, expr.token);
+}
+void IRLowerer::visit(BitmapDeclStmt&) {}
+void IRLowerer::visit(UseBitmapStmt& stmt) { m_module.bitmap = stmt.config; }
 
 void IRLowerer::visit(InitializerListExpr&, const Type*) { throw CompilerError("Unresolved initializer list reached IR lowering.", 1, 1); }
 void IRLowerer::visit(StringExpr&, const Type*) { throw CompilerError("Unresolved string storage reached IR lowering.", 1, 1); }
@@ -1129,9 +1168,6 @@ void IRLowerer::visit(PlotStmt& stmt) {
     requireFunction(stmt.token);
     IRInstruction instruction;
     instruction.opcode = IROpcode::Plot;
-    const auto x = lowerExpression(*stmt.x);
-    const auto y = lowerExpression(*stmt.y);
-    instruction.operands = {x, y};
     instruction.source = stmt.token;
     emitInstruction(std::move(instruction));
 }
@@ -1172,7 +1208,13 @@ void IRLowerer::visit(SetColorStmt& stmt) {
     requireFunction(stmt.token);
     IRInstruction instruction;
     instruction.opcode = IROpcode::SetColor;
-    instruction.operands = {lowerExpression(*stmt.color_value)};
+    const auto& value = *stmt.color_value;
+    const bool memory_read = dynamic_cast<const SubscriptExpr*>(&value) || dynamic_cast<const DereferenceExpr*>(&value) || dynamic_cast<const MemberAccessExpr*>(&value) || dynamic_cast<const VariableExpr*>(&value);
+    if (memory_read && !value.is_constant && value.result_type.base == BaseType::BYTE && value.result_type.pointer_level == 0 &&
+        value.address_type.pointer_level > 0 && value.address_type.space == AddressSpace::ROM && !value.result_type.is_volatile) {
+        instruction.operation = "rom.byte";
+        instruction.operands = {lowerAddress(*stmt.color_value)};
+    } else instruction.operands = {lowerExpression(*stmt.color_value)};
     instruction.source = stmt.token;
     emitInstruction(std::move(instruction));
 }
@@ -1181,7 +1223,7 @@ void IRLowerer::visit(CmodeStmt& stmt) {
     requireFunction(stmt.token);
     IRInstruction instruction;
     instruction.opcode = IROpcode::CMode;
-    instruction.operands = {lowerExpression(*stmt.options_value)};
+    instruction.immediate = stmt.options_value->constant_value;
     instruction.source = stmt.token;
     emitInstruction(std::move(instruction));
 }
@@ -1190,6 +1232,7 @@ void IRLowerer::visit(RpixStmt& stmt) {
     requireFunction(stmt.token);
     IRInstruction instruction;
     instruction.opcode = IROpcode::Rpix;
+    instruction.type = Type{BaseType::VOID, "", 0, false};
     instruction.source = stmt.token;
     emitInstruction(std::move(instruction));
 }
@@ -1304,7 +1347,10 @@ void IRLowerer::visit(BreakStmt& stmt) {
 }
 
 std::string dumpIR(const IRModule& module) {
+    // Bitmap metadata is independent of instruction-level plot state.
     std::ostringstream output;
+    if (module.bitmap.enabled) output << "bitmap.config scbr=" << static_cast<unsigned>(module.bitmap.scbr())
+        << " scmr=" << static_cast<unsigned>(module.bitmap.scmr()) << " bytes=" << module.bitmap.sizeBytes() << '\n';
     for (const auto& function : module.functions) {
         output << "function " << function.name << "() -> " << typeName(function.return_type)
                << " {\n";
@@ -1326,7 +1372,9 @@ std::string dumpIR(const IRModule& module) {
                         output << "#" << instruction.symbol_id.value;
                     }
                 }
-                if (instruction.opcode == IROpcode::Constant) {
+                if (instruction.opcode == IROpcode::Rpix && !instruction.result.isValid()) output << " discard";
+                if (instruction.opcode == IROpcode::Constant || instruction.opcode == IROpcode::CMode ||
+                    instruction.opcode == IROpcode::PlotCoordinateRead || instruction.opcode == IROpcode::PlotCoordinateWrite) {
                     output << " " << instruction.immediate;
                 }
                 if (!instruction.operands.empty()) {

@@ -9,9 +9,9 @@ word add(word left, word right);
 void main() {
     frame_counter = frame_counter + 1;
     plot {
-        plot.x = 46;
-        plot.y = 103;
-        state.sum = add(plot.x, plot.y);
+        cursor.x = 46;
+        cursor.y = 103;
+        state.sum = add(cursor.x, cursor.y);
         state.bucket = state.sum / divisor;
     }
     state.ready = (state.sum & 1) == 1 && state.bucket % divisor == 0;

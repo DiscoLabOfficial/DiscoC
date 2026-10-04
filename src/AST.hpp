@@ -1,12 +1,14 @@
 #pragma once
 #include "Token.hpp"
 #include "Types.hpp"
+#include "BitmapConfig.hpp"
 #include "CompilerError.hpp"
 #include <algorithm>
 #include <vector>
 #include <memory>
 
-struct PlotCoordinateExpr; struct LayoutQueryExpr; struct EnumDeclStmt; struct StaticAssertStmt;
+struct PlotCoordinateExpr; struct ReadPixelExpr; struct BitmapDeclStmt; struct UseBitmapStmt;
+struct LayoutQueryExpr; struct EnumDeclStmt; struct StaticAssertStmt;
 struct TypeAliasDeclStmt;
 struct InitializerListExpr; struct StringExpr;
 struct NullExpr; struct UpdateExpr; struct ForStmt; struct ContinueStmt; struct FallthroughStmt;
@@ -22,6 +24,9 @@ struct Visitor {
     virtual void visit(LiteralExpr& expr, const Type* context) = 0;
     virtual void visit(VariableExpr& expr, const Type* context) = 0;
     virtual void visit(PlotCoordinateExpr& expr, const Type* context) = 0;
+    virtual void visit(ReadPixelExpr& expr, const Type* context) = 0;
+    virtual void visit(BitmapDeclStmt& stmt) = 0;
+    virtual void visit(UseBitmapStmt& stmt) = 0;
     virtual void visit(LayoutQueryExpr& expr, const Type* context) = 0;
     virtual void visit(NullExpr& expr, const Type* context) = 0;
     virtual void visit(InitializerListExpr& expr, const Type* context) = 0;
@@ -186,6 +191,26 @@ struct PlotCoordinateExpr : public Expr {
     PlotCoordinateExpr(Token member, bool y) : is_y(y) { token = std::move(member); }
     void accept(Visitor& v, const Type* c) override { v.visit(*this, c); }
 };
+struct ReadPixelExpr : public Expr {
+    std::unique_ptr<Expr> x, y;
+    ReadPixelExpr(Token keyword, std::unique_ptr<Expr> px = {}, std::unique_ptr<Expr> py = {})
+        : x(std::move(px)), y(std::move(py)) {
+        token = std::move(keyword);
+        if (x) includeChild(*x);
+        if (y) includeChild(*y);
+    }
+    void accept(Visitor& v, const Type* c) override { v.visit(*this, c); }
+};
+struct BitmapDeclStmt : public Stmt {
+    BitmapConfig config;
+    explicit BitmapDeclStmt(Token name, BitmapConfig value) : config(value) { token = std::move(name); }
+    void accept(Visitor& v) override { v.visit(*this); }
+};
+struct UseBitmapStmt : public Stmt {
+    BitmapConfig config; // Resolved declaration; no borrowed AST pointer.
+    explicit UseBitmapStmt(Token name) { token = std::move(name); }
+    void accept(Visitor& v) override { v.visit(*this); }
+};
 struct InitializerListExpr : public Expr {
     std::vector<std::unique_ptr<Expr>> elements;
     InitializerListExpr(Token brace, std::vector<std::unique_ptr<Expr>> values) : elements(std::move(values)) {
@@ -319,10 +344,7 @@ struct ExpressionStmt : public Stmt {
     void accept(Visitor& visitor) override { visitor.visit(*this); }
 };
 struct PlotStmt : public Stmt {
-    std::unique_ptr<Expr> x;
-    std::unique_ptr<Expr> y;
-    PlotStmt(std::unique_ptr<Expr> x_coord, std::unique_ptr<Expr> y_coord)
-        : x(std::move(x_coord)), y(std::move(y_coord)) { if(x) token = x->token; }
+    explicit PlotStmt(Token keyword) { token = std::move(keyword); }
     void accept(Visitor& visitor) override { visitor.visit(*this); }
 };
 struct PlotBlockStmt : public Stmt {
