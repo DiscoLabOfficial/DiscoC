@@ -55,8 +55,11 @@ The refactored language has a documented [language contract](docs/language-spec.
 - **Structured control flow:** compound assignments, `++`/`--`, real
   `for` loops with correct `continue` behavior, and explicit
   `fallthrough;` annotations.
-- **Explicit hardware context:** lexical `plot { ... }` blocks with arbitrary
-  coordinate expressions, `plot.x`/`plot.y`, and GSU drawing operations.
+- **Stateful SuperFX graphics:** lexical `plot { ... }` blocks, `cursor.x`/
+  `cursor.y`, `color`, `pixel`, `read_pixel`, and cache-flushing `flush`.
+  PLOT advances X in hardware; direct ROM byte colors can use GETC, while RAM
+  and computed colors use COLOR. Symbolic options and bitmap declarations keep
+  plot state separate from SNES host screen configuration.
 - **Attributes and modules:** `@cache`, `@packed`, `@align(N)`,
   `@target(...)`, and top-level `@cfg(gsu)`/`@cfg(spc700)` selection.
   `import "code.dc";` shares public declarations without copying definitions;
@@ -294,6 +297,137 @@ yet provide separate ROM placement for ROM-qualified constants. The host remains
 responsible for real cartridge capacity, memory reservations, stack space, and
 valid ROM integration. See [GSU loading and startup](docs/gsu-loading.md).
 
+## PLOT: Stateful SuperFX Graphics
+
+DiscoC can calculate and draw a bitmap using the GSU's real plotting state.
+This triangle was compiled from [the reproducible test](tests/graphics/triangle/triangle.dc),
+copied to cartridge RAM, and displayed by a complete SNES test ROM in Mesen:
+
+![DiscoC's filled, banded SuperFX triangle running in Mesen](docs/images/superfx-triangle-mesen.png)
+
+The triangle has 97 scanlines and **9,409 pixels**. Its edges and color bands
+are calculated in DiscoC, not supplied as a pre-rendered image. The accompanying
+[SNES host and Mesen checks](tests/graphics/triangle/README.md) verify the
+framebuffer, VRAM transfer, tilemap, and CPU-read result after STOP.
+
+`plot { ... }` exposes a stateful cursor and color rather than independent
+draw calls:
+
+```c
+plot {
+    options transparent;
+    color 5;
+    at (10, 20); // cursor.x = 10; cursor.y = 20;
+
+    for (word i = 0; i < 16; i++) {
+        pixel; // Draw at the cursor; hardware advances X by one.
+    }
+
+    byte c = read_pixel at (10, 20);
+    flush;
+}
+```
+
+- `cursor.x` and `cursor.y` map to GSU R1 and R2. Assign them directly or use
+  `at (x, y);` to set both; values persist across pixels and loop iterations.
+- `color expr;` updates COLR, the current color index. Immediate, computed,
+  and RAM-backed values use COLOR. An eligible direct ROM byte read can use
+  GETC with the required ROM bank, R14, and ROM-buffer setup.
+- `pixel;` emits PLOT. It draws using the current cursor and COLR, then
+  **increments X in hardware**; no extra R1 increment is emitted. Y is unchanged.
+- `read_pixel` uses RPIX to flush pixel caches and read a logical color index.
+  It does not advance X. `flush;` uses the same instruction with its result
+  discarded and is preserved even when no value is needed.
+- `options` accepts `transparent`, `dither`, `high_nibble`, `freeze_high`, and
+  `object`; `options;` clears them. `draw at (x, y) with color c;` is convenient
+  sugar for setting color and cursor, then drawing one pixel.
+
+Bitmap declarations describe the framebuffer separately from the plotting state:
+
+```c
+bitmap main_screen {
+    mode bitmap;
+    size 256x192;
+    depth 4bpp;
+    base 0x0000;
+}
+// In a function, before drawing:
+// use bitmap main_screen;
+```
+
+Bitmap modes support 256x128, 256x160, or 256x192 at 2/4/8bpp. OBJ profiles use
+`mode obj;` without a bitmap `size`. The compiler checks combinations and base
+alignment; the SNES host still owns SCMR/SCBR setup, bus access, CGRAM, and PPU
+display. A bitmap declaration does not initialize those registers automatically.
+
+To compile the pictured RAM triangle, with the DiscoC tools on `PATH`:
+
+```sh
+cmake -E make_directory build/plot-triangle
+discc --target gsu --execution-memory ram tests/graphics/triangle/triangle.dc -o build/plot-triangle/triangle.o
+discld build/plot-triangle/triangle.o --origin 0x706000 --init-runtime --ram-bank 0 --stack-pointer 0xFFFE --emit-asm build/plot-triangle/triangle.s -o build/plot-triangle/triangle.bin
+```
+
+This `.bin` is a fixed-origin payload, not a standalone SNES ROM. The test's
+portable build script assembles the complete host ROM with WLA-DX and optionally
+verifies it in Mesen. See [the triangle test instructions](tests/graphics/triangle/README.md)
+for that workflow and [SuperFX graphics](docs/gsu-graphics.md) for the full contract.
+
+### Rotating Checkerboard Triangle
+
+From DiscoC source to a running SuperFX animation: this demo calculates both
+the rotating triangle and its black-and-white checkerboard using integer
+fixed-point math. There are no pre-rendered frames, and the SNES CPU only
+selects the angle and transfers the completed GSU framebuffer during VBlank.
+
+![Rotating checkerboard: real Mesen captures, accelerated playback](docs/images/superfx-rotating-triangle-mesen.gif)
+
+Real Mesen captures, replayed at **8 fps**. Playback is accelerated; the ROM
+is a correctness demonstration, not yet a smooth-animation benchmark.
+
+Here is the actual drawing loop from the demo's `plot` block. Scanline clipping
+provides `left` and `right`; `sine` and `cosine` are Q6 rotation coefficients.
+Sampling local coordinates `u` and `v` makes the checker pattern rotate with
+the triangle:
+
+```c
+word u = left * cosine + dy * sine;
+word v = -left * sine + dy * cosine;
+at (128 + left, y);
+@cache
+for (word x = left; x <= right; x++) {
+    // Bit 9 of Q6 is an eight-pixel checker cell. Sampling
+    // local u/v rotates the pattern with the geometry.
+    word shade = 1 + (((u ^ v) & 512) >> 9);
+    color shade;
+    white += shade - 1;
+    black += 2 - shade;
+    pixel; // PLOT alone advances the hardware X cursor.
+    pixels++;
+    u += cosine;
+    v -= sine;
+}
+```
+
+The cursor is positioned once per scanline; each `pixel;` advances X in
+hardware. `@cache` requests instruction caching, and the frame ends with
+`flush;` before the host reads RAM. The pixel loop is only partially cached;
+the generated clearing loop fits entirely in the instruction-cache window.
+
+The [complete DiscoC program](tests/graphics/rotating_triangle/triangle.dc)
+includes the sine table, rotation, clipping, previous-frame clearing, and
+host-visible diagnostics. With the DiscoC and WLA-DX tools on `PATH`, build
+the complete SNES ROM from the repository root:
+
+```sh
+cmake -P tests/graphics/rotating_triangle/build-snes.cmake
+```
+
+Open `build/plot-rotating-triangle/rotating-triangle.sfc` in a SuperFX-capable
+SNES emulator. The optional Mesen checks compare **all 49,152 pixels at all
+64 angles**, including phase wrap, RAM/VRAM transfers, and the red-screen
+failure path. See [build and verification instructions](tests/graphics/rotating_triangle/README.md).
+
 ## Freestanding Libraries and Examples
 
 `lib/core` provides near-RAM byte copy/move/fill routines and signed Q8.8/Q12.4
@@ -318,6 +452,12 @@ Useful examples:
 - [Fixed-point and memory helpers](examples/fixed_point/README.md): portable
   core modules and explicit library linking.
 - [RAM result](examples/ram_result/README.md): host-visible output and startup.
+- [Stateful plotting](examples/plot.dc): a ROM-colored scanline triangle.
+  See [SuperFX graphics](docs/gsu-graphics.md) for its host setup and build commands.
+- [SNES triangle test](tests/graphics/triangle/README.md): RAM-executed plotting,
+  a complete WLA-DX host ROM, and optional Mesen framebuffer/display checks.
+- [Rotating checkerboard](tests/graphics/rotating_triangle/README.md): fixed-point
+  rotation, persistent animation, VBlank uploads, and checks at all 64 angles.
 
 See the [freestanding library contract](docs/freestanding-library.md) for API,
 rounding, overflow, and memory-access limits.
@@ -330,8 +470,10 @@ manifests, assembly/binary equivalence, and GSU execution regressions.
 Optional sanitizer and fuzzing configurations are documented in
 [Testing](docs/testing.md).
 
-Execution tests use an instruction-level GSU model, not a complete SNES
-emulator or physical hardware. Test a complete ROM in its deployment environment.
+The default execution tests use an instruction-level GSU model. A separate,
+optional static and rotating triangle integration tests have also been verified
+in Mesen using complete SNES ROMs, including the host and PPU display. This does not constitute
+physical-hardware validation; test your ROM in its deployment environment.
 
 SPC700 machine emission and DSP libraries, interbank calls, aggregate-by-value
 ABI support, function pointers, and unions remain future work. Inline assembly
@@ -351,6 +493,8 @@ See [ROADMAP.MD](ROADMAP.MD) for completed milestones and future work.
 - [Object format](docs/object-format.md): serialization and relocation contracts.
 - [Assembler](docs/assembler.md): supported assembly syntax and workflows.
 - [GSU loading](docs/gsu-loading.md): execution origins and host initialization.
+- [SuperFX graphics](docs/gsu-graphics.md): cursor state, color selection,
+  pixel-cache effects, bitmap metadata, and migration from the old API.
 - [SPC700 foundation](docs/spc700-target.md): target model and planned backend.
 - [Building](docs/building.md) and [Testing](docs/testing.md): build paths and
   regression tooling.

@@ -60,6 +60,15 @@ enum class IROpcode {
     Unreachable,
 };
 
+struct IRHardwareEffects {
+    std::uint16_t reads_registers = 0, writes_registers = 0;
+    bool reads_color = false, writes_color = false, reads_por = false, writes_por = false;
+    bool reads_framebuffer = false, writes_framebuffer = false, pixel_cache = false, rom_buffer = false;
+    bool observable() const {
+        return writes_registers || writes_color || writes_por || reads_framebuffer || writes_framebuffer || pixel_cache || rom_buffer;
+    }
+};
+
 struct IRInstruction {
     IROpcode opcode = IROpcode::Constant;
     Type type;
@@ -78,6 +87,26 @@ struct IRInstruction {
 
     bool isTerminator() const;
     bool producesValue() const;
+    IRHardwareEffects hardwareEffects() const {
+        IRHardwareEffects e;
+        switch (opcode) {
+            case IROpcode::PlotCoordinateRead: e.reads_registers = static_cast<std::uint16_t>(1u << (immediate ? 2 : 1)); break;
+            case IROpcode::PlotCoordinateWrite: e.writes_registers = static_cast<std::uint16_t>(1u << (immediate ? 2 : 1)); break;
+            case IROpcode::Plot:
+                e.reads_registers = 6; e.writes_registers = 2; e.reads_color = e.reads_por = true;
+                e.writes_framebuffer = e.pixel_cache = true; break;
+            case IROpcode::Rpix:
+                e.reads_registers = 6; e.reads_por = true;
+                e.reads_framebuffer = e.writes_framebuffer = e.pixel_cache = true; break;
+            case IROpcode::SetColor:
+                e.reads_color = e.reads_por = e.writes_color = true;
+                if (operation == "rom.byte") { e.rom_buffer = true; e.writes_registers = 1u << 14; }
+                break;
+            case IROpcode::CMode: e.writes_por = true; break;
+            default: break;
+        }
+        return e;
+    }
 };
 
 struct IRBasicBlock {
@@ -102,6 +131,7 @@ struct IRFunction {
 struct IRModule {
     std::vector<IRFunction> functions;
     TargetKind target = TargetKind::GSU;
+    BitmapConfig bitmap{};
 };
 
 class IRVerifier {
@@ -123,6 +153,9 @@ public:
     void visit(LiteralExpr& expr, const Type* context) override;
     void visit(VariableExpr& expr, const Type* context) override;
     void visit(PlotCoordinateExpr& expr, const Type* context) override;
+    void visit(ReadPixelExpr& expr, const Type* context) override;
+    void visit(BitmapDeclStmt& stmt) override;
+    void visit(UseBitmapStmt& stmt) override;
     void visit(LayoutQueryExpr& expr, const Type* context) override;
     void visit(NullExpr& expr, const Type* context) override;
     void visit(InitializerListExpr& expr, const Type* context) override;

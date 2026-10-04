@@ -32,6 +32,7 @@ public:
     void analyze(const std::vector<std::unique_ptr<Stmt>>& program);
 
     const std::map<std::string, FunctionSymbol>& getFunctionSymbols() const;
+    const BitmapConfig& getBitmapConfig() const { return m_selected_bitmap; }
     const std::map<std::string, LocalSymbolTable>& getAllLocalSymbols() const;
 
     void registerFunctionSymbol(FunctionDeclStmt& stmt);
@@ -42,6 +43,9 @@ public:
     void visit(LiteralExpr& expr, const Type* context) override;
     void visit(VariableExpr& expr, const Type* context) override;
     void visit(PlotCoordinateExpr& expr, const Type* context) override;
+    void visit(ReadPixelExpr& expr, const Type* context) override;
+    void visit(BitmapDeclStmt& stmt) override;
+    void visit(UseBitmapStmt& stmt) override;
     void visit(LayoutQueryExpr& expr, const Type* context) override;
     void visit(NullExpr& expr, const Type* context) override;
     void visit(InitializerListExpr& expr, const Type* context) override;
@@ -88,6 +92,10 @@ public:
 
 
 private:
+    std::map<std::string, BitmapConfig> m_bitmaps;
+    std::set<const BitmapDeclStmt*> m_registered_bitmaps;
+    BitmapConfig m_selected_bitmap;
+    void requirePlotContext(const Token& source) const;
     int m_loop_depth = 0;
     bool m_fallthrough_marker_allowed = false;
     struct ConstantSymbol { Type type; std::int64_t value; };

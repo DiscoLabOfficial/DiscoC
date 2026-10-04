@@ -73,6 +73,7 @@ The assembler recognizes:
 * `.define __DISCO_CODE_START_ADDRESS <24-bit address>`;
 * `.define __DISCO_DATA_ALIGNMENT N` (power of two 1..128);
 * `.define __DISCO_RAM_ALIGNMENT N` (power of two 1..128, default 2);
+* `.define __DISCO_BITMAP_SCBR N` and `.define __DISCO_BITMAP_SCMR N` (selected host screen configuration);
 * semicolon comments.
 
 Labels must be unique within the input file. Exported labels become object-file symbols. Non-exported labels can still be used for local branches and local assembly references.
@@ -92,6 +93,14 @@ definitions are errors. `discld` validates the resulting GSU address and rejects
 objects with incompatible mapping/origin configurations, unless `--origin`
 explicitly overrides the origins for the whole link. Mapping/target mismatches
 remain errors.
+
+Bitmap metadata requires both `__DISCO_BITMAP_SCBR` and
+`__DISCO_BITMAP_SCMR`. SCBR is a byte-sized screen-base register value (base
+offset divided by 1024). SCMR contains only height/depth mode bits, not RON/RAN
+bus-ownership bits. Invalid modes, incomplete pairs and framebuffer ranges
+are rejected. These definitions emit no bytes and do not configure the SNES
+host automatically. They survive final linked assembly reassembly; see
+[SuperFX graphics](gsu-graphics.md).
 
 Numeric literals support decimal, hexadecimal with `$` or `0x`-style forms accepted by the compiler output, binary with `%`, and signed values where the instruction or data directive allows them.
 

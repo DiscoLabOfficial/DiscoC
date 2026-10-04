@@ -6,6 +6,10 @@ void LanguageWarnings::warn(const std::string& category, const std::string& mess
     if (m_enabled.count(category) && m_warnings.size() < 256) m_warnings.push_back({category, message, source});
 }
 void LanguageWarnings::expression(const Expr& value, bool reading) {
+    if (const auto* pixel = dynamic_cast<const ReadPixelExpr*>(&value)) {
+        if (pixel->x) { expression(*pixel->x); expression(*pixel->y); }
+        return;
+    }
     if (const auto* variable = dynamic_cast<const VariableExpr*>(&value)) {
         m_used.insert(variable->symbol_id);
         if (reading && m_locals.count(variable->symbol_id) && !m_initialized.count(variable->symbol_id) &&
@@ -101,7 +105,6 @@ void LanguageWarnings::statement(const Stmt& value) {
     else if (const auto* result = dynamic_cast<const ReturnStmt*>(&value)) { if (result->value) expression(*result->value); }
     else if (const auto* operation = dynamic_cast<const ExpressionStmt*>(&value)) expression(*operation->expression);
     else if (const auto* plot = dynamic_cast<const PlotBlockStmt*>(&value)) statement(*plot->body);
-    else if (const auto* plot = dynamic_cast<const PlotStmt*>(&value)) { expression(*plot->x); expression(*plot->y); }
     else if (const auto* color = dynamic_cast<const SetColorStmt*>(&value)) expression(*color->color_value);
     else if (const auto* mode = dynamic_cast<const CmodeStmt*>(&value)) expression(*mode->options_value);
 }

@@ -305,6 +305,8 @@ std::unique_ptr<Stmt> Parser::applyAttributes(std::unique_ptr<Stmt> statement, s
 
 std::unique_ptr<Stmt> Parser::globalDeclaration() {
     auto attributes = parseAttributes();
+    if (match({TokenType::KEYWORD_BITMAP}))
+        return applyAttributes(bitmapDeclaration(), std::move(attributes), AttributeSite::TopLevel);
     if (check(TokenType::KEYWORD_IMPORT)) throw CompilerError("Imports must precede declarations.", peek());
     if (match({TokenType::KEYWORD_TYPE})) {
         const bool enabled = configurationEnabled(attributes);
@@ -548,12 +550,34 @@ std::unique_ptr<Stmt> Parser::statement() {
     }
     if (match({TokenType::LBRACE})) return blockStatement();
     if (match({TokenType::KEYWORD_RETURN})) return returnStatement();
-    if (check(TokenType::KEYWORD_PLOT) && (peekNext().type == TokenType::LBRACE || peekNext().type == TokenType::LPAREN)) { advance(); return plotStatement(); }
-    if (match({TokenType::KEYWORD_PLOT_BEGIN})) return plotBeginStatement();
-    if (match({TokenType::KEYWORD_PLOT_END})) return plotEndStatement();
-    if (match({TokenType::KEYWORD_SET_COLOR})) return setColorStatement();
-    if (match({TokenType::KEYWORD_SET_PLOT_OPTIONS})) return setPlotOptionsStatement();
-    if (match({TokenType::KEYWORD_FLUSH_PIXELS})) return flushPixelsStatement();
+    if (match({TokenType::KEYWORD_PLOT})) return plotStatement();
+    if (match({TokenType::KEYWORD_PLOT_BEGIN, TokenType::KEYWORD_PLOT_END,
+               TokenType::KEYWORD_SET_COLOR, TokenType::KEYWORD_SET_PLOT_OPTIONS, TokenType::KEYWORD_FLUSH_PIXELS}))
+        throw CompilerError("Legacy graphics API removed; use plot { ... }, color expr;, options names; and flush;.", previous());
+    if (match({TokenType::KEYWORD_PIXEL})) {
+        const auto keyword = previous();
+        consume(TokenType::SEMICOLON, "Expect ';' after pixel.");
+        return std::make_unique<PlotStmt>(keyword);
+    }
+    if (match({TokenType::KEYWORD_COLOR})) {
+        auto value = expression();
+        consume(TokenType::SEMICOLON, "Expect ';' after color value.");
+        return std::make_unique<SetColorStmt>(std::move(value));
+    }
+    if (match({TokenType::KEYWORD_OPTIONS})) return optionsStatement();
+    if (match({TokenType::KEYWORD_FLUSH})) {
+        const auto keyword = previous();
+        consume(TokenType::SEMICOLON, "Expect ';' after flush.");
+        auto result = std::make_unique<RpixStmt>(); result->token = keyword;
+        return result;
+    }
+    if (match({TokenType::KEYWORD_AT})) return atStatement();
+    if (match({TokenType::KEYWORD_USE})) {
+        consume(TokenType::KEYWORD_BITMAP, "Expect 'bitmap' after 'use'.");
+        auto result = std::make_unique<UseBitmapStmt>(consume(TokenType::IDENTIFIER, "Expect bitmap name."));
+        consume(TokenType::SEMICOLON, "Expect ';' after bitmap selection.");
+        return result;
+    }
     if (match({TokenType::KEYWORD_DRAW})) return drawStatement();
 
     if (isAtStartOfDeclaration()) {
@@ -794,9 +818,19 @@ std::unique_ptr<Expr> Parser::primary() {
         consume(TokenType::RPAREN, "Expect ')' after layout query.");
         return query;
     }
-    if (match({TokenType::KEYWORD_PLOT})) {
-        consume(TokenType::DOT, "Expect '.' in plot coordinate access.");
-        const auto member = consume(TokenType::IDENTIFIER, "Expect 'x' or 'y' after 'plot.'.");
+    if (match({TokenType::KEYWORD_READ_PIXEL})) {
+        const auto keyword = previous();
+        std::unique_ptr<Expr> x, y;
+        if (match({TokenType::KEYWORD_AT})) {
+            consume(TokenType::LPAREN, "Expect '(' after read_pixel at.");
+            x = expression(); consume(TokenType::COMMA, "Expect ',' between coordinates.");
+            y = expression(); consume(TokenType::RPAREN, "Expect ')' after coordinates.");
+        }
+        return std::make_unique<ReadPixelExpr>(keyword, std::move(x), std::move(y));
+    }
+    if (match({TokenType::KEYWORD_CURSOR})) {
+        consume(TokenType::DOT, "Expect '.' in cursor coordinate access.");
+        const auto member = consume(TokenType::IDENTIFIER, "Expect 'x' or 'y' after 'cursor.'.");
         if (member.lexeme != "x" && member.lexeme != "y")
             throw CompilerError("Plot context has only x and y coordinates.", member);
         return std::make_unique<PlotCoordinateExpr>(member, member.lexeme == "y");
@@ -871,51 +905,11 @@ void Parser::validateValueType(const Type& type, const Token& token, const std::
 }
 std::unique_ptr<Stmt> Parser::plotStatement() {
     const Token keyword = previous();
-    if (match({TokenType::LBRACE}))
-        return std::make_unique<PlotBlockStmt>(keyword, blockStatement());
-    consume(TokenType::LPAREN, "Expect '(' after 'plot'.");
-    auto x = expression();
-    consume(TokenType::COMMA, "Expect ',' to separate plot arguments.");
-    auto y = expression();
-    consume(TokenType::RPAREN, "Expect ')' after plot arguments.");
-    consume(TokenType::SEMICOLON, "Expect ';' after plot statement.");
-    return std::make_unique<PlotStmt>(std::move(x), std::move(y));
-}
-std::unique_ptr<Stmt> Parser::plotBeginStatement() {
-    const Token keyword = previous();
-    consume(TokenType::SEMICOLON, "Expect ';' after plot_begin.");
-    auto stmt = std::make_unique<PlotBeginStmt>();
-    stmt->token = keyword;
-    return stmt;
-}
-std::unique_ptr<Stmt> Parser::plotEndStatement() {
-    const Token keyword = previous();
-    consume(TokenType::SEMICOLON, "Expect ';' after plot_end.");
-    auto stmt = std::make_unique<PlotEndStmt>();
-    stmt->token = keyword;
-    return stmt;
-}
-std::unique_ptr<Stmt> Parser::setColorStatement() {
-    consume(TokenType::LPAREN, "Expect '(' after 'set_color'.");
-    auto value = expression();
-    consume(TokenType::RPAREN, "Expect ')' after color value.");
-    consume(TokenType::SEMICOLON, "Expect ';' after set_color statement.");
-    return std::make_unique<SetColorStmt>(std::move(value));
-}
-std::unique_ptr<Stmt> Parser::setPlotOptionsStatement() {
-    consume(TokenType::LPAREN, "Expect '(' after 'set_plot_options'.");
-    auto value = expression();
-    consume(TokenType::RPAREN, "Expect ')' after options value.");
-    consume(TokenType::SEMICOLON, "Expect ';' after set_plot_options statement.");
-    return std::make_unique<CmodeStmt>(std::move(value));
-}
-std::unique_ptr<Stmt> Parser::flushPixelsStatement() {
-    consume(TokenType::LPAREN, "Expect '(' after 'flush_pixels'.");
-    consume(TokenType::RPAREN, "Expect ')' after 'flush_pixels'.");
-    consume(TokenType::SEMICOLON, "Expect ';' after flush_pixels.");
-    return std::make_unique<RpixStmt>();
+    consume(TokenType::LBRACE, "Use plot { ... }; replace plot(x, y) with draw at (x, y).");
+    return std::make_unique<PlotBlockStmt>(keyword, blockStatement());
 }
 std::unique_ptr<Stmt> Parser::drawStatement() {
+    const auto keyword = previous();
     std::vector<std::unique_ptr<Stmt>> statements;
     consume(TokenType::KEYWORD_AT, "Expect 'at' in draw statement.");
     consume(TokenType::LPAREN, "Expect '(' after 'at'.");
@@ -929,6 +923,91 @@ std::unique_ptr<Stmt> Parser::drawStatement() {
         statements.push_back(std::make_unique<SetColorStmt>(std::move(color)));
     }
     consume(TokenType::SEMICOLON, "Expect ';' after draw statement.");
-    statements.push_back(std::make_unique<PlotStmt>(std::move(x), std::move(y)));
+    auto writes = cursorWrites(std::move(x), std::move(y), keyword);
+    for (auto& write : writes) statements.push_back(std::move(write));
+    statements.push_back(std::make_unique<PlotStmt>(keyword));
     return std::make_unique<BlockStmt>(std::move(statements));
+}
+
+std::vector<std::unique_ptr<Stmt>> Parser::cursorWrites(std::unique_ptr<Expr> x, std::unique_ptr<Expr> y, const Token& source) {
+    std::vector<std::unique_ptr<Stmt>> result;
+    for (unsigned axis = 0; axis < 2; ++axis) {
+        auto target = std::make_unique<PlotCoordinateExpr>(Token(TokenType::IDENTIFIER, axis ? "y" : "x", source), axis != 0);
+        result.push_back(std::make_unique<ExpressionStmt>(std::make_unique<AssignExpr>(std::move(target),
+            axis ? std::move(y) : std::move(x))));
+    }
+    return result;
+}
+
+std::unique_ptr<Stmt> Parser::atStatement() {
+    const auto keyword = previous();
+    consume(TokenType::LPAREN, "Expect '(' after at.");
+    auto x = expression(); consume(TokenType::COMMA, "Expect ',' between coordinates.");
+    auto y = expression(); consume(TokenType::RPAREN, "Expect ')' after coordinates.");
+    consume(TokenType::SEMICOLON, "Expect ';' after at coordinates.");
+    return std::make_unique<BlockStmt>(cursorWrites(std::move(x), std::move(y), keyword));
+}
+
+std::unique_ptr<Stmt> Parser::optionsStatement() {
+    const auto keyword = previous();
+    unsigned mask = 1; // POR bit 0 means plot zero, not skip zero (transparency).
+    std::vector<std::string> seen;
+    if (!check(TokenType::SEMICOLON)) do {
+        const auto option = consume(TokenType::IDENTIFIER, "Expect symbolic plot option.");
+        if (std::find(seen.begin(), seen.end(), option.lexeme) != seen.end()) throw CompilerError("Duplicate plot option.", option);
+        seen.push_back(option.lexeme);
+        if (option.lexeme == "transparent") mask &= ~1u;
+        else if (option.lexeme == "dither") mask |= 2;
+        else if (option.lexeme == "high_nibble") mask |= 4;
+        else if (option.lexeme == "freeze_high") mask |= 8;
+        else if (option.lexeme == "object") mask |= 16;
+        else throw CompilerError("Unknown plot option: " + option.lexeme, option);
+    } while (match({TokenType::COMMA}));
+    consume(TokenType::SEMICOLON, "Expect ';' after plot options.");
+    return std::make_unique<CmodeStmt>(std::make_unique<LiteralExpr>(Token(TokenType::LITERAL_INTEGER, std::to_string(mask), keyword)));
+}
+
+std::unique_ptr<Stmt> Parser::bitmapDeclaration() {
+    const auto name = consume(TokenType::IDENTIFIER, "Expect bitmap name.");
+    consume(TokenType::LBRACE, "Expect '{' after bitmap name.");
+    BitmapConfig config; config.enabled = true;
+    bool mode = false, size = false, depth = false, base = false;
+    std::vector<std::string> seen;
+    while (!check(TokenType::RBRACE) && !isAtEnd()) {
+        const auto field = consume(TokenType::IDENTIFIER, "Expect bitmap field: mode, size, depth or base.");
+        if (std::find(seen.begin(), seen.end(), field.lexeme) != seen.end()) throw CompilerError("Duplicate bitmap field.", field);
+        seen.push_back(field.lexeme);
+        if (field.lexeme == "mode") {
+            const auto value = advance(); mode = true;
+            if (value.type == TokenType::KEYWORD_BITMAP) config.object_mode = false;
+            else if (value.type == TokenType::IDENTIFIER && value.lexeme == "obj") config.object_mode = true;
+            else throw CompilerError("Bitmap mode must be bitmap or obj.", value);
+        } else if (field.lexeme == "size") {
+            const auto width = consume(TokenType::LITERAL_INTEGER, "Expect bitmap width.");
+            const auto suffix = consume(TokenType::IDENTIFIER, "Expect x128, x160 or x192 after width.");
+            if (parseIntegerLiteral(width, "bitmap width") != 256 ||
+                (suffix.lexeme != "x128" && suffix.lexeme != "x160" && suffix.lexeme != "x192"))
+                throw CompilerError("Bitmap size must be 256x128, 256x160 or 256x192.", width);
+            config.height = static_cast<std::uint16_t>(std::stoi(suffix.lexeme.substr(1))); size = true;
+        } else if (field.lexeme == "depth") {
+            const auto value = consume(TokenType::LITERAL_INTEGER, "Expect 2bpp, 4bpp or 8bpp.");
+            const auto suffix = consume(TokenType::IDENTIFIER, "Expect bpp after bitmap depth.");
+            const auto bits = parseIntegerLiteral(value, "bitmap depth");
+            if (suffix.lexeme != "bpp" || (bits != 2 && bits != 4 && bits != 8)) throw CompilerError("Bitmap depth must be 2bpp, 4bpp or 8bpp.", value);
+            config.depth = static_cast<std::uint8_t>(bits); depth = true;
+        } else if (field.lexeme == "base") {
+            const auto value = consume(TokenType::LITERAL_INTEGER, "Expect constant SCBR base address.");
+            const auto address = parseIntegerLiteral(value, "bitmap base");
+            if (address < 0 || address >= 131072) throw CompilerError("Bitmap base is outside cartridge RAM.", value);
+            config.base = static_cast<std::uint32_t>(address); base = true;
+        } else throw CompilerError("Unknown bitmap field.", field);
+        consume(TokenType::SEMICOLON, "Expect ';' after bitmap field.");
+    }
+    consume(TokenType::RBRACE, "Expect '}' after bitmap configuration.");
+    match({TokenType::SEMICOLON});
+    if (!mode || !depth || !base || (!config.object_mode && !size) || (config.object_mode && size))
+        throw CompilerError("Bitmap requires mode/depth/base and a bitmap size; OBJ mode forbids size.", name);
+    if (config.object_mode) config.height = 256;
+    try { config.validate(); } catch (const std::exception& error) { throw CompilerError(error.what(), name); }
+    return std::make_unique<BitmapDeclStmt>(name, config);
 }

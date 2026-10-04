@@ -7,6 +7,8 @@
 namespace {
 
 bool expressionUsesSymbol(const Expr& expr, SymbolId id) {
+    if (const auto* read = dynamic_cast<const ReadPixelExpr*>(&expr))
+        return read->x && (expressionUsesSymbol(*read->x, id) || expressionUsesSymbol(*read->y, id));
     if (const auto* variable = dynamic_cast<const VariableExpr*>(&expr)) {
         return variable->symbol_id == id;
     }
@@ -89,9 +91,6 @@ bool statementUsesSymbol(const Stmt& stmt, SymbolId id) {
     }
     if (const auto* expression = dynamic_cast<const ExpressionStmt*>(&stmt)) {
         return expressionUsesSymbol(*expression->expression, id);
-    }
-    if (const auto* plot = dynamic_cast<const PlotStmt*>(&stmt)) {
-        return expressionUsesSymbol(*plot->x, id) || expressionUsesSymbol(*plot->y, id);
     }
     if (const auto* color = dynamic_cast<const SetColorStmt*>(&stmt)) {
         return expressionUsesSymbol(*color->color_value, id);

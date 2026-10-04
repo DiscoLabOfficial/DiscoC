@@ -628,7 +628,7 @@ elements are serialized low byte first. Reads are runtime memory accesses, not
 necessarily constant folding. Assignment is rejected.
 
 **Current alignment.** Compiler DATA objects start at even offsets. Object
-format versions 4 through 6 record DATA alignment; the linker pads after odd-length CODE
+format versions 4 through 7 record DATA alignment; the linker pads after odd-length CODE
 and between input DATA sections as needed. Word-array stride remains two bytes;
 padding belongs between objects/sections, not between word elements. Raw
 assembly defaults to packed alignment 1 and must request alignment 2 for typed
@@ -670,32 +670,61 @@ smaller ones. Dispatch strategy is not part of source semantics.
 ```c
 void main() {
     plot {
-        set_color(3);
-        plot(10, 20);
+        options transparent;
+        color 3;
+        at (10, 20);
+        pixel; // Draws (10,20), then cursor.x becomes 11.
+        pixel; // Draws (11,20), then cursor.x becomes 12.
+        byte c = read_pixel at (10, 20);
+        flush;
     }
-    flush_pixels();
 }
 ```
 
 `plot { ... }` owns its context and local scope. Branches, loops, switches,
 break, continue and return can occur inside it. Coordinates remain arbitrary
-expressions. `plot(x, y)` draws a pixel. `plot.x`/`plot.y` explicitly expose R1/R2
-inside the context. `plot_x` and `plot_y` are ordinary lexical identifiers.
-Taking the address of a coordinate is rejected. Calls/division inside a
-plot block preserve these registers. Nested contexts are rejected.
+expressions. `cursor.x`/`cursor.y` expose the persistent word-sized R1/R2 state
+inside the context; assignments change the corresponding register. `at (x, y);`
+assigns X and then Y, evaluating each expression once. `pixel;` reads R1/R2 and
+COLR, writes the pixel caches, and increments R1 exactly once in hardware.
+The backend must not reload X or add a software increment for each pixel.
+Taking the address of a cursor coordinate is rejected. Calls/division inside
+a plot block preserve the cursor. Nested contexts are rejected.
 Context is per-instruction IR metadata, not a hardware resource requiring a
 closing instruction on every exit.
 
-`set_plot_options(value)` and `flush_pixels()` expose GSU drawing operations.
-`draw at (x, y) with color value;` sets color then plots; the color clause is
-optional, and the plot-context requirement still applies. `cache` is accepted
-on function definitions and for/while loops, not variables or prototypes.
-Neither syntax configures SNES screen memory, bus ownership, or cache timing.
+`color expr;` evaluates a scalar color and updates COLR. A direct nonvolatile
+ROM byte l-value can use GETC through ROMB/R14 and the ROM buffer; RAM loads,
+arithmetic, casts, and temporary values use normal evaluation followed by
+COLOR. The address space is not inferred from the contents or initialization
+history of RAM. Both instructions apply POR's high-nibble/freeze-high rules.
 
-Legacy `plot_begin;`/`plot_end;` pairs remain accepted for existing sources,
-but must balance, cannot nest/cross loop boundaries inconsistently, and are
-not allowed as boundaries inside switch. A legacy plot_end cannot close a
-lexical block. New code should use lexical blocks.
+`options transparent, dither, high_nibble, freeze_high, object;` sets the complete
+POR option set, not an incremental toggle. `options;` disables all named options
+and enables opaque zero. Redundant CMODE is elided only when the backend knows
+the active options. `byte c = read_pixel;` uses RPIX at the current cursor and
+does not advance X. Optional `read_pixel at (x, y)` first assigns the cursor.
+RPIX flushes the pixel caches even when its result is unused. `flush;` is the
+same operation with a discarded result; it is also allowed after a plot block.
+Leaving a block does not implicitly flush or reset COLR/POR.
+
+`draw at (x, y) with color value;` evaluates color first, assigns X/Y, then
+executes one pixel. The color clause is optional. `cache` is accepted on GSU
+function definitions and for/while loops, not variables or prototypes.
+
+File-scope `bitmap name { ... }` declarations describe host SCMR/SCBR and
+framebuffer layout. Bitmap mode requires size 256x128, 256x160 or 256x192;
+OBJ mode forbids a size field. Both require depth 2bpp/4bpp/8bpp and a
+1024-byte-aligned base offset in cartridge RAM. `use bitmap name;` selects a
+compile-time host configuration; it does not emit runtime GSU register writes.
+One compatible configuration may be selected across the linked payload.
+The host still writes SCMR/SCBR and grants memory ownership before execution.
+See [SuperFX graphics](gsu-graphics.md) for layout, metadata and loading examples.
+
+Legacy `plot_begin`, `plot_end`, `plot(x, y)`, `set_color(...)`,
+`set_plot_options(...)`, `flush_pixels()` and `plot.x`/`plot.y` are rejected
+with migration diagnostics. `plot_x`/`plot_y` are ordinary identifiers with
+no special hardware meaning.
 
 Targets centrally declare graphics, instruction-cache, hardware-loop and far-data
 capabilities. The analyzer and IR verifier enforce them. SPC700 rejects these
@@ -863,8 +892,9 @@ explicit capability cases. Frontend unit, IR verifier, malformed-object and
 backend execution tests remain independent. Execution groups compare direct,
 assembled and mixed-object payloads byte for byte, then run the GSU instruction
 model to verify aligned layouts, single-evaluation updates, continue, arrays,
-strings, null, volatile effects and imported interfaces. Graphics coverage checks
-emission, not rendered pixels.
+strings, null, volatile effects and imported interfaces. Graphics regressions
+check instruction-level cursor, color, pixel caches and bitplanes, not full
+SNES/PPU rendering or timing.
 
 Parser nesting is limited to 128 entries and expression trees to depth 256.
 Aggregate-by-value ABI, interbank code calls, named far placement, explicit

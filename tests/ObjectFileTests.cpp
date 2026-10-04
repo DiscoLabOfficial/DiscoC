@@ -135,6 +135,10 @@ int main() {
         valid_input.close();
 
         auto legacy = valid_bytes;
+        legacy.erase(legacy.begin() + 14); // Remove v7 bitmap-presence flag.
+        legacy[5] = 6;
+        if (ObjectFile::readBytes(legacy).code_section != valid.code_section)
+            throw std::runtime_error("Version 6 compatibility failed");
         legacy.erase(legacy.begin() + 13); // Remove v6 RAM alignment.
         legacy[5] = 5;
         if (ObjectFile::readBytes(legacy).code_section != valid.code_section)
@@ -212,6 +216,36 @@ int main() {
             } catch (const std::runtime_error&) { continue; }
             throw std::runtime_error("truncated v5 record was accepted");
         }
+
+        ObjectFile bitmap;
+        bitmap.config.bitmap.enabled = true;
+        bitmap.config.bitmap.height = 192;
+        bitmap.config.bitmap.depth = 4;
+        bitmap.config.bitmap.base = 0x4000;
+        const auto bitmap_path = directory / "bitmap.o";
+        bitmap.write(bitmap_path.string());
+        const auto decoded_bitmap = ObjectFile::read(bitmap_path.string());
+        if (decoded_bitmap.config.bitmap != bitmap.config.bitmap || decoded_bitmap.config.bitmap.scbr() != 16 ||
+            decoded_bitmap.config.bitmap.scmr() != 33)
+            throw std::runtime_error("Bitmap metadata did not round-trip");
+        std::vector<std::uint8_t> bitmap_bytes;
+        {
+            std::ifstream input(bitmap_path, std::ios::binary);
+            bitmap_bytes.assign(std::istreambuf_iterator<char>(input), {});
+        }
+        for (std::size_t length = 0; length < bitmap_bytes.size(); ++length) {
+            try { (void)ObjectFile::readBytes(std::vector<std::uint8_t>(bitmap_bytes.begin(), bitmap_bytes.begin() + length)); }
+            catch (const std::runtime_error&) { continue; }
+            throw std::runtime_error("Truncated bitmap object was accepted");
+        }
+        for (const auto field : std::vector<std::size_t>{14, 15, 16, 17, 21}) {
+            auto malformed = bitmap_bytes; malformed[field] = 255;
+            writeBytes(directory / "bitmap-malformed.o", malformed);
+            expectReadFailure(directory / "bitmap-malformed.o");
+        }
+        auto wrong_target = bitmap_bytes; wrong_target[6] = 1;
+        writeBytes(directory / "bitmap-target.o", wrong_target);
+        expectReadFailure(directory / "bitmap-target.o");
 
         std::filesystem::remove_all(directory);
         return 0;

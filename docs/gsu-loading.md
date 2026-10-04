@@ -122,6 +122,18 @@ completion. R6 is scratch while running. Validation cannot detect actual RAM
 capacity, aliasing with live code, dangling pointers, or exhausted host-reserved
 stack space that is still inside the GSU address window.
 
+## Host bitmap configuration
+
+Selected `bitmap` declarations are object/link metadata, not executable GSU
+register writes. The linker reports SCBR and SCMR mode bits; compiler and final
+assembly exports retain them as `__DISCO_BITMAP_SCBR` and
+`__DISCO_BITMAP_SCMR`. The host must write SCBR and combine SCMR with the
+appropriate ROM/RAM bus-ownership bits before starting the GSU.
+`--init-runtime` does not perform that SNES-side setup or clear the framebuffer.
+The linker checks selected framebuffer reservations against known RAM/static/
+stack placement. See [stateful SuperFX graphics](gsu-graphics.md) for layouts,
+options, flushing and a complete source/build example.
+
 ## Two assembly exports, one backend
 
 `discc --emit-asm -o unit.s` exports the canonical IR backend's **relocatable**

@@ -1,8 +1,32 @@
-// plot.dc
+// Stateful SuperFX plotting. The SNES host configures SCMR/SCBR before entry.
+rom const byte colors[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
 
-void main() {
-    plot_begin;
-        set_color(1);
-        plot(100, 80);
-    plot_end;
+bitmap main_screen {
+    mode bitmap;
+    size 256x192;
+    depth 4bpp;
+    base 0x0000;
+}
+
+word main() {
+    use bitmap main_screen;
+    word left_x = 128;
+    word right_x = 128;
+
+    plot {
+        options transparent;
+        for (word y = 32; y <= 96; y++) {
+            cursor.x = left_x;
+            cursor.y = y;
+            word width = right_x - left_x + 1;
+            for (word i = 0; i < width; i++) {
+                color colors[i & 7];
+                pixel; // Hardware PLOT increments cursor.x; no software INC.
+            }
+            left_x--;
+            right_x++;
+        }
+        flush;
+    }
+    return 0;
 }

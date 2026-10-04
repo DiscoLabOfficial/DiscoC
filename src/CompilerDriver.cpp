@@ -146,6 +146,7 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
             return 0;
         }
         IRLowerer lowerer(config.target); auto ir = lowerer.lower(program);
+        ir.bitmap = analyzer.getBitmapConfig();
         IRVerifier::verify(ir);
         if (emit_ir) { std::cout << dumpIR(ir); return 0; }
         if (check) return 0;

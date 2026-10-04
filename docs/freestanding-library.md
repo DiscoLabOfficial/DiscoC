@@ -124,15 +124,19 @@ faults. A nonzero access through null faults. No atomicity or rollback is implie
 ## Target libraries
 
 `targets/gsu/graphics.dci` offers `dc_gsu_plot_pixel`, `dc_gsu_fill_rect`, and
-`dc_gsu_flush_pixels`. Implementations use lexical plot contexts and explicit
-GSU capability operations. Compile/link `graphics.dc` like any other module.
+`dc_gsu_flush_pixels`. Implementations use lexical plot contexts, `color`,
+`at`, `pixel` and `flush`. Rectangle rows initialize X once, then let hardware
+PLOT advance it. Compile/link `graphics.dc` like any other module.
 `@target(gsu)` assertions on the declarations reject use on SPC700.
 
 The caller owns screen memory, graphics mode, bus access, and coordinate/color
 ranges. A nonpositive rectangle width/height draws no pixels. Positive dimensions
 use ordinary modular `i16` coordinate arithmetic; no clipping is performed.
-Flush explicitly when the host requires completed pixel writes. Byte-exact
-assembly tests cover these routines, not rendered pixels or graphics timing.
+Flush explicitly when the host requires completed pixel writes. Direct,
+assembled and mixed-object regressions verify logical pixel colors with the
+instruction-level graphics model and reconstruct the final assembly byte for
+byte. They do not verify SNES/PPU rendering or graphics timing. See
+[stateful graphics](gsu-graphics.md) for host configuration and state semantics.
 
 There is no SPC700 DSP library yet. Its implementation must accompany an
 executable SPC700 backend and explicit volatile-register/runtime ownership.

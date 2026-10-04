@@ -45,10 +45,30 @@ The current representation is SSA-like rather than a complete SSA implementation
 
 The module records its target. Capabilities are verified independently of the
 analyzer, including graphics, cache, hardware loops and far data. Explicit
-`plot.coordinate.read/write` replace magic source symbol names; coordinate reads
+`cursor.read/write` replace magic source symbol names; coordinate reads
 are snapshotted like observable loads. `cache` records instruction-cache requests.
 
-The IR has explicit operations for target-visible statements such as `plot`, `set_color`, `cmode`, `rpix`, and hardware loops. This keeps their side effects visible to the backend rather than hiding them in AST-specific code-generation visitors.
+Graphics instructions have explicit `IRHardwareEffects`:
+
+| Operation | State and effects |
+| --- | --- |
+| `pixel` | Read R1/R2, COLR/POR; write framebuffer/pixel caches; increment R1. |
+| `color` | Update COLR using POR and the previous COLR. |
+| `color rom.byte` | Address a typed ROM byte; use R14/ROM buffer and update COLR. |
+| `cmode` | Update POR from a verified symbolic option mask. |
+| `%value = rpix` / `rpix discard` | Read R1/R2, flush caches/read framebuffer; never increment R1. |
+
+Only a direct final nonvolatile ROM byte read uses `rom.byte`; RAM, casts and
+computed values remain ordinary loads/expressions. GETC selection is GSU-specific
+and configures ROMB/R14; it is not an address-taking instruction. RPIX always
+has observable effects, regardless of result use. Allocation excludes implicit
+hardware registers, and cursor reads are retained snapshots rather than
+rematerialized after PLOT. CMODE deduplication is local to known straight-line
+state, with calls and block boundaries invalidating it.
+
+Selected bitmap configuration is module metadata, separately validated and
+serialized for the SNES host. It is not an executable GSU operation. See
+[SuperFX graphics](gsu-graphics.md).
 
 ### Control flow
 

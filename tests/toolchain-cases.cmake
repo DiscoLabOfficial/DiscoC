@@ -35,6 +35,12 @@ add_toolchain_regression(language_aggregates language_aggregates)
 add_toolchain_regression(language_globals language_globals)
 add_toolchain_regression(language_linkage language_linkage)
 add_toolchain_regression(language_plot language_plot)
+add_toolchain_regression(graphics_state graphics_state)
+add_toolchain_regression(graphics_colors graphics_colors)
+add_toolchain_regression(graphics_bitmaps graphics_bitmaps)
+add_toolchain_regression(graphics_triangle graphics_triangle)
+add_toolchain_regression(graphics_rotation graphics_rotation)
+add_toolchain_regression(graphics_diagnostics graphics_diagnostics)
 
 # Target-independent language conformance is separate from backend oracles.
 add_toolchain_regression(language_conformance_types language_conformance_types)

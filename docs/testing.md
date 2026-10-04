@@ -81,6 +81,11 @@ GSU regressions. Both CTest and direct-build runners include this test.
 Alias checks cover signedness/width, const/volatile and near/far metadata,
 inactive declarations, name conflicts, and alias-count/pointer-depth boundaries.
 
+Nesting fixtures retain the 128-entry parser and 256-depth expression limits,
+including accepted/rejected cases at the parser boundary. MSVC tools and tests
+reserve an 8 MiB stack so Debug exception unwinding can report excessive
+nesting safely; the input limits and negative-test coverage are not relaxed.
+
 ## Near/far execution regressions
 
 Eight `pointer_*` groups cover the data-pointer contract:
@@ -107,7 +112,7 @@ the suite checks memory, banks, fault R6, and selected stack/register results.
 The instruction model includes ROMBR, ROM-buffer reads, two RAM banks, and
 shared RAM code/data. Hand-encoded self-tests check bank selection, ROM aliases,
 and a write that corrupts a future RAM instruction. This is not a complete
-execution oracle for graphics, cache/bus timing, interrupts, or the SNES host,
+execution oracle for cycle-accurate graphics, cache/bus timing, interrupts, or the SNES host,
 and it does not verify a far-code call ABI.
 
 ## Language execution regressions
@@ -129,7 +134,7 @@ Seven baseline `language_*` execution groups cover:
 
 Direct and assembled paths execute and compare payload hashes. Initialized
 RAM payloads also round-trip through final linked assembly. Drawing instructions
-are compiled/reassembled byte-exactly; rendered pixel accuracy is not covered.
+are compiled/reassembled byte-exactly and exercised by the graphics groups below.
 The test model is not a complete SNES emulator or hardware validation.
 
 ## Language conformance and extensions
@@ -149,11 +154,102 @@ a deliberately non-16-byte-aligned origin to exercise linker padding.
 Warning tests check all categories, suppression, Werror and definite assignment.
 CLI tests check migration errors, invalid origins and target restrictions.
 The object-reader unit checks malformed v6 DATA/RAM alignment, retaining legacy
-v3/v4/v5 compatibility checks.
+v3/v4/v5/v6 compatibility checks and malformed v7 bitmap records.
 
-Model execution is not cache timing, rendered-pixel, hardware or full-emulator
+Model execution is not cache timing, SNES/PPU display, hardware or full-emulator
 validation. The shared test registry is also used by direct build helpers;
 all new CLI groups are runnable against C++14 production tools.
+
+## Stateful graphics regressions
+
+`graphics_state` checks persistent R1/R2 cursor snapshots, exactly one hardware
+X increment per PLOT, word-sized cursor wrap, scanline loops without an extra
+increment, draw/read sugar and its single-evaluation order,
+calls/continue/switch, redundant CMODE and unused RPIX results. `flush` must
+remain in IR and in executed code.
+
+`graphics_colors` checks immediate/computed COLOR, direct ROM GETC, far-ROM bank
+restoration, volatile-ROM fallback, RAM copies modified at runtime, casts,
+mutable globals and far-RAM loads. COLOR and GETC share high-nibble/freeze-high
+checks; additional cases cover transparency, dithering and POR OBJ addressing.
+
+`graphics_bitmaps` covers all twelve mode/depth combinations, logical pixel
+reads and raw bitplane bytes (including the last byte of cartridge RAM), final
+assembly reconstruction, imported/conditional profiles and host metadata.
+The full triangle example executes 4,225 PLOT and 4,225 GETC operations, with
+one final RPIX. `graphics_diagnostics` covers context/capability errors, removed
+API spellings, invalid fields/alignment/ranges, conflicting profiles and RAM/
+stack overlap. Object tests reject malformed/truncated bitmap records.
+
+`GSUGraphicsModel` independently tracks both eight-pixel caches and bitplanes.
+Hand-encoded execution-model self-tests verify PLOT/RPIX cursor behavior and
+GETC's ROM-buffer/color transformation, without relying on compiler selection.
+This verifies instruction-level color/layout/flush behavior, not cycle timing,
+CPU/GSU contention, a complete SNES framebuffer display or physical hardware.
+
+`graphics_triangle` uses the tracked [RAM triangle](../tests/graphics/triangle/triangle.dc)
+shown in the README. It checks 9,409 PLOT, 97 COLOR, zero GETC, one RPIX,
+representative planar framebuffer bytes, result/stack/bank state, and both
+compiler and final linked assembly round trips. Startup begins with incorrect
+RAMBR/R10 to exercise runtime initialization. It runs in the native CTest and
+direct-build registries without external emulator or assembler dependencies.
+
+`graphics_rotation` executes the [rotating checkerboard](../tests/graphics/rotating_triangle/triangle.dc)
+with ten host-input vectors through all three payload paths. It checks phase
+masking, independent pixel/color counts, planar byte landmarks, poisoned-RAM
+clearing, untouched memory outside the bitmap, startup/stack/bank state, one
+RPIX, zero GETC and identical payload hashes. The renderer stays within the
+existing instruction-model execution limit. Both explicit CACHE requests must
+remain in the final assembly export, with checked execution counts and CBR.
+Hand-encoded model self-tests cover the functional 512-byte instruction cache:
+selector/ALT reset, prefetched-PC alignment, preserving/rebasing cached lines,
+RAM fallback outside the window and payload-bound checks. No cache-cycle or
+CPU/GSU bus timing is modeled.
+
+## Optional full SNES triangle integration
+
+The [triangle test directory](../tests/graphics/triangle/README.md) includes a
+minimal WLA-DX 65816 host and Mesen Lua checks. Install `wla-65816`, `wlalink`,
+and Mesen separately. From the repository root, with the current DiscoC tools
+and those optional tools on `PATH`:
+
+```sh
+cmake -DVERIFY_MESEN=ON -P tests/graphics/triangle/build-snes.cmake
+```
+
+The script also accepts explicit tool paths and an output directory. It fails
+on missing dependencies or failed commands; it does not silently skip checks.
+Without `VERIFY_MESEN`, it builds the two complete SNES ROMs but does not run
+the emulator. Artifacts default to `build/plot-triangle`.
+
+The host copies the fixed-origin payload from ROM to `$70:6000`, lets the GSU
+draw and flush, reclaims cartridge RAM after STOP, checks the result, and
+DMA-transfers the framebuffer to VRAM for PPU display. The scripts independently
+decode all 49,152 logical pixels, compare all framebuffer/VRAM bytes and all
+1,024 tilemap entries, and check the displayed image. A deliberately incorrect
+expected result checks the red-screen failure path. Verification logs and
+screenshots are produced beside the ROMs, without saving emulator settings.
+
+The README image is a real capture of this integration test in Mesen. This
+adds complete-ROM emulator evidence for this demo, not physical-hardware
+validation or exhaustive timing coverage for the toolchain.
+
+The [rotating checkerboard test](../tests/graphics/rotating_triangle/README.md)
+uses the same optional tools and shared build helpers:
+
+```sh
+cmake -DVERIFY_MESEN=ON -P tests/graphics/rotating_triangle/build-snes.cmake
+```
+
+Its host retains the last completed image while the GSU renders, then uploads
+4,096 bytes during VBlank. An independent per-pixel reference checks all
+49,152 pixels at each of 64 poses, framebuffer/VRAM bytes, tilemap, color counts,
+CPU results, STOP/stack/bank/CACHE state and VBlank DMA completion. It then checks
+phase wrap and a separate red-screen failure ROM. Captures/logs are written
+under `build/plot-rotating-triangle`; stale evidence is removed before execution.
+The animated README preview is accelerated playback of actual Mesen captures,
+not an animation-performance claim. This software-division-heavy demo has not
+been optimized for smooth rotation or tested on physical hardware.
 
 ## Freestanding library regressions
 
@@ -180,7 +276,8 @@ checks shared transitive imports, conflicting declarations and imported casts
 in attributes. Disabled declarations/imports retain syntax validation.
 
 Core modules pass frontend/IR checks on SPC700, not SPC700 execution. Graphics
-wrappers receive encoding/round-trip coverage, not pixel rendering. No complete
+wrappers additionally execute rectangle/pixel/flush color checks in direct,
+assembled and mixed-object builds. No complete
 SNES, timing, inline-ASM or interrupt execution coverage is implied.
 
 ## Optional libFuzzer target

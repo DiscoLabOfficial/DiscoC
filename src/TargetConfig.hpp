@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "BitmapConfig.hpp"
 
 enum class TargetKind : std::uint8_t {
     GSU = 0,
@@ -48,6 +49,7 @@ struct CompilerConfig {
     std::uint32_t code_start_address = 0x8000;
     bool optimize_loop_setup = false;
     bool warn_on_cache_overflow = true;
+    BitmapConfig bitmap;
 };
 
 inline bool operator==(const CompilerConfig& lhs, const CompilerConfig& rhs) {

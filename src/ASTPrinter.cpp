@@ -46,7 +46,12 @@ void ASTPrinter::visit(TypeAliasDeclStmt& stmt) { m_result = "(type " + stmt.tok
 void ASTPrinter::visit(LayoutQueryExpr& expr, const Type*) { m_result = "(" + expr.token.lexeme + " " + std::to_string(expr.constant_value) + ")"; }
 void ASTPrinter::visit(LiteralExpr& expr, const Type*) { m_result = expr.token.lexeme; }
 void ASTPrinter::visit(VariableExpr& expr, const Type*) { m_result = expr.token.lexeme; }
-void ASTPrinter::visit(PlotCoordinateExpr& expr, const Type*) { m_result = expr.is_y ? "plot.y" : "plot.x"; }
+void ASTPrinter::visit(PlotCoordinateExpr& expr, const Type*) { m_result = expr.is_y ? "cursor.y" : "cursor.x"; }
+void ASTPrinter::visit(ReadPixelExpr& expr, const Type*) {
+    m_result = expr.x ? "(read_pixel at " + printExpr(*expr.x) + " " + printExpr(*expr.y) + ")" : "(read_pixel)";
+}
+void ASTPrinter::visit(BitmapDeclStmt& stmt) { m_result = "(bitmap " + stmt.token.lexeme + ")"; }
+void ASTPrinter::visit(UseBitmapStmt& stmt) { m_result = "(use bitmap " + stmt.token.lexeme + ")"; }
 void ASTPrinter::visit(UnaryExpr& expr, const Type*) { m_result = "(" + expr.token.lexeme + " " + printExpr(*expr.right) + ")"; }
 void ASTPrinter::visit(BinaryExpr& expr, const Type*) { m_result = "(" + expr.token.lexeme + " " + printExpr(*expr.left) + " " + printExpr(*expr.right) + ")"; }
 void ASTPrinter::visit(AssignExpr& expr, const Type*) {
@@ -126,16 +131,14 @@ void ASTPrinter::visit(ExpressionStmt& stmt) {
     m_result = printExpr(*stmt.expression);
 }
 
-void ASTPrinter::visit(PlotStmt& stmt) {
-    m_result = "(plot " + printExpr(*stmt.x) + " " + printExpr(*stmt.y) + ")";
-}
+void ASTPrinter::visit(PlotStmt&) { m_result = "(pixel)"; }
 
 void ASTPrinter::visit(PlotBeginStmt&) { m_result = "(plot_begin)"; }
 void ASTPrinter::visit(PlotBlockStmt& stmt) { m_result = "(plot " + print(*stmt.body) + ")"; }
 void ASTPrinter::visit(PlotEndStmt&) { m_result = "(plot_end)"; }
-void ASTPrinter::visit(SetColorStmt& stmt) { m_result = "(set_color " + printExpr(*stmt.color_value) + ")"; }
-void ASTPrinter::visit(CmodeStmt& stmt) { m_result = "(set_plot_options " + printExpr(*stmt.options_value) + ")"; }
-void ASTPrinter::visit(RpixStmt&) { m_result = "(flush_pixels)"; }
+void ASTPrinter::visit(SetColorStmt& stmt) { m_result = "(color " + printExpr(*stmt.color_value) + ")"; }
+void ASTPrinter::visit(CmodeStmt& stmt) { m_result = "(options " + printExpr(*stmt.options_value) + ")"; }
+void ASTPrinter::visit(RpixStmt&) { m_result = "(flush)"; }
 void ASTPrinter::visit(AddressOfExpr& expr, const Type*) { m_result = "(& " + printExpr(*expr.right) + ")"; }
 void ASTPrinter::visit(DereferenceExpr& expr, const Type*) { m_result = "(* " + printExpr(*expr.right) + ")"; }
 void ASTPrinter::visit(SubscriptExpr& expr, const Type*) { m_result = printExpr(*expr.array) + "[" + printExpr(*expr.index) + "]"; }

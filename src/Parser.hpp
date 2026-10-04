@@ -54,11 +54,10 @@ private:
     std::unique_ptr<Stmt> forStatement(bool is_cached);
     std::unique_ptr<Stmt> switchStatement();
     std::unique_ptr<Stmt> plotStatement();
-	std::unique_ptr<Stmt> plotBeginStatement();
-	std::unique_ptr<Stmt> plotEndStatement();
-	std::unique_ptr<Stmt> setColorStatement();
-	std::unique_ptr<Stmt> setPlotOptionsStatement();
-    std::unique_ptr<Stmt> flushPixelsStatement();
+    std::unique_ptr<Stmt> bitmapDeclaration();
+    std::unique_ptr<Stmt> atStatement();
+    std::unique_ptr<Stmt> optionsStatement();
+    std::vector<std::unique_ptr<Stmt>> cursorWrites(std::unique_ptr<Expr> x, std::unique_ptr<Expr> y, const Token& source);
     std::unique_ptr<Stmt> drawStatement();
     std::unique_ptr<Stmt> returnStatement();
     std::unique_ptr<Stmt> blockStatement();

@@ -273,6 +273,9 @@ void Analyzer::endScope() {
 }
 
 void Analyzer::analyze(const std::vector<std::unique_ptr<Stmt>>& program) {
+    m_bitmaps.clear(); m_registered_bitmaps.clear(); m_selected_bitmap = BitmapConfig{};
+    for (const auto& statement : program)
+        if (auto* bitmap = dynamic_cast<BitmapDeclStmt*>(statement.get())) visit(*bitmap);
     m_type_alias_names.clear();
     for (const auto& binding : builtinTypeAliases()) m_type_alias_names.insert(binding.first);
     for (const auto& statement : program)
@@ -874,27 +877,60 @@ void Analyzer::visit(PlotEndStmt& stmt) {
 }
 
 void Analyzer::visit(PlotStmt& stmt) {
-    requireCapability(TargetCapability::Graphics, stmt.token);
-    if (!m_isInPlottingContext) {
-        throw CompilerError("'plot' can only be used inside a plot context (plot { ... }).", stmt.token);
-    }
-    analyzeExpr(*stmt.x, nullptr);
-    analyzeExpr(*stmt.y, nullptr);
-    coerceExpr(stmt.x, Type{BaseType::WORD, "", 2, false});
-    coerceExpr(stmt.y, Type{BaseType::WORD, "", 2, false});
+    requirePlotContext(stmt.token);
 }
 
 void Analyzer::visit(SetColorStmt& stmt) {
-    requireCapability(TargetCapability::Graphics, stmt.token);
+    requirePlotContext(stmt.token);
     analyzeExpr(*stmt.color_value, nullptr);
+    if (stmt.color_value->result_type.pointer_level != 0 || stmt.color_value->result_type.array_size != 0 ||
+        (stmt.color_value->result_type.base != BaseType::BYTE && stmt.color_value->result_type.base != BaseType::WORD && stmt.color_value->result_type.base != BaseType::BOOL))
+        throw CompilerError("Color requires a scalar integer value.", stmt.token);
 }
 
 void Analyzer::visit(CmodeStmt& stmt) {
-    requireCapability(TargetCapability::Graphics, stmt.token);
+    requirePlotContext(stmt.token);
     analyzeExpr(*stmt.options_value, nullptr);
+    if (!stmt.options_value->is_constant || stmt.options_value->constant_value < 0 || stmt.options_value->constant_value > 31)
+        throw CompilerError("Plot options must be a constant POR mask.", stmt.token);
 }
 
 void Analyzer::visit(RpixStmt& stmt) { requireCapability(TargetCapability::Graphics, stmt.token); }
+
+void Analyzer::requirePlotContext(const Token& source) const {
+    requireCapability(TargetCapability::Graphics, source);
+    if (!m_isInPlottingContext) throw CompilerError("Graphics operation requires a plotting context (plot { ... }).", source);
+}
+
+void Analyzer::visit(ReadPixelExpr& expr, const Type*) {
+    requirePlotContext(expr.token);
+    if (expr.x) {
+        const Type coordinate{BaseType::WORD, "", 2, false};
+        analyzeExpr(*expr.x, &coordinate); coerceExpr(expr.x, coordinate);
+        analyzeExpr(*expr.y, &coordinate); coerceExpr(expr.y, coordinate);
+    }
+    expr.result_type = Type{BaseType::BYTE, "", 1, false};
+}
+
+void Analyzer::visit(BitmapDeclStmt& stmt) {
+    if (!m_registered_bitmaps.insert(&stmt).second) return;
+    requireCapability(TargetCapability::Graphics, stmt.token);
+    try { stmt.config.validate(); } catch (const std::exception& error) { throw CompilerError(error.what(), stmt.token); }
+    if (m_bitmaps.size() >= 128) throw CompilerError("Bitmap declaration count exceeds 128.", stmt.token);
+    const auto found = m_bitmaps.find(stmt.token.lexeme);
+    if (found != m_bitmaps.end()) throw CompilerError("Duplicate bitmap declaration.", stmt.token);
+    m_bitmaps.emplace(stmt.token.lexeme, stmt.config);
+}
+
+void Analyzer::visit(UseBitmapStmt& stmt) {
+    requireCapability(TargetCapability::Graphics, stmt.token);
+    const auto found = m_bitmaps.find(stmt.token.lexeme);
+    if (found == m_bitmaps.end()) throw CompilerError("Unknown bitmap: " + stmt.token.lexeme, stmt.token);
+    stmt.config = found->second;
+    if (m_selected_bitmap.enabled && m_selected_bitmap != stmt.config)
+        throw CompilerError("A GSU payload can select only one host bitmap configuration; runtime switching requires SNES-side configuration.", stmt.token);
+    m_selected_bitmap = stmt.config;
+}
 
 void Analyzer::visit(CallExpr& expr, const Type*) {
     auto* callee_var = dynamic_cast<VariableExpr*>(expr.callee.get());

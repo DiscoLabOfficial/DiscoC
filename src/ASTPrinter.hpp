@@ -11,6 +11,9 @@ public:
     void visit(LiteralExpr& expr, const Type* context) override;
     void visit(VariableExpr& expr, const Type* context) override;
     void visit(PlotCoordinateExpr& expr, const Type* context) override;
+    void visit(ReadPixelExpr& expr, const Type* context) override;
+    void visit(BitmapDeclStmt& stmt) override;
+    void visit(UseBitmapStmt& stmt) override;
     void visit(LayoutQueryExpr& expr, const Type* context) override;
     void visit(NullExpr& expr, const Type* context) override;
     void visit(InitializerListExpr& expr, const Type* context) override;

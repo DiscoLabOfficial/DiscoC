@@ -22,7 +22,10 @@ acceptance criteria, not release dates or a fixed number of pull requests.
 - [x] Mutable static RAM, explicit initialization contracts, and internal/export/extern linkage.
 - [x] Compile-time constants/enums, layout queries/assertions, and packed/aligned structs.
 - [x] Compound updates, real for/continue control flow, and explicit switch fallthrough annotations.
-- [x] Lexical plotting with explicit plot coordinates and target-capability checks.
+- [x] Stateful lexical plotting with `cursor.x`/`cursor.y`, hardware X advancement,
+  ROM-aware color selection, symbolic POR options, and observable RPIX/flush.
+- [x] Validated bitmap/OBJ declarations and linked SCMR/SCBR host metadata,
+  with framebuffer overlap checks and bitplane-level execution regressions.
 - [x] Attributes, source imports and .dci interfaces, transparent type aliases, and bounded dependency graphs.
 - [x] Local-first import search, TOML/CLI import paths, public API projections, and one-object-per-source project discovery.
 - [x] Declarative target selection with @cfg; @target remains a target assertion.

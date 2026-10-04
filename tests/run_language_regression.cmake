@@ -96,12 +96,12 @@ void main() {
     word a = -149;
     word b = 46;
     *out = a / b;
-    plot_begin;
-    plot.x = 10; plot.y = 20;
+    plot {
+    cursor.x = 10; cursor.y = 20;
     *(word*)0x102 = a % b;
-    *(word*)0x104 = plot.x;
-    *(word*)0x106 = plot.y;
-    plot_end;
+    *(word*)0x104 = cursor.x;
+    *(word*)0x106 = cursor.y;
+    }
 }
 ]=] --word 0x700100 65533 --word 0x700102 65525 --word 0x700104 10 --word 0x700106 20 --register 6 0)
     set(vectors "")
@@ -247,23 +247,23 @@ elseif(CASE STREQUAL "language_plot")
 word divide(word a, word b) { return a / b; }
 word in_plot(bool choose) {
     if (choose) {
-        plot { plot.x = 46; plot.y = 103; return plot.x + plot.y + divide(149, 1); }
+        plot { cursor.x = 46; cursor.y = 103; return cursor.x + cursor.y + divide(149, 1); }
     }
     return 7;
 }
 void main() {
     word result = 0;
-    if (true) { plot { plot.x = 12; plot.y = 30; word n = divide(149, 7); result = plot.x + plot.y + n; } }
+    if (true) { plot { cursor.x = 12; cursor.y = 30; word n = divide(149, 7); result = cursor.x + cursor.y + n; } }
     *(word*)0x100 = result;
     *(word*)0x102 = in_plot(true);
     *(word*)0x104 = in_plot(false);
     while (true) { plot { word local = 5; result = local; break; } }
     *(word*)0x106 = result + divide(42, 2);
-    switch (1) { case 1: plot { plot.x = 9; result = plot.x; break; } default: result = 0; }
+    switch (1) { case 1: plot { cursor.x = 9; result = cursor.x; break; } default: result = 0; }
     *(word*)0x108 = result;
 }
 ]=] --word 0x700100 63 --word 0x700102 298 --word 0x700104 7 --word 0x700106 26 --word 0x700108 9 --register 6 0)
-    file(WRITE "${TEST_DIR}/drawing.dc" "void main() { plot { for (word y = 0; y < 4; y = y + 1) { for (word x = 0; x < 8; x = x + 1) { set_color(x & 15); plot(x, y); } } } flush_pixels(); }")
+    file(WRITE "${TEST_DIR}/drawing.dc" "void main() { plot { for (word y = 0; y < 4; y = y + 1) { for (word x = 0; x < 8; x = x + 1) { color x & 15; draw at (x, y); } } } flush; }")
     check_round_trip(drawing "${TEST_DIR}/drawing.dc" --init-runtime)
     language_fixture(boolean_empty [=[
 bool yes() { return true && !false; }

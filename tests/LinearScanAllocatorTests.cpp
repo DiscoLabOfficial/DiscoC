@@ -109,5 +109,16 @@ int main() {
         rejected_observable_spill = true;
     }
     require(rejected_observable_spill, "multi-use loads are not silently rematerialized");
+    IRInstruction pixel; pixel.opcode = IROpcode::Plot; pixel.in_plot_context = true;
+    IRFunction graphics;
+    graphics.entry = IRBlockId{0}; graphics.value_count = 1;
+    graphics.blocks.push_back({IRBlockId{0}, "entry", {constant(1), pixel, ret(1)}});
+    allocator.run(graphics, {1, 2, 5});
+    require(allocator.find(IRValueId{1})->physical_register == 5, "PLOT reserves R1/R2, including its automatic X update");
+    auto rpix = constant(1); rpix.opcode = IROpcode::Rpix; rpix.type = Type{BaseType::BYTE, "", 1, false};
+    graphics.blocks[0].instructions = {rpix, ret(1)};
+    bool rejected_pixel_rematerialization = false;
+    try { allocator.run(graphics, {}); } catch (const std::runtime_error&) { rejected_pixel_rematerialization = true; }
+    require(rejected_pixel_rematerialization, "Single-use RPIX is not movable/rematerializable");
     return 0;
 }

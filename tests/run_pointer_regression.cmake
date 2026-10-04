@@ -91,12 +91,12 @@ word read(far word* pointer) { return *pointer + 1; }
 void main() {
     far word* pointer = (far word*)0x711000;
     *pointer = 148;
-    plot_begin;
-    plot.x = 7;
-    plot.y = 8;
+    plot {
+    cursor.x = 7;
+    cursor.y = 8;
     word result = read(pointer);
     *(word*)0x0100 = result;
-    plot_end;
+    }
 }
 ]=])
     pointer_run(plot_registers --word 0x700100 149 --register 1 7 --register 2 8 --rambr 0 0 --register 6 0)

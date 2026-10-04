@@ -149,6 +149,19 @@ void main() {
     run_expected_failure_contains("Cannot implicitly convert" "${DISCC}" --check "${TEST_DIR}/memory_rom.dc")
 elseif(CASE STREQUAL "language_target_libraries")
     build_library(graphics "${ROOT_DIR}/lib/targets/gsu/graphics.dc")
+    library_fixture(render "import \"${library_dir}/targets/gsu/graphics.dci\";
+void main() {
+    plot { options; }
+    dc_gsu_fill_rect(0, 1, 12, 2, 3);
+    dc_gsu_plot_pixel(20, 3, 9);
+    dc_gsu_flush_pixels();
+    plot {
+        *(byte*)0x100 = read_pixel at (0, 1);
+        *(byte*)0x101 = read_pixel at (11, 2);
+        *(byte*)0x102 = read_pixel at (20, 3);
+    }
+}" graphics --byte 0x700100 3 --byte 0x700101 3 --byte 0x700102 9
+        --plots 0 25 --rpix 0 4 --register 6 0)
     file(WRITE "${TEST_DIR}/selected.dc" [=[
 @cfg(gsu) @target(gsu) i16 selected() { return 149; }
 @cfg(spc700) @target(spc700) i16 selected() { return 42; }
