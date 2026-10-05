@@ -1,4 +1,4 @@
--- Deliberately expect 9408 pixels: the real 9409 result must show red, not BG1.
+-- Negative integration oracle: the real 9409 result must show red, not BG1.
 local frames, readyFrames = 0, 0
 emu.addEventCallback(function()
     frames = frames + 1

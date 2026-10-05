@@ -1,0 +1,7 @@
+import "support/left.dc";
+import "support/right.dc";
+import "support/./shared.dc";
+static_assert(sizeof(struct State) == 4);
+static_assert(sizeof(shared.colors) == 2);
+static_assert(sizeof(palette) == 3);
+void main() { Frame result = left() + right(); shared.colors[0] = (byte)result; }

@@ -1,4 +1,5 @@
 #include "ObjectFile.hpp"
+#include "TestTempDirectory.hpp"
 
 #include <filesystem>
 #include <cstring>
@@ -48,12 +49,47 @@ void expectReadFailure(const std::filesystem::path& path) {
     throw std::runtime_error("malformed object was accepted: " + path.string());
 }
 
+void expectMemoryFailure(const std::vector<std::uint8_t>& bytes) {
+    try { (void)ObjectFile::readBytes(bytes); }
+    catch (const std::runtime_error&) { return; }
+    throw std::runtime_error("malformed in-memory object was accepted");
+}
+
+void expectWriteFailure(ObjectFile object, const std::filesystem::path& path) {
+    const std::vector<std::uint8_t> sentinel{0x95, 0x42, 0x00};
+    writeBytes(path, sentinel);
+    bool rejected = false;
+    try { object.write(path.string()); }
+    catch (const std::runtime_error&) { rejected = true; }
+    if (!rejected) throw std::runtime_error("malformed object was written");
+    std::ifstream input(path, std::ios::binary);
+    const std::vector<std::uint8_t> preserved(std::istreambuf_iterator<char>(input), {});
+    if (preserved != sentinel) throw std::runtime_error("invalid object overwrote its destination");
+}
+
+// Independently encoded v4 records exercise validation without relying on the
+// writer to generate an invalid object that its own validator now rejects.
+std::vector<std::uint8_t> symbolFixture(const std::string& name, std::uint8_t section = 0,
+                                      std::uint32_t offset = 0, unsigned count = 1) {
+    auto bytes = objectPrefix();
+    appendU32(bytes, 1); bytes.push_back(0); // CODE
+    appendU32(bytes, 0); // DATA
+    appendU32(bytes, count);
+    for (unsigned i = 0; i < count; ++i) {
+        appendU32(bytes, static_cast<std::uint32_t>(name.size()));
+        bytes.insert(bytes.end(), name.begin(), name.end());
+        bytes.push_back(section); appendU32(bytes, offset);
+    }
+    appendU32(bytes, 0); // relocations
+    return bytes;
+}
+
 } // namespace
 
 int main() {
     try {
-        const auto directory = std::filesystem::temp_directory_path() / "discoc-object-tests";
-        std::filesystem::create_directories(directory);
+        TestTempDirectory temporary("object-tests");
+        const auto& directory = temporary.path();
 
         auto huge_section = objectPrefix();
         appendU32(huge_section, 0xffffffffu);
@@ -247,7 +283,93 @@ int main() {
         writeBytes(directory / "bitmap-target.o", wrong_target);
         expectReadFailure(directory / "bitmap-target.o");
 
-        std::filesystem::remove_all(directory);
+        for (const auto version : {0u, 1u, 2u, 8u, 255u}) {
+            auto malformed = valid_bytes; malformed[5] = static_cast<std::uint8_t>(version);
+            expectMemoryFailure(malformed);
+        }
+        for (const auto index : {6u, 7u}) {
+            auto malformed = valid_bytes; malformed[index] = 255;
+            expectMemoryFailure(malformed);
+        }
+        for (std::size_t length = 0; length < valid_bytes.size(); ++length)
+            expectMemoryFailure({valid_bytes.begin(), valid_bytes.begin() + length});
+        auto trailing = valid_bytes; trailing.push_back(0);
+        expectMemoryFailure(trailing);
+        for (const auto& name : std::vector<std::string>{"", std::string(1, '\x01'),
+                std::string("a\0b", 3), "a\nb", "a\tb", std::string("a\x7f", 2),
+                std::string(ObjectFile::MaxStringBytes + 1u, 'x')})
+            expectMemoryFailure(symbolFixture(name));
+        expectMemoryFailure(symbolFixture("x", 255));
+        expectMemoryFailure(symbolFixture("x", 0, 2));
+        expectMemoryFailure(symbolFixture("x", 0, 0, 2));
+        expectMemoryFailure(symbolFixture(std::string(1, '\x01') + "local", 0, 0, 2));
+        if (ObjectFile::readBytes(symbolFixture("end", 0, 1)).symbol_table.front().offset != 1)
+            throw std::runtime_error("one-past-section labels must remain representable");
+
+        auto impossible_count = objectPrefix();
+        appendU32(impossible_count, 0); appendU32(impossible_count, 0);
+        appendU32(impossible_count, ObjectFile::MaxSymbolCount); appendU32(impossible_count, 0);
+        expectMemoryFailure(impossible_count);
+        impossible_count = objectPrefix();
+        appendU32(impossible_count, 0); appendU32(impossible_count, 0); appendU32(impossible_count, 0);
+        appendU32(impossible_count, ObjectFile::MaxRelocationCount);
+        expectMemoryFailure(impossible_count);
+
+        ObjectFile relocations;
+        relocations.code_section = {0xa0, 0, 0xf0, 0, 0};
+        relocations.data_section = {0x95};
+        relocations.symbol_table.push_back({"value", SymbolSection::DATA, 0});
+        relocations.relocation_table = {{"value", SymbolSection::CODE, 0, RelocationType::ADDR24_BANK},
+            {"value", SymbolSection::CODE, 2, RelocationType::ADDR24_OFFSET}};
+        const auto reloc_path = directory / "relocations.o";
+        relocations.write(reloc_path.string());
+        if (ObjectFile::read(reloc_path.string()).relocation_table.size() != 2)
+            throw std::runtime_error("adjacent bank/offset relocations must remain valid");
+        auto invalid = relocations;
+        invalid.relocation_table.push_back(invalid.relocation_table.back());
+        expectWriteFailure(invalid, directory / "preserve.o");
+        invalid = relocations; invalid.relocation_table.back().patch_offset = 0;
+        expectWriteFailure(invalid, directory / "preserve.o");
+        invalid = relocations; invalid.relocation_table.back().patch_offset = 4;
+        expectWriteFailure(invalid, directory / "preserve.o");
+        invalid = relocations; invalid.relocation_table.back().type = static_cast<RelocationType>(255);
+        expectWriteFailure(invalid, directory / "preserve.o");
+        invalid = relocations; invalid.relocation_table.back().section_to_patch = SymbolSection::RAM;
+        expectWriteFailure(invalid, directory / "preserve.o");
+        invalid = relocations; invalid.relocation_table.back().target_symbol_name.clear();
+        expectWriteFailure(invalid, directory / "preserve.o");
+        invalid = relocations; invalid.symbol_table.push_back(invalid.symbol_table.front());
+        expectWriteFailure(invalid, directory / "preserve.o");
+        invalid = relocations; invalid.symbol_table.front().offset = 2;
+        expectWriteFailure(invalid, directory / "preserve.o");
+        invalid = relocations; invalid.symbol_table.front().name = "x\ny";
+        expectWriteFailure(invalid, directory / "preserve.o");
+        invalid = relocations; invalid.data_alignment = 3;
+        expectWriteFailure(invalid, directory / "preserve.o");
+        invalid = relocations; invalid.config.target = static_cast<TargetKind>(255);
+        expectWriteFailure(invalid, directory / "preserve.o");
+
+        std::vector<std::uint8_t> relocation_bytes;
+        { std::ifstream input(reloc_path, std::ios::binary);
+          relocation_bytes.assign(std::istreambuf_iterator<char>(input), {}); }
+        // Last relocation record: 4-byte length, 5-byte name, section,
+        // 4-byte offset, type. Mutate each structural field independently.
+        for (const auto index : {relocation_bytes.size() - 6u, relocation_bytes.size() - 5u,
+                                 relocation_bytes.size() - 1u}) {
+            auto malformed = relocation_bytes; malformed[index] = 255;
+            expectMemoryFailure(malformed);
+        }
+        auto overlapping_bytes = relocation_bytes;
+        overlapping_bytes[overlapping_bytes.size() - 5u] = 0;
+        expectMemoryFailure(overlapping_bytes);
+
+        const auto huge_path = directory / "total-size.o";
+        { std::ofstream output(huge_path, std::ios::binary);
+          output.seekp(ObjectFile::MaxObjectBytes); output.put(0);
+          if (!output) throw std::runtime_error("cannot create oversized object fixture"); }
+        expectReadFailure(huge_path);
+
+        temporary.cleanup();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

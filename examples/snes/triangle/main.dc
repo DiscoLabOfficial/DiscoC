@@ -1,4 +1,4 @@
-// RAM-executed scanline triangle. The SNES host clears and displays this bitmap.
+// Baseline 0.1 SNES example: the host clears and displays this RAM bitmap.
 // No ROM palette: this complete payload is copied to cartridge RAM at $70:6000.
 bitmap main_screen {
     mode bitmap;

@@ -1,0 +1,10 @@
+constexpr word COUNT = 3;
+struct State { byte tag; word values[COUNT]; };
+export struct State state = {1, {10, 20}};
+internal word calls = 0;
+ram byte message[] = "READY";
+const word limit = 42;
+extern word shared;
+word shared = 149;
+extern word shared;
+void main() { state.values[2] = shared; calls++; message[0] = 'r'; }

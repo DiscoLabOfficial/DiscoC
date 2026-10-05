@@ -1,0 +1,2 @@
+// error: Bitmap depth
+bitmap screen { mode bitmap; size 256x128; depth 3bpp; base 0; }

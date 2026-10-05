@@ -1,0 +1,8 @@
+// spc-error: lacks capability 'far-data'
+void main() {
+    far rom byte* low = (far rom byte*)0x00FFFF + 1;
+    far rom byte* high = (far rom byte*)0x40FFFF + 1;
+    far ram byte* ram_end = (far ram byte*)0x70FFFF + 1;
+    far ram byte* ram_begin = (far ram byte*)0x710000 - 1;
+    bool same = ram_end == (far ram byte*)0x710000;
+}

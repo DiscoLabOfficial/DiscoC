@@ -1,0 +1,2 @@
+// error: Expect member name
+struct Point { byte color; };

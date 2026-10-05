@@ -1,0 +1,2 @@
+struct State { byte mode; byte depth; byte dither; };
+void main() { word plot_x = 1; word plot_y = 2; word obj = 3; struct State state = {1, 2, 3}; }

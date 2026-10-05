@@ -1,0 +1,2 @@
+// error: extern global cannot have an initializer
+extern word shared = 42;

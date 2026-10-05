@@ -1,0 +1,8 @@
+// spc-error: lacks capability 'graphics'
+import "support/shared.dc";
+void main() { shared.colors[0] = 7; plot {
+    options; at (0, 0);
+    color palette[0]; pixel;
+    color shared.colors[0]; pixel;
+    flush;
+} }

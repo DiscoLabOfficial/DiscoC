@@ -1,0 +1,5 @@
+// target: gsu
+// error: only one host bitmap configuration
+bitmap a { mode bitmap; size 256x128; depth 4bpp; base 0; }
+bitmap b { mode bitmap; size 256x160; depth 4bpp; base 0; }
+void main() { if (true) use bitmap a; else use bitmap b; }

@@ -1,0 +1,3 @@
+// target: gsu
+// error: Cannot implicitly convert
+void main() { far word* remote = (far word*)0x711000; word* local = remote; }

@@ -1,0 +1,2 @@
+// error: null
+void main() { word* pointer = null; *((word*)0) = 42; }

@@ -1,0 +1,2 @@
+// error: Legacy graphics API removed
+void main() { set_color(3); }

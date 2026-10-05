@@ -1,0 +1,2 @@
+import "./shared.dc";
+Frame right() { return shared.frame + palette[1]; }

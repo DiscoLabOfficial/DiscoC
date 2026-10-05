@@ -1,0 +1,2 @@
+// error: Use cursor.x/cursor.y
+void main() { plot { word old_x = plot.x; } }

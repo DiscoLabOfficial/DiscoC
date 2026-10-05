@@ -1,0 +1,7 @@
+volatile word* status = (volatile word*)0x100;
+void main() {
+    static_assert(sizeof(*status) == 2);
+    static_assert(alignof(*status) == 2);
+    bool skip = false && *status != 0;
+    bool take = true || *status != 0;
+}

@@ -1,4 +1,4 @@
-; Framebuffer clearing and SNES display routines for snes_host.asm.
+; Framebuffer clearing and SNES display routines for host.asm.
 ; Calls enter and leave with A8, X/Y16, DBR=$00 and GSU stopped (CPU RAM access).
 
 clear_triangle_framebuffer:

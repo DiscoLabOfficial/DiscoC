@@ -1,0 +1,3 @@
+// target: gsu
+// error: integer
+void main() { plot { color (byte*)0x100; } }

@@ -1,0 +1,20 @@
+[project]
+name = "triangle"
+target = "gsu"
+sources = ["main.dc"]
+
+[target.gsu]
+memory_mapping = "lorom"
+execution_memory = "ram"
+origin = 0x706000
+ram_bank = 0x00
+stack_pointer = 0xFFFE
+
+[runtime]
+initialize = true
+
+[output]
+# Keep generated objects, payloads and ROMs out of the example's source tree.
+directory = "../../../build/snes-triangle"
+binary = "triangle.bin"
+assembly = "triangle.s"

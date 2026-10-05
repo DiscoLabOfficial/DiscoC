@@ -1,0 +1,6 @@
+// spc-error: lacks capability 'graphics'
+bitmap screen { mode bitmap; size 256x192; depth 4bpp; base 0; }
+bitmap unused { mode obj; depth 8bpp; base 0x10000; }
+void main() { use bitmap screen; if (true) { use bitmap screen; }
+    plot { options transparent; draw at (10, 20) with color 3; flush; }
+}

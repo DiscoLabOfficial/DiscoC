@@ -1,0 +1,3 @@
+import "shared.dc";
+internal word private_helper() { return 42; }
+word left() { shared.frame++; return private_helper(); }

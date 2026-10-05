@@ -66,7 +66,11 @@ when startup is host-owned.
 
 R10 must be even and in `$0008-$FFFE`; the default is `$2000`. The initial
 stack word must not overlap the linked payload in the selected RAM bank.
-This is not a complete stack reservation or recursion-depth proof: the host
+With generated startup, the linker also raises stack guard thresholds above
+known RAM payload/framebuffer/static regions below R10 and rejects a requested
+frame that cannot fit. Generated push/frame guards stop on cumulative exhaustion
+with R6=2 instead of descending into those reservations. This is not a complete
+stack reservation or recursion-depth proof: the host
 must reserve enough descending stack space for all frames, temporaries, and
 nested calls, without overlapping code, result buffers, or graphics data.
 Select bank 1 only on hardware with that RAM capacity.
@@ -94,9 +98,11 @@ Without generated startup, nonempty RAM requires
 initialize the full allocation, and enter with a valid stack. This flag and
 `--init-runtime` are mutually exclusive. No public RAM-image loader format is
 provided. Generated functions/pushes check a lower stack floor at the aligned
-end of static RAM (or zero without globals), stopping with R6=2 before collision.
-This does not prove recursion depth or protect arbitrary host buffers/code
-below the stack; host-side memory planning remains necessary.
+end of static RAM, raised for known framebuffer/payload reservations as above,
+stopping with R6=2 before collision. With host-owned startup, RAM-code stack
+placement is not known to the linker: the host must ensure the actual R10 and
+all descending frames avoid the payload. Neither contract proves recursion
+depth or protects arbitrary host buffers; host-side memory planning is necessary.
 
 ## Near/far data-bank contract
 
@@ -107,6 +113,8 @@ value. `--rom-bank` accepts a GSU ROM bank $00-$5F. It defaults to the execution
 bank for ROM code and $00 for RAM code. Compiler near ROM reads select this bank,
 and far ROM reads restore it after accessing the foreign bank. These settings
 do not place constants in a separate ROM section for RAM-execution payloads.
+Compiler near ROM references inconsistent with the selected ROM bank/data
+placement are link errors, not silently encoded ROM-buffer reads into RAM.
 
 Far data pointers occupy four aligned bytes: canonical bank ($70/$71 for RAM),
 zero padding, low offset byte, high offset byte. Far accesses restore the near

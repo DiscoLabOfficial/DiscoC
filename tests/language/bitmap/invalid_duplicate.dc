@@ -1,0 +1,2 @@
+// error: Duplicate bitmap field
+bitmap screen { mode bitmap; size 256x128; depth 4bpp; depth 2bpp; base 0; }

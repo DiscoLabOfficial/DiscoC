@@ -17,6 +17,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         build_type: [Debug, Release]
+        include:
+          - build_type: Debug
+            preset: debug
+          - build_type: Release
+            preset: release
 
     steps:
       - name: Checkout
@@ -42,15 +47,14 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Build and test using the Windows helper
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./build.ps1 -Backend Ninja -Configuration ${{ matrix.build_type }} -BuildDir build -Test
+      - name: Configure using the documented preset
+        run: cmake --preset ${{ matrix.preset }}
 
-      - name: Build and test using the Unix helper
-        if: runner.os != 'Windows'
-        shell: bash
-        run: bash build.sh --backend ninja --config ${{ matrix.build_type }} --build-dir build --test
+      - name: Build using the documented preset
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
 
       - name: Build and test without configuring CMake (GCC/Clang)
         if: runner.os != 'Windows' && matrix.build_type == 'Release'
@@ -61,7 +65,54 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.os }}-${{ matrix.build_type }}
-          path: build/
+          path: build/${{ matrix.preset }}/bin/
+          if-no-files-found: error
+
+  mingw:
+    name: Windows MinGW static (Release)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MinGW-w64
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          path-type: inherit
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-make
+
+      - name: Configure, build and test MinGW preset
+        shell: pwsh
+        env:
+          DISCO_MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $env:PATH = (Join-Path $env:DISCO_MSYS2_LOCATION 'ucrt64\bin') + ';' + $env:PATH
+          cmake --preset release-mingw
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset release-mingw
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --preset release-mingw
+
+      - name: Build and test Windows helper
+        shell: pwsh
+        env:
+          DISCO_MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $env:PATH = (Join-Path $env:DISCO_MSYS2_LOCATION 'ucrt64\bin') + ';' + $env:PATH
+          ./build.ps1 -Backend Make -Compiler g++ -Configuration Release -BuildDir build/helper-mingw -Test
+
+      - name: Upload standalone tools
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-mingw-Release
+          path: build/release-mingw/bin/
+          if-no-files-found: error
 
   dos:
     name: DOS cross-compile (DJGPP) (Release)
@@ -102,7 +153,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dos-Release
-          path: build-dos/
+          path: build-dos/bin/
+          if-no-files-found: error
 
   sanitizers:
     name: Sanitizers (Ubuntu)
@@ -117,14 +169,10 @@ jobs:
           sudo apt-get install -y cmake ninja-build g++
 
       - name: Configure
-        run: |
-          cmake -S . -B build-sanitizers -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
-            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+        run: cmake --preset sanitizers
 
       - name: Build
-        run: cmake --build build-sanitizers
+        run: cmake --build --preset sanitizers
 
       - name: Test
-        run: ctest --test-dir build-sanitizers --output-on-failure
+        run: ctest --preset sanitizers

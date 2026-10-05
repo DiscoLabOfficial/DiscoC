@@ -1,0 +1,2 @@
+// error: OBJ mode forbids size
+bitmap sprites { mode obj; size 256x128; depth 4bpp; base 0; }

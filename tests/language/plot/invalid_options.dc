@@ -1,0 +1,2 @@
+// error: Duplicate plot option
+void main() { plot { options transparent, transparent; } }

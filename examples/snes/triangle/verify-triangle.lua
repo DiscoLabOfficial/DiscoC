@@ -1,4 +1,4 @@
--- Check the actual 65816 + GSU + PPU integration, not a mocked graphics call.
+-- Independent Baseline 0.1 check of the actual 65816 + GSU + PPU integration.
 local frames, readyFrames = 0, 0
 local function outputPath(name)
     local folder = emu.getRomInfo().path:match("^(.*[/\\])") or ""

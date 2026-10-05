@@ -6,17 +6,29 @@ DiscoC is a small freestanding systems language, not an implementation of ISO C.
 Its C-like spelling does not import C's implicit conversions, undefined signed
 overflow, object layout, library, or calling conventions.
 
-This document is the contract for the ordered language refactoring.
+This document is the normative **DiscoC Language Baseline 0.1** contract. The
+baseline is frozen during the DiscoC 0.1 Stabilization milestone: no new
+keywords, primitive types, operators or major language features are introduced.
+Correctness fixes, clearer diagnostics and tests that enforce this contract
+remain in scope. Parser acceptance alone never establishes support.
+
 It distinguishes three statuses:
 
 - **Current:** behavior implemented by the current frontend or GSU backend.
-- **Planned:** a language requirement of the refactoring, not yet available.
+- **Planned:** future work outside Baseline 0.1, not yet available.
 - **Open:** a policy or representation that must be settled and tested before
   the relevant feature can be described as supported.
 
-Code examples are **Current** unless explicitly marked otherwise. Acceptance by
-the parser alone is not evidence of correct code generation. Known discrepancies
-below are implementation gaps, not language features to preserve.
+Code examples are **Current** unless explicitly marked otherwise. A discrepancy
+between this contract, the parser, analyzer, verified IR, executable GSU backend,
+libraries or examples is a defect to resolve, not an additional language feature.
+The baseline name does not claim that a v0.1.0 release/tag has been published.
+
+The [language conformance index](../tests/language/README.md) maps the sections
+below to positive/negative frontend cases and separate execution regressions.
+The [0.1 stabilization checklist](baseline-0.1.md) states the release-candidate
+acceptance and reproducible SNES integration workflow. Architecture and target
+documents explain mechanisms; this file defines source-language semantics.
 
 The source language and a target's machine ABI are separate contracts. For
 backend/register conventions, see [architecture.md](architecture.md); for
@@ -68,6 +80,12 @@ load code into RAM, or reserve a stack.
 **Current.** Names are case-sensitive. Identifiers start with a letter or `_`
 and continue with letters, digits, or `_`. Use ASCII identifiers for portable
 source; a non-ASCII identifier/encoding policy is not yet specified.
+
+Keywords cannot be used as variables, function names or struct members, even
+on a target that lacks the keyword's capability. For example, `color`, `pixel`,
+`cursor`, `bitmap` and `use` are reserved; `plot_x`, `plot_y`, `mode`, `depth`,
+`obj` and `dither` are ordinary identifiers outside their specified grammar.
+Builtin type aliases are also unavailable as value names (section 15).
 
 Whitespace separates tokens. `//` starts a line comment; `/* ... */` is a
 non-nesting block comment. An unterminated block comment is an error.
@@ -698,6 +716,11 @@ ROM byte l-value can use GETC through ROMB/R14 and the ROM buffer; RAM loads,
 arithmetic, casts, and temporary values use normal evaluation followed by
 COLOR. The address space is not inferred from the contents or initialization
 history of RAM. Both instructions apply POR's high-nibble/freeze-high rules.
+Only the low eight bits of the evaluated integer supply the hardware color;
+an expression still obeys its ordinary signedness, widening and fault rules.
+GETC has no address operand: the backend establishes ROMB, writes R14 to start
+the ROM-buffer fetch, and GETC synchronizes with that buffer before updating
+COLR. Hardware timing/bus ownership are not replaced by this IR operation.
 
 `options transparent, dither, high_nibble, freeze_high, object;` sets the complete
 POR option set, not an incremental toggle. `options;` disables all named options
@@ -707,6 +730,13 @@ does not advance X. Optional `read_pixel at (x, y)` first assigns the cursor.
 RPIX flushes the pixel caches even when its result is unused. `flush;` is the
 same operation with a discarded result; it is also allowed after a plot block.
 Leaving a block does not implicitly flush or reset COLR/POR.
+It also does not initialize the cursor: set the required coordinates, options
+and color before relying on their values. Calls preserve the caller's R1/R2,
+not COLR/POR changes made by a callee's own plotting block. Coordinates are
+word-sized signed values; pixel accesses use their low eight bits, without
+clipping to a selected bitmap's height. PLOT increments the full R1 modulo
+65536, including a skipped transparent pixel. A cursor read is a snapshot, not
+a persistent alias to the register.
 
 `draw at (x, y) with color value;` evaluates color first, assigns X/Y, then
 executes one pixel. The color clause is optional. `cache` is accepted on GSU
@@ -715,10 +745,18 @@ function definitions and for/while loops, not variables or prototypes.
 File-scope `bitmap name { ... }` declarations describe host SCMR/SCBR and
 framebuffer layout. Bitmap mode requires size 256x128, 256x160 or 256x192;
 OBJ mode forbids a size field. Both require depth 2bpp/4bpp/8bpp and a
-1024-byte-aligned base offset in cartridge RAM. `use bitmap name;` selects a
+1024-byte-aligned base offset from $70:0000 and a complete framebuffer within
+the 128-KiB GSU RAM window. Mode, depth and base occur exactly once; bitmap
+mode additionally requires size exactly once. OBJ describes a fixed 256x256
+addressing domain. `use bitmap name;` selects a
 compile-time host configuration; it does not emit runtime GSU register writes.
 One compatible configuration may be selected across the linked payload.
 The host still writes SCMR/SCBR and grants memory ownership before execution.
+Unused declarations do not reserve RAM; compatible repeated selections are
+allowed, incompatible selections are errors. Selection in a branch is still
+compile-time selection, not a runtime mode change. Framebuffer reservations
+are checked against static RAM, RAM code and generated startup's initial stack
+word; arbitrary pointers and the host's other allocations are not reserved.
 See [SuperFX graphics](gsu-graphics.md) for layout, metadata and loading examples.
 
 Legacy `plot_begin`, `plot_end`, `plot(x, y)`, `set_color(...)`,
@@ -759,6 +797,8 @@ static_assert(sizeof(buffer) == 512);
 ```
 
 `constexpr` declares a typed scalar integer/bool constant without storage.
+At file scope its optional visibility follows it: `constexpr internal word N = 2;`
+or `constexpr export word N = 2;`, not `internal constexpr ...`.
 Taking its address is illegal. Nonvolatile scalar `const` values with pure
 initializers can also participate but still have storage. ROM constants are
 storage, not a substitute for compile-time constants.

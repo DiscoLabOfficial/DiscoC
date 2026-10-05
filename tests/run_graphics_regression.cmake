@@ -7,6 +7,19 @@ function(graphics_fixture name source)
 endfunction()
 
 if(CASE STREQUAL "graphics_state")
+    graphics_fixture(cursor_updates [=[
+void main() { plot {
+    options; color 3; at (10, 20);
+    word old_x = cursor.x++;
+    word new_y = ++cursor.y;
+    cursor.x += 2; cursor.y -= 1;
+    pixel;
+    *(word*)0x100 = old_x; *(word*)0x102 = new_y;
+    *(word*)0x104 = cursor.x; *(word*)0x106 = cursor.y;
+    flush;
+} }
+]=] --word 0x700100 10 --word 0x700102 21 --word 0x700104 14 --word 0x700106 20
+    --plots 0 1 --rpix 0 1)
     graphics_fixture(cursor [=[
 word identity(word x) { return x; }
 void main() {
@@ -186,14 +199,18 @@ elseif(CASE STREQUAL "graphics_bitmaps")
             if(mode STREQUAL "obj")
                 set(fields "mode obj;")
                 set(height_bits 36)
+                set(height 256)
             else()
                 set(fields "mode bitmap; size ${mode};")
                 if(mode STREQUAL "256x128")
                     set(height_bits 0)
+                    set(height 128)
                 elseif(mode STREQUAL "256x160")
                     set(height_bits 4)
+                    set(height 160)
                 else()
                     set(height_bits 32)
+                    set(height 192)
                 endif()
             endif()
             if(depth EQUAL 2)
@@ -210,6 +227,13 @@ elseif(CASE STREQUAL "graphics_bitmaps")
             set(name "screen_${mode}_${depth}")
             graphics_fixture("${name}" "bitmap screen { ${fields} depth ${depth}bpp; base 0x6000; } void main() { use bitmap screen; plot { options; draw at (130, 3) with color ${pixel_value}; *(byte*)0x100 = read_pixel at (130, 3); flush; } }"
                 --screen-mode "${scm}" --byte 0x700100 "${pixel_value}")
+            # The final logical pixel must occupy the final byte of this
+            # independently calculated planar allocation, for every profile.
+            math(EXPR last_y "${height} - 1")
+            math(EXPR last_byte "0x706000 + 256 * ${height} * ${depth} / 8 - 1")
+            graphics_fixture("${name}_edge" "bitmap screen { ${fields} depth ${depth}bpp; base 0x6000; } void main() { use bitmap screen; plot { options; draw at (255, ${last_y}) with color ${pixel_value}; *(byte*)0x100 = read_pixel at (255, ${last_y}); *(word*)0x102 = cursor.x; flush; } }"
+                --screen-mode "${scm}" --byte 0x700100 "${pixel_value}" --word 0x700102 255
+                --byte "${last_byte}" 1 --plots 0 1 --rpix 0 2)
         endforeach()
     endforeach()
     graphics_fixture(last_pixel "bitmap last { mode obj; depth 8bpp; base 0x10000; } void main() { use bitmap last; plot { options; draw at (255, 255) with color 255; *(byte*)0x100 = read_pixel at (255, 255); flush; } }"
@@ -233,7 +257,10 @@ elseif(CASE STREQUAL "graphics_bitmaps")
             --color 0 0 --rpix 0 1 --register 6 0)
     endforeach()
 elseif(CASE STREQUAL "graphics_triangle")
-    set(source "${ROOT_DIR}/tests/graphics/triangle/triangle.dc")
+    set(source "${ROOT_DIR}/examples/snes/triangle/main.dc")
+    run_command("${DISCC}" build --config "${ROOT_DIR}/examples/snes/triangle/discoc.toml"
+        --output-dir "${TEST_DIR}/project" -o "${TEST_DIR}/triangle-project.bin"
+        --emit-asm "${TEST_DIR}/triangle-project.s")
     set(link_options --origin 0x706000 --init-runtime --ram-bank 0 --stack-pointer 0xFFFE)
     run_command("${DISCC}" --target gsu --execution-memory ram "${source}" -o "${TEST_DIR}/triangle.o")
     run_command("${DISCC}" --target gsu --execution-memory ram --emit-asm "${source}" -o "${TEST_DIR}/triangle-compiler.s")
@@ -244,7 +271,7 @@ elseif(CASE STREQUAL "graphics_triangle")
     run_command("${DISCAS}" "${TEST_DIR}/triangle.s" -o "${TEST_DIR}/triangle-final.o")
     run_command("${DISCLD}" "${TEST_DIR}/triangle-final.o" -o "${TEST_DIR}/triangle-roundtrip.bin")
     file(SHA256 "${TEST_DIR}/triangle.bin" direct)
-    foreach(suffix IN ITEMS "" "-asm" "-roundtrip")
+    foreach(suffix IN ITEMS "" "-asm" "-roundtrip" "-project")
         file(SHA256 "${TEST_DIR}/triangle${suffix}.bin" assembled)
         if(NOT direct STREQUAL assembled)
             message(FATAL_ERROR "Triangle assembly round trip is not byte-exact: ${suffix}")

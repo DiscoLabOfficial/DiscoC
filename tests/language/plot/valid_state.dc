@@ -1,0 +1,19 @@
+// spc-error: lacks capability 'graphics'
+word identity(word value) { return value; }
+void main() {
+    word plot_x = 10; word plot_y = 20;
+    plot {
+        options transparent, dither;
+        color identity(5);
+        at (plot_x, plot_y);
+        for (word i = 0; i < 8; i++) {
+            if (i == 3) continue;
+            pixel;
+        }
+        word snapshot = cursor.x;
+        cursor.y++;
+        byte value = read_pixel at (plot_x, plot_y);
+        draw at (snapshot, cursor.y) with color value;
+    }
+    flush;
+}

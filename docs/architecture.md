@@ -3,6 +3,8 @@
 DiscoC is a small compiler toolkit for specialized hardware targets. The current
 code-generation backend targets the SuperFX/GSU processor; the repository also
 contains the initial target model for a future SPC-700 backend.
+The normative source semantics are [Language Baseline 0.1](language-spec.md);
+architecture describes its implementation, not a second language contract.
 
 ## End-to-end pipeline
 

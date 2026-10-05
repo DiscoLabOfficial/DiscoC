@@ -9,6 +9,7 @@ discc src/discc.cpp src/CompilerDriver.cpp src/ProjectBuild.cpp @compiler @front
 discld src/discld.cpp @object @project @linker
 discas src/discas.cpp @assembler @object
 disco_object_tests tests/ObjectFileTests.cpp @object
+disco_linker_hardening_tests tests/LinkerHardeningTests.cpp @linker @object @project
 disco_ir_verifier_tests tests/IRVerifierTests.cpp src/IR.cpp src/Token.cpp
 disco_linear_scan_tests tests/LinearScanAllocatorTests.cpp src/LinearScanAllocator.cpp src/Token.cpp
 disco_target_foundation_tests tests/TargetFoundationTests.cpp @frontend @project
