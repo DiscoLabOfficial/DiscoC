@@ -11,11 +11,19 @@ The toolchain is written in C++23, with a C++14-compatible experimental DOS
 cross-build. The executable backend targets the SNES SuperFX (GSU); SPC700
 currently provides a frontend and IR foundation.
 
-> **Status: Pre-Alpha / Experimental**
+> **Status: internal v0.1.0-rc readiness / Experimental**
 > Correctness and explicit language contracts take priority over speed. GSU
 > compilation, assembly, linking, and runtime regressions are implemented, but
-> the language and object format can still change. A linked `.bin` is a GSU
-> payload, not a complete SNES ROM.
+> this is not a production-ready compiler. The current language is frozen as
+> **DiscoC Language Baseline 0.1**; new major language features wait while its
+> specification, conformance and end-to-end SuperFX workflows are consolidated.
+> This status does not announce a published release/tag. A linked `.bin` is a
+> GSU payload, not a complete SNES ROM.
+
+The [0.1 stabilization contract](docs/baseline-0.1.md) and
+[release-readiness checklist](docs/release-readiness-0.1.md) define release-candidate
+acceptance and compatibility limits. The first baseline release does not depend
+on further optimization or executable SPC700 support.
 
 ## Supported Targets
 
@@ -29,7 +37,8 @@ are capability-checked rather than treated as portable language operations.
 
 ## Language
 
-The refactored language has a documented [language contract](docs/language-spec.md):
+The [Baseline 0.1 language specification](docs/language-spec.md) is the source
+of truth for parser, analyzer, IR, backend and examples:
 
 - **Small, predictable values:** signed-by-default `byte` and `word`,
   `unsigned` variants, byte-sized `bool`, and transparent `type` aliases
@@ -96,7 +105,31 @@ Rebuild the tools together when the object format changes.
 ## Building from Source
 
 Install a C++23-capable compiler. CMake is the primary build system; the helpers
-also support direct GCC/Clang builds.
+also support direct GCC/Clang builds. With CMake 3.21+ and Ninja installed,
+the same happy path works on Linux, macOS and a Windows MSVC Developer shell:
+
+```sh
+cmake --preset release
+cmake --build --preset release
+ctest --preset release
+```
+
+The tools are `build/release/bin/discc`, `discas`, and `discld` (with `.exe` on
+Windows). Windows MinGW users can select the standalone, statically linked
+runtime preset instead:
+
+```powershell
+cmake --preset release-mingw
+cmake --build --preset release-mingw
+ctest --preset release-mingw
+```
+
+Its tools are in `build/release-mingw/bin`. `debug` and `debug-mingw` presets
+use separate build directories. Add the chosen `bin` directory to `PATH` for
+your terminal session, then `discc build` discovers the current directory's
+`discoc.toml`. Compiler and project output directories are separate.
+
+Build helpers remain available:
 
 ```powershell
 # Windows: build the tools and run the tests
@@ -115,10 +148,9 @@ make test
 bash build.sh --backend direct --compiler clang++
 ```
 
-The default helper output is `build/<backend>-<configuration>`, such as
-`build/cmake-Release`. Multi-configuration CMake generators add a configuration
-subdirectory. Add that executable directory to `PATH`, or invoke the tools
-by their full paths in the examples below.
+The default helper build directory is `build/<backend>-<configuration>`, such as
+`build/cmake-Release`; its executables are in `bin/`. CMake, Visual Studio and
+direct GCC/Clang builds use the same `<build-dir>/bin` convention.
 
 Manual CMake builds remain supported:
 
@@ -133,6 +165,8 @@ ctest --test-dir build/native -C Release --output-on-failure
 See [Building DiscoC](docs/building.md) for prerequisites, MinGW/MSVC selection,
 static linking, direct-build tests, and the retained experimental DOS
 cross-build. Use a fresh build directory when changing compilers or generators.
+An optional local `cmake --install build/release --prefix <directory>` installs
+only the three tools into `<directory>/bin`; it does not publish a release.
 
 ## Quick Start: A Multi-File Project
 
@@ -300,14 +334,14 @@ valid ROM integration. See [GSU loading and startup](docs/gsu-loading.md).
 ## PLOT: Stateful SuperFX Graphics
 
 DiscoC can calculate and draw a bitmap using the GSU's real plotting state.
-This triangle was compiled from [the reproducible test](tests/graphics/triangle/triangle.dc),
+This triangle was compiled from [the official example](examples/snes/triangle/main.dc),
 copied to cartridge RAM, and displayed by a complete SNES test ROM in Mesen:
 
 ![DiscoC's filled, banded SuperFX triangle running in Mesen](docs/images/superfx-triangle-mesen.png)
 
 The triangle has 97 scanlines and **9,409 pixels**. Its edges and color bands
 are calculated in DiscoC, not supplied as a pre-rendered image. The accompanying
-[SNES host and Mesen checks](tests/graphics/triangle/README.md) verify the
+[SNES host and Mesen checks](examples/snes/triangle/README.md) verify the
 framebuffer, VRAM transfer, tilemap, and CPU-read result after STOP.
 
 `plot { ... }` exposes a stateful cursor and color rather than independent
@@ -363,14 +397,18 @@ display. A bitmap declaration does not initialize those registers automatically.
 To compile the pictured RAM triangle, with the DiscoC tools on `PATH`:
 
 ```sh
-cmake -E make_directory build/plot-triangle
-discc --target gsu --execution-memory ram tests/graphics/triangle/triangle.dc -o build/plot-triangle/triangle.o
-discld build/plot-triangle/triangle.o --origin 0x706000 --init-runtime --ram-bank 0 --stack-pointer 0xFFFE --emit-asm build/plot-triangle/triangle.s -o build/plot-triangle/triangle.bin
+discc build --config examples/snes/triangle/discoc.toml
+# With WLA-DX installed, build the complete SNES ROM:
+cmake -P examples/snes/triangle/build-snes.cmake
+# Additionally verify all pixels, VRAM/tilemap and the negative ROM in Mesen:
+cmake -DVERIFY_MESEN=ON -P examples/snes/triangle/build-snes.cmake
 ```
 
-This `.bin` is a fixed-origin payload, not a standalone SNES ROM. The test's
+This `.bin` is a fixed-origin payload, not a standalone SNES ROM. The example's
 portable build script assembles the complete host ROM with WLA-DX and optionally
-verifies it in Mesen. See [the triangle test instructions](tests/graphics/triangle/README.md)
+verifies it in Mesen. Outputs go to `build/snes-triangle`; the host consumes
+origin/SCBR/SCMR from the final linked export. See
+[the triangle build instructions](examples/snes/triangle/README.md)
 for that workflow and [SuperFX graphics](docs/gsu-graphics.md) for the full contract.
 
 ### Rotating Checkerboard Triangle
@@ -449,6 +487,8 @@ Useful examples:
   declarations, and multi-file linking.
 - [Source imports](examples/source_imports/README.md): automatic project discovery,
   shared dependencies, and configurable import paths.
+- [SNES triangle](examples/snes/triangle/README.md): canonical source, TOML,
+  WLA-DX host, complete ROM and independent Mesen checks for Baseline 0.1.
 - [Fixed-point and memory helpers](examples/fixed_point/README.md): portable
   core modules and explicit library linking.
 - [RAM result](examples/ram_result/README.md): host-visible output and startup.
@@ -487,6 +527,9 @@ See [ROADMAP.MD](ROADMAP.MD) for completed milestones and future work.
 
 - [Language specification](docs/language-spec.md): supported semantics and
   compatibility limits.
+- [Baseline 0.1](docs/baseline-0.1.md) and
+  [language conformance](tests/language/README.md): stabilization acceptance,
+  rule-to-test index and release boundaries.
 - [Project manifests](docs/project-manifest.md): TOML configuration and builds.
 - [Architecture](docs/architecture.md): compiler pipeline, ABI, and ownership.
 - [IR and CFG](docs/ir-cfg.md): intermediate representation and verification.

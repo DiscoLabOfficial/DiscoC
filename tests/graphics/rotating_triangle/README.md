@@ -33,7 +33,7 @@ and must display red.
 Select executable locations and output directories when needed:
 
 ```sh
-cmake -DDISCO_TOOLS_DIR=build/cmake-Release -DOUTPUT_DIR=build/my-rotation -P tests/graphics/rotating_triangle/build-snes.cmake
+cmake -DDISCO_TOOLS_DIR=build/release/bin -DOUTPUT_DIR=build/my-rotation -P tests/graphics/rotating_triangle/build-snes.cmake
 ```
 
 The script also accepts `-DWLA_65816=/path/to/wla-65816` and
@@ -105,7 +105,7 @@ host and independent references too.
 The native `graphics_rotation` regression needs no external assembler/emulator:
 
 ```sh
-ctest --test-dir build/cmake-Release -R '^graphics_rotation$' --output-on-failure
+ctest --preset release -R '^graphics_rotation$'
 ```
 
 Ten input vectors cover representative poses and phase masking, executed through

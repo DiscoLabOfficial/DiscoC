@@ -1,0 +1,5 @@
+constexpr internal word COUNT = 2;
+struct State { word frame; byte colors[COUNT]; };
+export struct State shared = {0, {3, 5}};
+export rom const byte palette[] = {1, 2, 3};
+type Frame = word;

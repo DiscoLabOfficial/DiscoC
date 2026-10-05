@@ -1,0 +1,2 @@
+// error: Legacy graphics API removed
+void main() { plot_begin; plot_end; }

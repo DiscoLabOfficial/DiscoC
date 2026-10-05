@@ -10,6 +10,21 @@ include(CMakePrintHelpers)
 # Add an option to specifically enable settings for a DOS build
 option(DISCO_DOS_BUILD "Enable settings for a 16/32-bit DOS cross-compilation" OFF)
 option(DISCO_BUILD_FUZZERS "Build optional Clang libFuzzer targets" OFF)
+option(DISCO_TEST_SNES_INTEGRATION "Run the optional WLA-DX + Mesen complete SNES triangle test" OFF)
+option(DISCO_MINGW_STATIC "Link MinGW executables without GCC/MinGW runtime DLL dependencies" OFF)
+
+if(NOT DISCO_DOS_BUILD AND CMAKE_VERSION VERSION_LESS 3.20)
+    message(FATAL_ERROR "Native C++23 builds require CMake 3.20+; documented presets require 3.21+. DOS/manual C++14 retains CMake 3.15.")
+endif()
+
+# One default location for single- and multi-configuration generators. The
+# empty generator expression prevents Visual Studio from adding Release/Debug.
+if(NOT DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<0:>")
+endif()
+if(DISCO_MINGW_STATIC AND NOT MINGW)
+    message(FATAL_ERROR "DISCO_MINGW_STATIC requires a Windows MinGW toolchain.")
+endif()
 
 # Compiler & System Configuration
 # Set the default C++ standard. This can be overridden for specific platforms.
@@ -58,6 +73,9 @@ endif()
 
 
 add_library(disco_platform_options INTERFACE)
+if(DISCO_MINGW_STATIC)
+    target_link_options(disco_platform_options INTERFACE -static)
+endif()
 if(MSVC)
     # Bounded parser recursion and exception unwinding need more than MSVC's
     # default 1 MiB in Debug. Apply the same reserve to tools and their tests;
@@ -116,6 +134,7 @@ add_executable(discas src/discas.cpp)
 target_link_libraries(discc PRIVATE disco_compiler_core disco_linker_core)
 target_link_libraries(discld PRIVATE disco_linker_core)
 target_link_libraries(discas PRIVATE disco_assembler_core)
+install(TARGETS discc discld discas RUNTIME DESTINATION bin)
 
 if(DISCO_BUILD_FUZZERS)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -133,6 +152,9 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_executable(disco_object_tests tests/ObjectFileTests.cpp)
     target_include_directories(disco_object_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(disco_object_tests PRIVATE disco_object_core)
+
+    add_executable(disco_linker_hardening_tests tests/LinkerHardeningTests.cpp)
+    target_link_libraries(disco_linker_hardening_tests PRIVATE disco_linker_core)
 
     add_executable(disco_ir_verifier_tests ${DISCO_SOURCES_disco_ir_verifier_tests})
     target_include_directories(disco_ir_verifier_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -178,9 +200,15 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
                 -DGSU_MAPPING_TESTER=$<TARGET_FILE:disco_gsu_mapping_tests>
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_toolchain_regression.cmake
         )
+        if(case_name MATCHES "^language_conformance_")
+            set_tests_properties(${name} PROPERTIES LABELS "language;conformance")
+        elseif(case_name MATCHES "^graphics_")
+            set_tests_properties(${name} PROPERTIES LABELS "backend;gsu;graphics")
+        endif()
     endfunction()
 
     add_test(NAME object_file_hardening COMMAND disco_object_tests)
+    add_test(NAME linker_hardening COMMAND disco_linker_hardening_tests)
     add_test(NAME ir_verifier COMMAND disco_ir_verifier_tests)
     add_test(NAME linear_scan_allocator COMMAND disco_linear_scan_tests)
     add_test(NAME target_foundation COMMAND disco_target_foundation_tests)
@@ -190,14 +218,44 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_test(NAME gsu_execution_model COMMAND disco_gsu_execution_tests --self-test)
     add_test(NAME gsu_memory_map COMMAND disco_gsu_mapping_tests)
     add_test(NAME assembly_export COMMAND disco_assembly_export_tests)
+    set_tests_properties(language_contract PROPERTIES LABELS "language;unit")
+    set_tests_properties(ir_verifier PROPERTIES LABELS "ir;unit")
+    set_tests_properties(object_file_hardening PROPERTIES LABELS "object;unit")
+    set_tests_properties(linker_hardening PROPERTIES LABELS "linker;object;runtime;unit")
+    set_tests_properties(gsu_execution_model PROPERTIES LABELS "backend;gsu;unit")
     include(tests/toolchain-cases.cmake)
+
+    if(DISCO_TEST_SNES_INTEGRATION)
+        find_program(DISCO_WLA_65816 NAMES wla-65816)
+        find_program(DISCO_WLALINK NAMES wlalink)
+        find_program(DISCO_MESEN NAMES Mesen)
+        foreach(dependency IN ITEMS DISCO_WLA_65816 DISCO_WLALINK DISCO_MESEN)
+            if(NOT ${dependency} OR NOT EXISTS "${${dependency}}" OR IS_DIRECTORY "${${dependency}}")
+                message(FATAL_ERROR "SNES integration requires ${dependency}; put the tool on PATH or pass -D${dependency}=/absolute/path")
+            endif()
+        endforeach()
+        add_test(NAME snes_triangle_integration
+            COMMAND ${CMAKE_COMMAND}
+                -DDISCO_TOOLS_DIR=$<TARGET_FILE_DIR:discc>
+                -DWLA_65816=${DISCO_WLA_65816}
+                -DWLALINK=${DISCO_WLALINK}
+                -DMESEN=${DISCO_MESEN}
+                -DVERIFY_MESEN=ON
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/snes-triangle
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/examples/snes/triangle/build-snes.cmake)
+        set_tests_properties(snes_triangle_integration PROPERTIES LABELS "integration;snes;gsu" TIMEOUT 180)
+    endif()
+endif()
+
+if(DISCO_TEST_SNES_INTEGRATION AND (NOT BUILD_TESTING OR DISCO_DOS_BUILD))
+    message(FATAL_ERROR "SNES integration is a native BUILD_TESTING workflow, not a DOS cross-build.")
 endif()
 
 # Core libraries carry their include paths and warning policy to the tools and
 # tests that consume them.
 # Final Status Output
 cmake_print_variables(CMAKE_CXX_COMPILER_ID CMAKE_SYSTEM_NAME CMAKE_BUILD_TYPE)
-message(STATUS "Project configured successfully. Build with 'cmake --build .'")
+message(STATUS "Project configured successfully. Use the matching build preset or cmake --build \"${CMAKE_BINARY_DIR}\".")
 if(DISCO_DOS_BUILD)
     message(WARNING "DOS build is experimental. Ensure your toolchain file is correctly configured.")
 endif()

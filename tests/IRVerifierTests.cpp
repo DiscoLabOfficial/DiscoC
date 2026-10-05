@@ -306,7 +306,9 @@ void testGraphicsEffects() {
     expectSuccess("stateful pixel and discarded rpix", module);
     const auto effects = pixel.hardwareEffects(), read = flush.hardwareEffects();
     if (effects.reads_registers != 6 || effects.writes_registers != 2 || !effects.reads_color ||
-        !effects.pixel_cache || !read.observable() || read.writes_registers != 0 || !read.reads_framebuffer)
+        !effects.reads_por || !effects.writes_framebuffer || !effects.pixel_cache ||
+        !read.observable() || read.reads_registers != 6 || read.writes_registers != 0 ||
+        !read.reads_framebuffer || !read.writes_framebuffer || !read.pixel_cache)
         throw std::runtime_error("Incorrect PLOT/RPIX effects");
     module.functions[0].blocks[0].instructions[0].in_plot_context = false;
     expectFailure("pixel outside context", module, "pixel requires");
@@ -328,8 +330,22 @@ void testGraphicsEffects() {
     function.blocks[0].instructions = {address, color, end};
     expectFailure("volatile ROM keeps an ordinary load", IRModule{{function}}, "direct ROM color");
     const auto rom_effect = color.hardwareEffects();
-    if (!rom_effect.rom_buffer || !rom_effect.writes_color || !rom_effect.reads_por)
+    if (!rom_effect.rom_buffer || !rom_effect.writes_color || !rom_effect.reads_color ||
+        !rom_effect.reads_por || rom_effect.writes_registers != (1u << 14))
         throw std::runtime_error("GETC must use ROM buffer and update COLR under POR");
+    color.operation.clear();
+    const auto value_effect = color.hardwareEffects();
+    if (!value_effect.writes_color || !value_effect.reads_color || !value_effect.reads_por ||
+        value_effect.rom_buffer || value_effect.writes_registers != 0)
+        throw std::runtime_error("COLOR must update COLR without a ROM-buffer dependency");
+    auto cursor = constant(1);
+    cursor.opcode = IROpcode::PlotCoordinateRead; cursor.in_plot_context = true;
+    cursor.targets = {IRBlockId{0}};
+    function.blocks[0].instructions = {cursor, end};
+    expectFailure("cursor access is not a control transfer", IRModule{{function}}, "invalid plot coordinate access");
+    cursor.targets.clear(); cursor.operation = "legacy";
+    function.blocks[0].instructions = {cursor, end};
+    expectFailure("cursor access has no hidden operation", IRModule{{function}}, "invalid plot coordinate access");
     IRInstruction mode; mode.opcode = IROpcode::CMode; mode.in_plot_context = true; mode.immediate = 32;
     function.value_count = 0; function.blocks[0].instructions = {mode, end};
     expectFailure("invalid CMODE mask", IRModule{{function}}, "five-bit POR mask");

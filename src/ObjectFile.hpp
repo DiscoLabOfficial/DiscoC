@@ -44,6 +44,7 @@ class ObjectFile {
 public:
     static constexpr std::uint8_t CurrentFormatVersion = 7;
     static constexpr std::uint32_t MaxSectionBytes = 64u * 1024u * 1024u;
+    static constexpr std::uint32_t MaxObjectBytes = 128u * 1024u * 1024u;
     static constexpr std::uint32_t MaxStringBytes = 4096u;
     static constexpr std::uint32_t MaxSymbolCount = 1'000'000u;
     static constexpr std::uint32_t MaxRelocationCount = 1'000'000u;
@@ -80,6 +81,7 @@ private:
                          std::uint32_t max_elements, const char* field_name);
     static std::uint64_t remaining_bytes(std::istream& in);
     static ObjectFile read_stream(std::istream& in, const std::string& source_name);
+    void validate() const;
     static void validate_relocation(const RelocationEntry& relocation,
                                     const ObjectFile& object);
 };

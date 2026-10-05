@@ -1,0 +1,3 @@
+// spc-error: lacks capability 'graphics'
+import "support/profile.dc";
+void main() { use bitmap imported; plot { options; draw at (1, 2) with color 3; flush; } }

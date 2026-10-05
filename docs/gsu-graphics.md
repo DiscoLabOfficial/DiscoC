@@ -47,6 +47,10 @@ Nested plot blocks are rejected. Branches, loops, switch, break, continue and
 return are supported. Ordinary calls and software arithmetic preserve the
 caller's plotting cursor. Entering/leaving a block does not reset COLR/POR,
 clear the framebuffer, or implicitly flush pending pixels.
+It does not initialize R1/R2 either; assign the required state before use.
+Cursor prefix/postfix/compound updates follow normal word expression and
+single-evaluation rules. A callee's own plot operations may change COLR/POR;
+the ABI's cursor preservation is not a color/options preservation promise.
 
 ## One color operation, two hardware paths
 
@@ -181,6 +185,13 @@ ROM-buffer timing and CPU/GSU bus contention still require emulator/hardware
 integration testing. Hardware checks were cross-referenced with the primary
 [Ares GSU instruction implementation](https://github.com/ares-emulator/ares/blob/master/ares/component/processor/gsu/instructions.cpp)
 and [SuperFX graphics implementation](https://github.com/ares-emulator/ares/blob/master/ares/sfc/coprocessor/superfx/core.cpp).
+
+Baseline 0.1 separately validates the complete
+[SNES triangle example](../examples/snes/triangle/README.md) in Mesen. Its host
+consumes linked origin/SCBR/SCMR metadata, checks CPU-read results after STOP,
+and displays the actual computed bitplanes. Native regressions also check the
+final pixel/bitplane byte for all twelve bitmap/OBJ profiles. Neither evidence
+implies exhaustive timing or physical-hardware validation.
 
 ## Migration
 

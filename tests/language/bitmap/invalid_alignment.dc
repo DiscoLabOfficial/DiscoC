@@ -1,0 +1,2 @@
+// error: SCBR-aligned
+bitmap screen { mode bitmap; size 256x128; depth 4bpp; base 0x0401; }

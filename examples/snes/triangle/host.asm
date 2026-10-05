@@ -50,8 +50,7 @@
 .DEFINE SUPERFX_CLSR $3039
 .DEFINE SUPERFX_SCMR $303A
 .DEFINE SUPERFX_R15  $301E
-.DEFINE GSU_LOAD_ADDRESS $706000
-.DEFINE GSU_START_PC $6000
+.INCLUDE "triangle-config.inc" ; Generated from the linked assembly metadata.
   .DEFINE GSU_RESULT $70F000
   .DEFINE FRAMEBUFFER_SIZE $6000 ; 256*192*4/8 bytes, column-major tiles
   .DEFINE TILEMAP_WORD_ADDRESS $3800 ; byte address $7000, BG1SC=$38
@@ -116,8 +115,8 @@ Reset:
   jsr clear_triangle_framebuffer
   jsr copy_gsu_to_bwram
 
-  ; Match triangle.dc's bitmap metadata and the linker's execution origin.
-  lda #$00             ; bitmap base $70:0000, SCBR in 1024-byte units
+  ; Match main.dc's bitmap metadata and the linker's execution origin.
+  lda #BITMAP_SCBR      ; bitmap base, SCBR in 1024-byte units
   sta SUPERFX_SCBR
   lda #$70
   sta SUPERFX_PBR
@@ -125,7 +124,7 @@ Reset:
   sta SUPERFX_CFGR     ; CPU SEI prevents that IRQ from interrupting this test
   lda #%00000001
   sta SUPERFX_CLSR
-  lda #%00101001       ; 256x192, 4bpp, RON=0 (CPU ROM), RAN=1 (GSU RAM)
+  lda #(BITMAP_SCMR | $08) ; mode bits + RAN=1 (GSU RAM), RON=0 (CPU ROM)
   sta SUPERFX_SCMR
   jsr start_gsu
 
@@ -233,5 +232,5 @@ gsu_triangle_end:
 .ENDS
 
 .ASSERT gsu_triangle_end-gsu_triangle_start > 0, LDERROR, "Empty GSU payload"
-.ASSERT gsu_triangle_end-gsu_triangle_start <= $A000, LDERROR, "GSU payload crosses the RAM program bank"
-.ASSERT gsu_triangle_end-gsu_triangle_start <= $9000, LDERROR, "Triangle payload overlaps the diagnostic word at $70:F000"
+.ASSERT GSU_LOAD_ADDRESS+(gsu_triangle_end-gsu_triangle_start) <= $710000, LDERROR, "GSU payload crosses the RAM program bank"
+.ASSERT GSU_LOAD_ADDRESS+(gsu_triangle_end-gsu_triangle_start) <= GSU_RESULT, LDERROR, "Triangle payload overlaps the diagnostic word at $70:F000"

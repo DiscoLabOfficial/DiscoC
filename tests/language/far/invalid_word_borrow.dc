@@ -1,0 +1,3 @@
+// target: gsu
+// error: bank boundary
+void main() { word value = ((far rom word*)0x018000)[-1]; }

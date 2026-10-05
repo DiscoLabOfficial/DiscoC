@@ -109,7 +109,7 @@ else
         targets+=(disco_object_tests disco_ir_verifier_tests disco_linear_scan_tests
                   disco_target_foundation_tests disco_gsu_execution_tests disco_gsu_mapping_tests
                   disco_assembly_export_tests disco_language_contract_tests disco_project_manifest_tests
-                  disco_module_loader_tests)
+                  disco_module_loader_tests disco_linker_hardening_tests)
     fi
     # Recursive lookup uses only Bash arrays, not Bash 4 associative arrays or eval.
     resolve_sources() {
@@ -127,7 +127,7 @@ else
         done < "$root/cmake/build-sources.txt"
         [[ $found == 1 ]] || fail "Unknown source group: $wanted"
     }
-    mkdir -p -- "$build_dir/obj"
+    mkdir -p -- "$build_dir/obj" "$build_dir/bin"
     compiled_sources=()
     suffix=
     case "$system" in MINGW*|MSYS*|CYGWIN*) suffix=.exe ;; esac
@@ -149,11 +149,12 @@ else
             objects+=("$object")
         done
         printf 'Linking %s\n' "$target$suffix"
-        "$compiler" "${objects[@]}" "${link_flags[@]}" -o "$build_dir/$target$suffix"
+        "$compiler" "${objects[@]}" "${link_flags[@]}" -o "$build_dir/bin/$target$suffix"
     done
     if [[ $run_tests == 1 ]]; then
-        cmake "-DBIN_DIR=$build_dir" "-DROOT_DIR=$root" "-DEXE_SUFFIX=$suffix" \
+        cmake "-DBIN_DIR=$build_dir/bin" "-DROOT_DIR=$root" "-DEXE_SUFFIX=$suffix" \
             -P "$root/tests/run_prebuilt_tests.cmake"
     fi
 fi
 printf 'Build completed: %s\n' "$build_dir"
+printf 'Executables: %s/bin\n' "$build_dir"

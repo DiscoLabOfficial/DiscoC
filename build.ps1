@@ -89,7 +89,9 @@ No tools are installed automatically and no build directories are deleted.
         if ($Generator) { $configureArgs += @('-G', $Generator) }
         if ($Compiler) {
             Require-Command $Compiler
-            $compilerPath = (Get-Command $Compiler -CommandType Application).Source
+            # Application discovery can return every installed compiler. Keep
+            # PATH precedence instead of interpolating all paths into one value.
+            $compilerPath = (Get-Command $Compiler -CommandType Application | Select-Object -First 1).Source
             $configureArgs += "-DCMAKE_CXX_COMPILER=$compilerPath"
         }
         if ($Toolchain) {
@@ -125,7 +127,7 @@ No tools are installed automatically and no build directories are deleted.
             $targets += @('disco_object_tests', 'disco_ir_verifier_tests', 'disco_linear_scan_tests',
                 'disco_target_foundation_tests', 'disco_gsu_execution_tests', 'disco_gsu_mapping_tests',
                 'disco_assembly_export_tests', 'disco_language_contract_tests', 'disco_project_manifest_tests',
-                'disco_module_loader_tests')
+                'disco_module_loader_tests', 'disco_linker_hardening_tests')
         }
         $flags = @('-std=c++23', '-Wall', '-Wextra', '-Wpedantic', '-I', "$PSScriptRoot/src")
         switch ($Configuration) {
@@ -135,6 +137,8 @@ No tools are installed automatically and no build directories are deleted.
         }
         $linkFlags = @()
         if ($Static) { $linkFlags += '-static' }
+        $binaryPath = Join-Path $buildPath 'bin'
+        New-Item -ItemType Directory -Force -Path $binaryPath | Out-Null
         $objectDir = Join-Path $buildPath 'obj'
         New-Item -ItemType Directory -Force -Path $objectDir | Out-Null
         $compiled = @{}
@@ -150,14 +154,15 @@ No tools are installed automatically and no build directories are deleted.
                 $objects += $object
             }
             Write-Host "Linking $target.exe"
-            Invoke-Checked $Compiler ($objects + $linkFlags + @('-o', "$buildPath/$target.exe"))
+            Invoke-Checked $Compiler ($objects + $linkFlags + @('-o', "$binaryPath/$target.exe"))
         }
         if ($Test) {
-            Invoke-Checked cmake @("-DBIN_DIR=$buildPath", "-DROOT_DIR=$PSScriptRoot", '-DEXE_SUFFIX=.exe',
+            Invoke-Checked cmake @("-DBIN_DIR=$binaryPath", "-DROOT_DIR=$PSScriptRoot", '-DEXE_SUFFIX=.exe',
                 '-P', "$PSScriptRoot/tests/run_prebuilt_tests.cmake")
         }
     }
     Write-Host "Build completed: $buildPath"
+    Write-Host "Executables: $(Join-Path $buildPath 'bin')"
 } catch {
     [Console]::Error.WriteLine("Build failed: $($_.Exception.Message)")
     exit 1

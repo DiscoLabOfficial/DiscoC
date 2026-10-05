@@ -169,8 +169,21 @@ void main() {
     if(NOT expected STREQUAL actual)
         message(FATAL_ERROR "Initialized global payload did not round-trip through final assembly")
     endif()
-    run_command("${DISCLD}" "${TEST_DIR}/globals.o" --init-runtime --stack-pointer 0x049a -o "${TEST_DIR}/globals-stack-guard.bin")
-    run_command("${GSU_RUNNER}" "${TEST_DIR}/globals-stack-guard.bin" 0x008000 --register 6 2)
+    run_expected_failure_contains("no room for the requested stack frame" "${DISCLD}" "${TEST_DIR}/globals.o"
+        --init-runtime --stack-pointer 0x049a -o "${TEST_DIR}/globals-stack-guard.bin")
+    # An individual frame can fit even though recursive call depth exhausts
+    # the stack. Keep an execution regression for the runtime R6=2 guard.
+    file(WRITE "${TEST_DIR}/recursive-guard.dc" [=[
+word recurse(word depth) {
+    if (depth == 0) { return 0; }
+    return recurse(depth - 1) + 1;
+}
+void main() { *(word*)0x100 = recurse(16); }
+]=])
+    check_round_trip(recursive-guard "${TEST_DIR}/recursive-guard.dc" --init-runtime --stack-pointer 0x0040)
+    foreach(suffix IN ITEMS "" "-asm")
+        run_command("${GSU_RUNNER}" "${TEST_DIR}/recursive-guard${suffix}.bin" 0x008000 --register 6 2 --word 0x700100 0)
+    endforeach()
     file(WRITE "${TEST_DIR}/host-owned.dc" "word n = 149; void main() { *(word*)0x100 = n; }")
     run_command("${DISCC}" "${TEST_DIR}/host-owned.dc" -o "${TEST_DIR}/host-owned.o")
     run_command("${DISCLD}" "${TEST_DIR}/host-owned.o" --origin 0x706000 --host-initialized-globals -o "${TEST_DIR}/host-owned.bin")

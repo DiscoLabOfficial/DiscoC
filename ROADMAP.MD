@@ -1,13 +1,56 @@
 # DiscoC Roadmap
 
 DiscoC is a freestanding systems language and cross-compilation toolchain for
-specialized hardware. The current executable backend is SuperFX (GSU); SPC700
-is the next target under development.
+specialized hardware. The current executable backend is SuperFX (GSU). The
+first release milestone is its reproducible v0.1.0 baseline; performance work
+and an executable SPC700 backend follow it, not the other way around.
 
 This roadmap separates implemented foundations from planned work. A checked
 item means implemented within its documented limits, not production-ready or
 complete support for every target. Milestones describe dependencies and
 acceptance criteria, not release dates or a fixed number of pull requests.
+
+## Milestone v0.1.0: DiscoC 0.1 Stabilization
+
+v0.1.0 means the first functional, reproducible DiscoC toolchain for SuperFX,
+not an already optimized compiler or completed multi-target implementation.
+The ordered consolidation work is:
+
+1. [x] Freeze **DiscoC Language Baseline 0.1**; allow correctness/diagnostic fixes
+   but defer new keywords, types and major features. Keep `cursor.x/y` canonical
+   and diagnose the obsolete plotting/placement APIs.
+2. [x] Make [language-spec.md](docs/language-spec.md) the normative contract for
+   integers/conversions, qualifiers, banked pointers, aggregates, globals,
+   linkage/imports, control flow, graphics, bitmap metadata and capabilities.
+3. [x] Extend positive/negative [language conformance](tests/language/README.md),
+   especially feature combinations, and label it separately from backend tests.
+   Compiler crashes/timeouts and internal verifier errors are not valid rejections.
+4. [x] Harden GSU graphics state and verification: cursor snapshots/updates,
+   PLOT auto-X, observable RPIX/flush, COLOR versus ROM-buffer GETC, POR options,
+   all bitmap/OBJ depth/size combinations and final planar allocation boundaries.
+5. [x] Publish a tracked [SNES triangle example](examples/snes/triangle/README.md)
+   with `main.dc`, `discoc.toml`, host ASM, portable build and independent Mesen
+   checks. Consume linked origin/SCBR/SCMR metadata and compare project/direct/
+   assembled payloads byte for byte; retain the deliberate red-screen failure test.
+6. [x] Consolidate toolchain UX: `cmake --preset release`, its build/test presets,
+   Windows MinGW static variants, predictable `<build-dir>/bin` executables and
+   `discc build` from a documented `discoc.toml`; exercise platform paths in CI.
+7. [x] Harden supported linker/object/runtime contracts: bounded versioned
+   parsing/writing, relocation spans/targets and per-object bases, metadata,
+   placement/overlap diagnostics, known stack floors and frame constraints.
+   Preserve output on rejected configurations and execute dynamic stack guards.
+8. [ ] Close the internal **v0.1.0-rc** [release-readiness checklist](docs/release-readiness-0.1.md):
+   retain fresh local evidence and require green Windows/MinGW, Ubuntu, macOS
+   and sanitizer CI for the candidate commit. A configured CI job is not a passed
+   platform build. Publication still requires explicit maintainer permission.
+
+Acceptance: spec == parser == analyzer == verified IR == executable GSU backend
+== examples within the documented limits; reproducible native tests and the
+complete SNES example pass. See [baseline-0.1.md](docs/baseline-0.1.md) for exact
+commands, release/object compatibility, evidence boundaries and non-goals.
+
+Release publication is a separate maintainer action after candidate CI and
+review pass. No release/tag is created by completing this implementation work.
 
 ## Implemented Foundations
 
@@ -66,49 +109,28 @@ relocatable routines. SPC700 machine emission is not implemented. See
 - [x] Instruction-level GSU execution checks and assembly/object/payload byte comparisons.
 - [x] Native Debug/Release CI, a sanitizer job, and optional source/assembly/object/manifest fuzzing entry points.
 
-The GSU model does not validate complete SNES behavior, graphics, cache timing,
-bus ownership, or interrupts. Fuzzing entry points do not imply completed fuzz
-campaigns. Independent emulator/hardware results remain separate evidence.
+The GSU model checks functional graphics and instruction-cache state, not a
+complete SNES, cycle timing, bus ownership or interrupts. Static and rotating
+complete-ROM examples have separate independent Mesen evidence; physical
+hardware remains unverified. Fuzzing entry points are not completed campaigns.
 
-## Next Milestone: Consolidate the Refactored Baseline
-
-Prepare a reviewable pre-release baseline before expanding language semantics.
-
-- [ ] Audit the specification, README, examples, library interfaces, CLI help,
-  and manifest schema together; distinguish supported features from proposals.
-- [ ] Extend boundary and negative cases where the conformance suite still has
-  gaps, especially qualifier conversions, aggregate layout, imported interfaces,
-  and target-capability rejection.
-- [ ] Run reproducible fuzz campaigns, retain minimized failures as regressions,
-  and keep sanitizer failures visible.
-- [ ] Document release/object-format compatibility and how users rebuild
-  objects when upgrading the toolchain.
-- [ ] Validate fresh builds and documented examples across native build paths;
-  retain the experimental DOS compatibility checks.
-- [ ] Make final output replacement resilient to I/O failures. Current project
-  builds protect inputs and stop on diagnostics, but are not transactional.
-
-Acceptance: documented workflows succeed from a clean checkout, regressions and
-sanitizers pass, failures return actionable diagnostics, and release notes
-identify remaining target/runtime limitations. Adding more language features
-is not a prerequisite for this consolidation.
-
-## Next Milestone: GSU Integration and Deployment Visibility
+## After v0.1.0: Hardening and Deployment Visibility
 
 Make generated payloads easier to embed, inspect, and validate in real projects.
 
 - [ ] Add linker maps/symbol reports showing code/data addresses, static RAM
   placement, entry points, and runtime configuration.
-- [ ] Add a tracked, reproducible SNES host example that loads a RAM payload,
-  starts the GSU, checks a host-visible result after STOP, and reports success
-  or failure.
-- [ ] Record independent emulator validation alongside the instruction-model
-  tests; add hardware results when available.
+- [ ] Run longer reproducible fuzz campaigns and retain minimized failures,
+  preserving sanitizer failure visibility.
+- [ ] Make final output replacement resilient to I/O failures; current project
+  builds protect inputs and stop on diagnostics but are not transactional.
+- [ ] Add physical-hardware results and more host/cartridge configurations to
+  the existing independent emulator validation.
 - [ ] Expand graphics/cache/bus integration tests without presenting the
   instruction model as a complete SNES oracle.
 
-Acceptance: a developer can locate linked symbols and reserved storage, build
-the host example from documented commands, and reproduce its expected result.
+Acceptance: a developer can locate linked symbols and reserved storage and
+reproduce additional host/hardware configurations beyond the baseline example.
 Keep fixed-origin loading and host memory ownership explicit.
 
 ## Next Executable Target: SPC700

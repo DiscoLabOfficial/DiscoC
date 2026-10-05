@@ -828,6 +828,8 @@ std::unique_ptr<Expr> Parser::primary() {
         }
         return std::make_unique<ReadPixelExpr>(keyword, std::move(x), std::move(y));
     }
+    if (check(TokenType::KEYWORD_PLOT) && peekNext().type == TokenType::DOT)
+        throw CompilerError("Use cursor.x/cursor.y inside plot { ... }; plot.x/plot.y were removed.", peek());
     if (match({TokenType::KEYWORD_CURSOR})) {
         consume(TokenType::DOT, "Expect '.' in cursor coordinate access.");
         const auto member = consume(TokenType::IDENTIFIER, "Expect 'x' or 'y' after 'cursor.'.");
@@ -905,6 +907,8 @@ void Parser::validateValueType(const Type& type, const Token& token, const std::
 }
 std::unique_ptr<Stmt> Parser::plotStatement() {
     const Token keyword = previous();
+    if (check(TokenType::DOT))
+        throw CompilerError("Use cursor.x/cursor.y inside plot { ... }; plot.x/plot.y were removed.", keyword);
     consume(TokenType::LBRACE, "Use plot { ... }; replace plot(x, y) with draw at (x, y).");
     return std::make_unique<PlotBlockStmt>(keyword, blockStatement());
 }

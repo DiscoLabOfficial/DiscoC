@@ -1,0 +1,2 @@
+// error: const global requires an initializer
+const word limit;

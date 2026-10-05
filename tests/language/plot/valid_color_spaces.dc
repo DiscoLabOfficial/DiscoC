@@ -1,0 +1,14 @@
+// spc-error: lacks capability 'graphics'
+rom const byte palette[] = {1, 2, 3, 4};
+volatile byte working[4];
+void main() { working[0] = palette[0]; working[0] = 7;
+    plot {
+        options;
+        at (0, 0);
+        color palette[1]; pixel;
+        color working[0]; pixel;
+        color palette[2] + 1; pixel;
+        color (byte)palette[3]; pixel;
+        flush;
+    }
+}

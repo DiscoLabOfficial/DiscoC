@@ -1,0 +1,2 @@
+// error: zero
+void main() { word value = 3 / (2 - 2); }

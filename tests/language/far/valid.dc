@@ -1,0 +1,14 @@
+// spc-error: lacks capability 'far-data'
+struct Remote { far volatile word* value; byte tag; };
+far volatile word* identity(far volatile word* value) { return value; }
+void main() {
+    far volatile word* pointer = (far volatile word*)0x711000;
+    struct Remote state;
+    state.value = identity(pointer);
+    state.tag = 3;
+    far word* far* slot = (far word* far*)0x710200;
+    *slot = (far word*)0x701000;
+    **slot = 42;
+    word value = *state.value;
+    static_assert(sizeof(state.value) == 4);
+}

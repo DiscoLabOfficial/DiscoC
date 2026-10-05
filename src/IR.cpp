@@ -472,7 +472,8 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                     break;
                 case IROpcode::PlotCoordinateRead:
                 case IROpcode::PlotCoordinateWrite:
-                    if (!instruction.in_plot_context || instruction.immediate < 0 || instruction.immediate > 1 ||
+                    if (!instruction.in_plot_context || !instruction.targets.empty() || !instruction.operation.empty() ||
+                        instruction.immediate < 0 || instruction.immediate > 1 ||
                         instruction.type.pointer_level != 0 || instruction.type.base != BaseType::WORD ||
                         instruction.type.is_unsigned || instruction.operands.size() !=
                             (instruction.opcode == IROpcode::PlotCoordinateRead ? 0u : 1u) ||
@@ -827,7 +828,8 @@ void IRLowerer::visit(UpdateExpr& expr, const Type*) {
     store.operands = coordinate ? std::vector<IRValueId>{value} : std::vector<IRValueId>{address, value};
     store.immediate = coordinate && coordinate->is_y ? 1 : 0;
     store.memory_volatile = !coordinate && expr.target->result_type.is_volatile;
-    store.operation = "assign"; store.source = expr.token;
+    if (!coordinate) store.operation = "assign";
+    store.source = expr.token;
     emitInstruction(std::move(store));
     m_last_value = expr.postfix ? old_value : value;
 }

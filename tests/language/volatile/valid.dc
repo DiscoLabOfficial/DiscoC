@@ -1,0 +1,15 @@
+struct Device { volatile byte status; volatile word count; };
+volatile word events;
+bool enabled(volatile struct Device* device) {
+    bool active = (bool)device->status;
+    events++;
+    device->count += 2;
+    return active && device->status != 0;
+}
+void main() {
+    volatile struct Device* device = (volatile struct Device*)0x0100;
+    byte sample = device->status;
+    device->status; device->status;
+    static_assert(sizeof(device->status) == 1);
+    bool active = enabled(device);
+}

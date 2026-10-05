@@ -1,0 +1,6 @@
+struct State { word frame; byte flags; };
+extern struct State shared;
+extern struct State shared;
+export struct State shared;
+extern volatile byte port;
+void main() { shared.frame++; byte value = port; }

@@ -5,12 +5,69 @@ The repository includes an automated CTest suite covering the compiler, linear-s
 ## Run the regression suite
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
-cmake --build build
-ctest --test-dir build --output-on-failure
+cmake --preset debug
+cmake --build --preset debug
+ctest --preset debug
 ```
 
-The native CI matrix runs these tests for Debug and Release builds. A separate Ubuntu job builds the same targets with AddressSanitizer and UndefinedBehaviorSanitizer enabled.
+The native CI matrix runs the documented Debug/Release presets on Windows,
+Ubuntu and macOS. MinGW static and direct/helper paths have separate coverage;
+the Ubuntu `sanitizers` preset enables ASan/UBSan. All tool/test executables use
+`<build-dir>/bin`. See [building](building.md) for prerequisites and manual CMake.
+
+## Baseline 0.1: separate conformance from backend checks
+
+[language-spec.md](language-spec.md) is the frozen Baseline 0.1 contract. The
+[rule-to-test index](../tests/language/README.md) maps it to source fixtures and
+independent runtime oracles. Run only language conformance or GSU graphics with:
+
+```sh
+ctest --preset debug -L conformance
+ctest --preset debug -L graphics
+ctest --preset debug -L 'linker|object'
+```
+
+Conformance categories include types, conversions, qualifiers, pointers, far,
+volatile, structs, arrays, globals, imports, control-flow, plot and bitmap,
+alongside constants/layout, strings, attributes, aliases and target selection.
+They run positive and negative `--check` cases on both target models, with
+explicit GSU capability exceptions. Negative tests require exit status 1 and
+a matching source-located language diagnostic; crashes, timeouts and internal
+IR failures do not count as successful rejections.
+
+## Linker/object/runtime acceptance
+
+`object_file_hardening` checks independent little-endian fixtures, versions
+3–7, unknown versions/enums, impossible counts, section/name/total-file limits,
+truncated/trailing records, duplicate/control-character names, symbol bounds
+and overlapping relocation operands. Adjacent bank/offset records remain legal.
+Writer rejection must leave an existing destination unchanged. Test directories
+are process-private so concurrent build suites do not remove each other's files.
+
+`linker_hardening` uses the canonical in-process linker, not a second layout
+implementation. Golden payload bytes cover CODE, aligned multi-object DATA,
+RAM bases and all five relocation types. Negative cases cover non-CODE/end-label
+calls, invalid RAM relocation targets, missing/private/duplicate symbols,
+reserved contexts, incompatible metadata, origin/bank/stack constraints,
+alignment-induced bank crossing and bitmap/static/payload/stack conflicts.
+Existing binary and assembly sentinels must survive every rejected layout.
+Independent startup bytes cover RAMBR banks 0/1, R10 and the entry jump;
+threshold tests reserve RAM code below the descending stack.
+
+`language_globals` additionally executes recursive exhaustion with R6=2 through
+direct and assembled paths. A statically impossible frame is now a link failure;
+this separate recursion test retains the dynamic guard acceptance criterion.
+Existing multi-file, mapping, runtime-loading and assembly-equivalence tests
+remain part of the native suite. A model/sanitizer job is not hardware proof.
+See the [internal candidate checklist](release-readiness-0.1.md) for verified
+local evidence and outstanding platform gates.
+
+## Frontend and GSU regression details
+
+`graphics_state` additionally executes prefix/postfix/compound cursor updates,
+checking both snapshots and the hardware PLOT increment. `graphics_bitmaps`
+checks the last logical pixel and final bitplane byte of every one of the
+twelve mode/depth profiles, not only a representative interior pixel.
 
 The `gsu_memory_map` unit test checks documented ROM/RAM windows, invalid
 SNES-only regions, exact bank boundaries, arithmetic overflow, and near-target
@@ -187,10 +244,12 @@ GETC's ROM-buffer/color transformation, without relying on compiler selection.
 This verifies instruction-level color/layout/flush behavior, not cycle timing,
 CPU/GSU contention, a complete SNES framebuffer display or physical hardware.
 
-`graphics_triangle` uses the tracked [RAM triangle](../tests/graphics/triangle/triangle.dc)
+`graphics_triangle` uses the official [RAM triangle](../examples/snes/triangle/main.dc)
 shown in the README. It checks 9,409 PLOT, 97 COLOR, zero GETC, one RPIX,
 representative planar framebuffer bytes, result/stack/bank state, and both
-compiler and final linked assembly round trips. Startup begins with incorrect
+compiler and final linked assembly round trips. The public `discoc.toml`
+project build must also reproduce the manual payload byte for byte and execute
+the same result. Startup begins with incorrect
 RAMBR/R10 to exercise runtime initialization. It runs in the native CTest and
 direct-build registries without external emulator or assembler dependencies.
 
@@ -208,19 +267,21 @@ CPU/GSU bus timing is modeled.
 
 ## Optional full SNES triangle integration
 
-The [triangle test directory](../tests/graphics/triangle/README.md) includes a
+The [official SNES triangle](../examples/snes/triangle/README.md) includes a
 minimal WLA-DX 65816 host and Mesen Lua checks. Install `wla-65816`, `wlalink`,
 and Mesen separately. From the repository root, with the current DiscoC tools
 and those optional tools on `PATH`:
 
 ```sh
-cmake -DVERIFY_MESEN=ON -P tests/graphics/triangle/build-snes.cmake
+cmake -DVERIFY_MESEN=ON -P examples/snes/triangle/build-snes.cmake
 ```
 
 The script also accepts explicit tool paths and an output directory. It fails
 on missing dependencies or failed commands; it does not silently skip checks.
 Without `VERIFY_MESEN`, it builds the two complete SNES ROMs but does not run
-the emulator. Artifacts default to `build/plot-triangle`.
+the emulator. Artifacts default to `build/snes-triangle`. The old test-directory
+script remains a delegating compatibility entry point. The canonical source,
+manifest, host and independent oracle exist only in the public example.
 
 The host copies the fixed-origin payload from ROM to `$70:6000`, lets the GSU
 draw and flush, reclaims cartridge RAM after STOP, checks the result, and
@@ -229,6 +290,23 @@ decode all 49,152 logical pixels, compare all framebuffer/VRAM bytes and all
 1,024 tilemap entries, and check the displayed image. A deliberately incorrect
 expected result checks the red-screen failure path. Verification logs and
 screenshots are produced beside the ROMs, without saving emulator settings.
+The host consumes generated origin/SCBR/SCMR definitions from the final linked
+assembly; a mismatched framebuffer profile fails before host assembly.
+
+To include this optional complete-ROM workflow in CTest:
+
+```sh
+cmake -S . -B build/integration -DCMAKE_BUILD_TYPE=Release \
+  -DDISCO_TEST_SNES_INTEGRATION=ON
+cmake --build build/integration --config Release --parallel
+ctest --test-dir build/integration -C Release -L integration --output-on-failure
+```
+
+Tools must be on `PATH` or supplied as `DISCO_WLA_65816`, `DISCO_WLALINK` and
+`DISCO_MESEN` absolute CMake paths. When explicitly enabled, a missing dependency
+is a configuration failure, not a skipped test. The test also requires new PASS
+logs and screenshots, rejecting stale evidence. It is native-only and OFF by
+default; neither ordinary CI tests nor DOS compilation requires WLA-DX/Mesen.
 
 The README image is a real capture of this integration test in Mesen. This
 adds complete-ROM emulator evidence for this demo, not physical-hardware

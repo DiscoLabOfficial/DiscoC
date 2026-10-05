@@ -6,6 +6,13 @@ SNES host program. The compiler and linker can still be used separately.
 
 ## Build a project
 
+Build the toolchain first with `cmake --preset release` and
+`cmake --build --preset release`; its executables are in `build/release/bin`.
+Windows MinGW uses `release-mingw` and `build/release-mingw/bin`. Add the chosen
+directory to the current shell's `PATH`, or invoke `discc` by its full path.
+See [building](building.md); this compiler output location is independent of
+a user's manifest-selected project output directory.
+
 With `discc` on `PATH`, run this in the directory containing `discoc.toml`:
 
 ```sh

@@ -1,0 +1,2 @@
+// error: Local storage resides in RAM
+void main() { rom word value = 42; }

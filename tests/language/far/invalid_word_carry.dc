@@ -1,0 +1,3 @@
+// target: gsu
+// error: bank boundary
+void main() { far word* pointer = (far word*)0x70FFFE + 1; }

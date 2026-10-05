@@ -1,0 +1,2 @@
+// error: Shift count
+void main() { word value = 1 << 16; }

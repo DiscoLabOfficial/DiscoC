@@ -1,0 +1,1 @@
+bitmap imported { mode bitmap; size 256x160; depth 2bpp; base 0x4000; }

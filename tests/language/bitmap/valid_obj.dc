@@ -1,0 +1,3 @@
+// spc-error: lacks capability 'graphics'
+bitmap sprites { mode obj; depth 8bpp; base 0x10000; }
+void main() { use bitmap sprites; plot { options object; draw at (255, 255) with color 255; flush; } }

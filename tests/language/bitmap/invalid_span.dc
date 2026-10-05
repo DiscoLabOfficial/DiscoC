@@ -1,0 +1,2 @@
+// error: framebuffer must fit
+bitmap screen { mode bitmap; size 256x192; depth 8bpp; base 0x18000; }

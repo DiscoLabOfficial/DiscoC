@@ -1,0 +1,3 @@
+// target: gsu
+// error: outside GSU-visible RAM
+void main() { far byte* pointer = (far byte*)0x720000; }

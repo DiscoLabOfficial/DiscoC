@@ -10,6 +10,10 @@ All multi-byte integer fields are serialized explicitly in little-endian byte
 order, independent of the host architecture. The current format version is
 7. The format is serialized in this order:
 
+Version 7 remains the Baseline 0.1 writer format. The stabilization checks do
+not change the wire layout; they reject malformed records previously accepted.
+Readers accept documented legacy versions 3–6, not future/unknown versions.
+
 | Field | Encoding |
 | --- | --- |
 | Magic | 5 ASCII bytes: `DISCO` |
@@ -53,6 +57,11 @@ relative to that object's section/image. Names beginning with byte 0x01 are
 object-private: relocations can resolve them only in that object. Other
 definitions participate in public cross-object lookup. Compiler internal
 declarations and non-exported assembler labels use private identities.
+Names must contain 1–4,096 bytes and no ASCII control characters, except the
+single leading private-identity marker. The marker alone is not a name.
+Definitions must be unique within one object, including private definitions.
+Offsets may equal the section size to describe an end label, but may not exceed
+it. An end label is not a valid call/runtime-entry destination.
 
 ### Relocation record
 
@@ -79,13 +88,40 @@ The relocation types are:
 The relocation section identifies the CODE/DATA section containing the
 placeholder. RAM-image patch records are not supported. The compiler primarily
 emits CODE relocations for calls and global addresses.
+Operand spans must fit the selected section and must not overlap another
+relocation's operand bytes. An adjacent bank/offset pair is valid. The format
+does not carry an instruction-boundary map or cross-unit function signatures.
+
+### Input bounds and rejection
+
+Both reading and writing validate target/mapping/section/relocation enums,
+alignment, names, symbol offsets, bitmap profiles and relocation spans.
+Truncated fields/records and trailing bytes are rejected. The reader bounds
+counts against bytes remaining before allocating table entries; a tiny file
+cannot request a huge table by its count alone. Resource caps are:
+
+- 128 MiB for the complete serialized object;
+- 64 MiB each for CODE and DATA; 64 KiB for a RAM image;
+- 4,096 bytes per symbol/relocation name;
+- 1,000,000 entries each for symbol and relocation tables, additionally bounded
+  by file size.
+
+These are container bounds, not target-placement permissions: a linked GSU
+payload must still fit its single accessible program bank. The linker also caps
+combined input sections/names/table records at 128 MiB, charged in the v7 layout
+even for legacy inputs, and rejects impossible GSU section totals while loading
+instead of retaining the full input set first. Structural writer
+validation runs before opening its destination. Link configuration validation
+runs before opening payload/assembly destinations. I/O failure during final
+writing is not a transactional-output guarantee.
 
 ## Linker layout
 
 `discld` performs these operations:
 
 1. Reads every input object.
-2. Checks that all objects use the same mapping and code start address.
+2. Checks compatible targets, mapping and effective origins (an explicit CLI
+   origin overrides all object defaults), and merges compatible bitmap metadata.
 3. Concatenates object code sections in input order.
 4. Resolves code symbols against the configured code base.
 5. Aligns the DATA start and each input DATA section, then appends their bytes.
@@ -98,7 +134,8 @@ Versions 6/7 allocate each object's RAM image with its declared alignment, from
 `--init-runtime` encodes zeroing/nonzero initialization in startup; otherwise
 nonempty RAM requires `--host-initialized-globals`. Public/private RAM targets
 use their own object's RAM base, independently of CODE/DATA bases.
-`ADDR16_RAM` validates the near RAM bank before narrowing.
+`ADDR16_RAM` requires a RAM symbol or reserved stack limit and validates the
+near RAM bank before narrowing; CODE/DATA cannot masquerade as static RAM.
 
 Compiler DATA sections request alignment 2 and align their individual objects.
 Raw assembly defaults to DATA alignment 1 and RAM alignment 2.
@@ -146,6 +183,11 @@ not commands to change the GSU's hardware address map or create a cartridge ROM.
 
 `ADDR16_JAL` and `ADDR16_IWT` targets must be in the origin's bank; high-bank
 origins are valid and encode the target's low 16 bits **after** validation.
+Calls additionally require a target inside CODE, not DATA, RAM or a one-past
+CODE label. The format does not prove that an arbitrary hand-authored CODE
+offset is an instruction boundary. Compiler near ROM materializations that
+use the reserved near-ROM bank context must resolve DATA in that selected ROM
+bank; a RAM-resident copy is not a ROM-buffer source.
 `ADDR24_BANK` and `ADDR24_OFFSET` targets must fit 24 bits and identify a supported
 GSU region. A one-past-section label is legal in the object format, but cannot
 be relocated to an inaccessible address or a different bank by a near relocation.
@@ -163,11 +205,14 @@ Compiler bank restoration uses reserved `__disco_near_ram_bank` and
 `__disco_near_rom_bank` bank-byte relocations, resolved from `--ram-bank` and
 `--rom-bank`. Input definitions of these symbols are rejected. They are not
 ordinary exported objects or executable targets.
-Reserved `__disco_stack_limit_<bytes>` references resolve to the aligned static
-RAM end (and selected framebuffer end below the stack) plus the required stack space. They enforce frame/push checks before
-stack traffic and cannot be defined by input objects. Without RAM allocation
-their floor is zero unless selected bitmap metadata raises it. These checks
-do not reserve unrelated host resources.
+Reserved `__disco_stack_limit_<bytes>` references resolve to the static RAM floor,
+raised by selected framebuffer reservations and (with runtime initialization)
+RAM payloads below the configured descending stack, plus the required stack
+space. Known frames that cannot fit the initial R10 are rejected at link time;
+otherwise generated frame/push checks stop with R6=2 on dynamic exhaustion.
+Recursive/cumulative depth is not proved by linking. Input definitions of these
+symbols are forbidden. Without known reservations the floor is zero. These
+checks do not reserve unrelated host resources or infer host-owned stack space.
 
 RAM execution requires copying the payload to cartridge RAM and matching the
 configured program bank/PC. ROM-qualified accesses still require ROM-resident

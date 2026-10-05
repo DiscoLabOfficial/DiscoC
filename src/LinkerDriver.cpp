@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <stdexcept>
 #include <algorithm>
 #include "ObjectFile.hpp"
 #include "Parser.hpp"
@@ -26,7 +27,10 @@ std::uint32_t parseOptionNumber(const std::string& text, std::uint32_t maximum) 
         std::isspace(static_cast<unsigned char>(text.front())))
         throw std::runtime_error("Invalid numeric option value: " + text);
     std::size_t consumed = 0;
-    const auto value = std::stoul(text, &consumed, 0);
+    unsigned long value = 0;
+    try { value = std::stoul(text, &consumed, 0); }
+    catch (const std::invalid_argument&) { throw std::runtime_error("Invalid numeric option value: " + text); }
+    catch (const std::out_of_range&) { throw std::runtime_error("Numeric option value is out of range: " + text); }
     if (consumed != text.size() || value > maximum)
         throw std::runtime_error("Numeric option value is out of range: " + text);
     return static_cast<std::uint32_t>(value);
@@ -159,8 +163,45 @@ int runLinker(std::vector<std::string> arguments) {
 
         // --- 1. Load all object files ---
         std::vector<ObjectFile> objects;
+        std::uint64_t input_code_bytes = 0, input_data_bytes = 0, input_ram_bytes = 0;
+        std::uint64_t input_record_bytes = 0;
         for (const auto& path : object_files) {
-            objects.push_back(ObjectFile::read(path));
+            auto object = ObjectFile::read(path);
+            if (objects.empty()) {
+                if (target_expected && object.config.target != expected_target)
+                    throw std::runtime_error("Manifest/CLI target does not match input objects.");
+                if (mapping_expected && object.config.mapping != expected_mapping)
+                    throw std::runtime_error("Manifest/CLI mapping does not match input objects.");
+            }
+            // Charge decoded records using the current wire layout, including
+            // names/tables, not just payload bytes. Legacy records are charged
+            // at the same rate. Bound the complete link as well as each reader.
+            std::uint64_t object_bytes = 35u + (object.config.bitmap.enabled ? 10u : 0u) +
+                static_cast<std::uint64_t>(object.code_section.size()) + object.data_section.size() + object.ram_section.size();
+            for (const auto& symbol : object.symbol_table) object_bytes += 9u + symbol.name.size();
+            for (const auto& relocation : object.relocation_table) object_bytes += 10u + relocation.target_symbol_name.size();
+            if (object_bytes > ObjectFile::MaxObjectBytes - input_record_bytes)
+                throw std::runtime_error("Combined link inputs exceed the supported 128 MiB record budget.");
+            input_record_bytes += object_bytes;
+            if (!objects.empty()) {
+                auto first_config = objects.front().config, next_config = object.config;
+                if (origin_override) first_config.code_start_address = next_config.code_start_address = origin;
+                if (first_config != next_config)
+                    throw std::runtime_error("Input objects use incompatible target configurations.");
+            }
+            // Reject impossible raw totals before retaining more objects.
+            // Startup/alignment can only grow them and are checked again after
+            // layout; a GSU link must not accumulate gigabytes of input images.
+            if (object.config.target == TargetKind::GSU) {
+                input_code_bytes += object.code_section.size();
+                input_data_bytes += object.data_section.size();
+                input_ram_bytes += object.ram_section.size();
+                GsuMemoryMap::validatePayload(origin_override ? origin : object.config.code_start_address,
+                    input_code_bytes, input_data_bytes);
+                if (input_ram_bytes > 65536u - ram_origin)
+                    throw std::runtime_error("Static storage crosses a RAM bank boundary.");
+            }
+            objects.push_back(std::move(object));
         }
 
         CompilerConfig config = objects.front().config;
@@ -230,6 +271,7 @@ int runLinker(std::vector<std::string> arguments) {
         std::vector<uint8_t> final_data;
         std::map<std::string, uint32_t> final_addresses;
         std::map<std::string, SymbolSection> final_sections;
+        std::map<std::string, bool> code_targets;
         bool entry_is_instruction = false;
         for (std::size_t index = 0; index < objects.size(); ++index) {
             for (const auto& symbol : objects[index].symbol_table) {
@@ -259,6 +301,7 @@ int runLinker(std::vector<std::string> arguments) {
                             current_code_offset + sym.offset,
                         "code symbol address");
                     final_sections[sym.name] = SymbolSection::CODE;
+                    code_targets.emplace(sym.name, sym.offset < obj.code_section.size());
                     if (sym.name == entry_name) entry_is_instruction = sym.offset < obj.code_section.size();
                 }
             }
@@ -343,20 +386,46 @@ int runLinker(std::vector<std::string> arguments) {
         std::uint64_t current_data_base = 0;
         std::size_t current_object = 0;
 
+        const auto ram_bank_base = 0x700000u + (ram_bank << 16);
+        auto stack_floor = final_ram.empty() ? 0u :
+            static_cast<std::uint32_t>((ram_origin + final_ram.size() + 1u) & ~1u);
+        const auto reserve_below_stack = [&](std::uint64_t begin, std::uint64_t end) {
+            if (begin < ram_bank_base + stack_pointer && end > ram_bank_base)
+                stack_floor = std::max(stack_floor, checkedAddress(end - ram_bank_base, "Stack reservation"));
+        };
+        if (config.bitmap.enabled)
+            reserve_below_stack(0x700000u + config.bitmap.base,
+                0x700000u + config.bitmap.base + config.bitmap.sizeBytes());
+        // A descending stack must not grow into still-executable RAM code or
+        // payload DATA, even when its initial word itself does not overlap.
+        if (initialize_runtime && GsuMemoryMap::region(config.code_start_address) == GsuMemoryMap::Region::Ram &&
+            (config.code_start_address >> 16) == 0x70u + ram_bank)
+            reserve_below_stack(config.code_start_address,
+                static_cast<std::uint64_t>(config.code_start_address) + final_code.size() + final_data.size());
+
         for (const auto& obj : objects) {
             while ((data_start_address + current_data_base) % obj.data_alignment) ++current_data_base;
+            // The object owns these entries for the whole relocation pass.
+            // Index local symbols once rather than rescanning for every use.
+            std::map<std::string, const SymbolEntry*> local_symbols;
+            for (const auto& symbol : obj.symbol_table)
+                if (!symbol.name.empty() && symbol.name.front() == '\x01')
+                    local_symbols.emplace(symbol.name, &symbol);
+            const bool uses_near_rom = std::any_of(obj.relocation_table.begin(), obj.relocation_table.end(),
+                [](const RelocationEntry& entry) { return entry.target_symbol_name == GSUAbi::NearRomBankSymbol; });
             for (const auto& reloc : obj.relocation_table) {
                 std::uint32_t target_addr = 0;
+                SymbolSection target_section = SymbolSection::CODE;
+                bool target_is_instruction = false;
                 if (!reloc.target_symbol_name.empty() && reloc.target_symbol_name.front() == '\x01') {
                     const auto local_name = reloc.target_symbol_name.substr(1);
-                    const auto local_symbol = std::find_if(
-                        obj.symbol_table.begin(), obj.symbol_table.end(),
-                        [&](const auto& symbol) {
-                            return symbol.name == reloc.target_symbol_name;
-                        });
-                    if (local_symbol == obj.symbol_table.end()) {
+                    const auto local = local_symbols.find(reloc.target_symbol_name);
+                    if (local == local_symbols.end()) {
                         throw std::runtime_error("Linker Error: Undefined local symbol '" + local_name + "'.");
                     }
+                    const auto* local_symbol = local->second;
+                    target_section = local_symbol->section;
+                    target_is_instruction = target_section == SymbolSection::CODE && local_symbol->offset < obj.code_section.size();
                     const auto base = local_symbol->section == SymbolSection::CODE
                         ? static_cast<std::uint64_t>(config.code_start_address) + current_code_base
                         : local_symbol->section == SymbolSection::DATA ? data_start_address + current_data_base
@@ -367,15 +436,11 @@ int runLinker(std::vector<std::string> arguments) {
                     if (reloc.type != RelocationType::ADDR16_RAM || config.target != TargetKind::GSU)
                         throw std::runtime_error("Stack-limit symbol requires a GSU RAM relocation.");
                     const auto required = parseOptionNumber(reloc.target_symbol_name.substr(std::string(GSUAbi::StackLimitPrefix).size()), 65535);
-                    auto floor = final_ram.empty() ? 0u : static_cast<std::uint32_t>((ram_origin + final_ram.size() + 1u) & ~1u);
-                    if (config.bitmap.enabled) {
-                        const auto bank_base = ram_bank * 65536u;
-                        const auto screen_end = config.bitmap.base + config.bitmap.sizeBytes();
-                        if (config.bitmap.base < bank_base + stack_pointer && screen_end > bank_base)
-                            floor = std::max(floor, screen_end - bank_base);
-                    }
-                    if (floor > 65535u - required) throw std::runtime_error("Static storage leaves no room for the requested stack frame.");
-                    target_addr = 0x700000u | (ram_bank << 16) | (floor + required);
+                    if (stack_floor > 65535u - required) throw std::runtime_error("Reserved RAM leaves no room for the requested stack frame.");
+                    if (initialize_runtime && stack_floor + required > stack_pointer)
+                        throw std::runtime_error("Initial stack pointer leaves no room for the requested stack frame.");
+                    target_addr = ram_bank_base + stack_floor + required;
+                    target_section = SymbolSection::RAM;
                 } else if (reloc.target_symbol_name == GSUAbi::NearRamBankSymbol ||
                            reloc.target_symbol_name == GSUAbi::NearRomBankSymbol) {
                     if (config.target != TargetKind::GSU || reloc.type != RelocationType::ADDR24_BANK)
@@ -388,16 +453,26 @@ int runLinker(std::vector<std::string> arguments) {
                         throw std::runtime_error("Linker Error: Undefined symbol '" + reloc.target_symbol_name + "'.");
                     }
                     target_addr = final_addresses.at(reloc.target_symbol_name);
+                    target_section = final_sections.at(reloc.target_symbol_name);
+                    if (target_section == SymbolSection::CODE)
+                        target_is_instruction = code_targets.at(reloc.target_symbol_name);
                 }
+                if (reloc.type == RelocationType::ADDR16_JAL && !target_is_instruction)
+                    throw std::runtime_error("Call relocation must target an instruction in CODE: " + reloc.target_symbol_name);
                 if (target_addr > 0xffffffu) {
                     throw std::runtime_error("Relocation target exceeds the 24-bit address range.");
                 }
                 if (config.target == TargetKind::GSU) {
                     if (reloc.type == RelocationType::ADDR16_RAM) {
+                        if (target_section != SymbolSection::RAM)
+                            throw std::runtime_error("RAM relocation must target static RAM or a stack limit.");
                         if ((target_addr >> 16) != 0x70u + ram_bank)
                             throw std::runtime_error("RAM relocation target is outside the near RAM bank.");
                     } else if (reloc.type == RelocationType::ADDR16_JAL ||
                         reloc.type == RelocationType::ADDR16_IWT) {
+                        if (reloc.type == RelocationType::ADDR16_IWT && target_section == SymbolSection::DATA && uses_near_rom &&
+                            (GsuMemoryMap::region(target_addr) != GsuMemoryMap::Region::Rom || (target_addr >> 16) != rom_bank))
+                            throw std::runtime_error("Near ROM data relocation does not match the selected ROM bank; separate RAM-code/ROM-data placement is unsupported.");
                         GsuMemoryMap::validateNearTarget(config.code_start_address, target_addr);
                     } else {
                         // ADDR24_OFFSET is paired with a bank relocation and
@@ -466,12 +541,16 @@ int runLinker(std::vector<std::string> arguments) {
         outFile.write(reinterpret_cast<const char*>(final_rom.data()), final_rom.size());
         outFile.flush();
         if (!outFile) throw std::runtime_error("Failed to write linked payload: " + out_filepath);
+        outFile.close();
+        if (!outFile) throw std::runtime_error("Failed to close linked payload: " + out_filepath);
         if (!assembly_filepath.empty()) {
             std::ofstream assembly(assembly_filepath);
             if (!assembly) throw std::runtime_error("Failed to open linked assembly output: " + assembly_filepath);
             assembly << linked_assembly;
             assembly.flush();
             if (!assembly) throw std::runtime_error("Failed to write linked assembly output: " + assembly_filepath);
+            assembly.close();
+            if (!assembly) throw std::runtime_error("Failed to close linked assembly output: " + assembly_filepath);
         }
 
         std::cout << "Successfully linked payload. Total size: " << final_rom.size() << " bytes." << std::endl;
@@ -480,7 +559,7 @@ int runLinker(std::vector<std::string> arguments) {
                       << ", SCMR mode bits=" << static_cast<unsigned>(config.bitmap.scmr())
                       << " (host must add ROM/RAM ownership bits)." << std::endl;
 
-    } catch (const std::runtime_error& e) {
+    } catch (const std::exception& e) {
         std::cerr << "\nLinker Error: " << e.what() << std::endl;
         return 1;
     }

@@ -1,0 +1,3 @@
+// error: const
+struct Pair { word a; word b; };
+void main() { const struct Pair value = {1, 2}; value.a = 3; }

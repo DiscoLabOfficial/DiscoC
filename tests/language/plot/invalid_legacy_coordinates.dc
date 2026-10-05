@@ -1,0 +1,2 @@
+// error: cursor
+void main() { plot { plot.x = 10; plot.y = 20; } }

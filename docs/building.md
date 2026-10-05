@@ -16,6 +16,15 @@ and linker internally and does not require CMake, Make, or `discld` on `PATH`.
 
 ## Prerequisites
 
+The documented presets require CMake 3.21+ and Ninja (`release`/`debug`), or
+`mingw32-make` (`release-mingw`/`debug-mingw`). The non-preset/manual build and
+native helpers require CMake 3.20+ for C++23; DOS/manual C++14 and script-only
+regression/integration workflows retain CMake 3.15. CMake's
+[C++23 standard setting](https://cmake.org/cmake/help/latest/prop_tgt/CXX_STANDARD.html)
+was added in 3.20; the project diagnoses older native configurations explicitly.
+Presets do not download a compiler or select a different compiler in an existing
+cache.
+
 - **Windows / MinGW:** a C++23-capable MinGW-w64 GCC installation and
   `mingw32-make` on `PATH`, plus CMake for the CMake backend or regression tests.
 - **Windows / MSVC:** Visual Studio Build Tools with the C++ workload and CMake.
@@ -30,6 +39,73 @@ and linker internally and does not require CMake, Make, or `discld` on `PATH`.
 Use PowerShell 5.1+ on Windows and Bash 3.2+ on Linux/macOS. GNU Make is optional
 for the convenience Makefile. Compiler selection is an executable name or path,
 not a command containing flags. `CXX` is respected when no compiler is specified.
+
+## CMake happy path
+
+Run from the repository root on Linux/macOS, or a Windows MSVC Developer shell
+with Ninja and `cl` on `PATH`:
+
+```sh
+cmake --preset release
+cmake --build --preset release
+ctest --preset release
+```
+
+Windows MinGW-w64 users with `g++` and `mingw32-make` on `PATH` use:
+
+```sh
+cmake --preset release-mingw
+cmake --build --preset release-mingw
+ctest --preset release-mingw
+```
+
+The MinGW presets enable `DISCO_MINGW_STATIC`: tools/test executables do not
+need MinGW/GCC runtime DLLs. Windows system DLLs remain normal dependencies.
+This option is not a portable request for fully static Linux/macOS binaries.
+
+`debug` and `debug-mingw` use the same commands with their preset names. The
+Linux-only `sanitizers` preset runs ASan/UBSan in Debug without suppressing
+sanitizer failures. `cmake --list-presets=all` lists available choices.
+Preset build directories are `build/<preset>`; every executable is in `bin/`.
+Personal overrides belong in ignored `CMakeUserPresets.json`, not the tracked
+shared presets. Use a separate directory when changing compiler or generator.
+
+Manual CMake remains available, including Visual Studio/multi-configuration
+generators and CMake 3.20 installations without preset support:
+
+```sh
+cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release
+cmake --build build/native --config Release --parallel
+ctest --test-dir build/native -C Release --output-on-failure
+```
+
+These tools are also in `build/native/bin`, not `Release/` or `Debug/`.
+An explicit `CMAKE_RUNTIME_OUTPUT_DIRECTORY` still overrides the default.
+
+## Use the built toolchain
+
+Either invoke the tool by its full path, or add its `bin` directory to `PATH`
+for the current shell. For example, from the repository root:
+
+```powershell
+$env:PATH = (Resolve-Path .\build\release-mingw\bin).Path + ';' + $env:PATH
+discc build --config examples/multifile/discoc.toml
+```
+
+```sh
+export PATH="$PWD/build/release/bin:$PATH"
+discc build --config examples/multifile/discoc.toml
+```
+
+Inside a user's project containing `discoc.toml`, the command is simply
+`discc build`. The project driver does not need a separate `discld` on `PATH`.
+See [project manifests](project-manifest.md) for configuration and output rules.
+Toolchain `bin/` output does not change a project's manifest-selected outputs.
+
+For an optional local install, use
+`cmake --install build/release --prefix <local-directory>` (add `--config Release`
+for multi-configuration builds). Only `discc`, `discas` and `discld` are installed
+into `<local-directory>/bin`; no global install or release publication is needed.
 
 ## Windows
 
@@ -49,6 +125,13 @@ runs the full test suite:
 one PowerShell process. It does not change the machine/user policy; organization
 policies can still prohibit execution. Where script execution is already allowed,
 you can invoke `./build.ps1` directly with the same arguments.
+
+For CMake-based builds, a compiler name (for example, `-Compiler g++`) resolves
+to the first matching executable on `PATH`, even with multiple toolchains installed.
+To select another installation, pass its full executable path, quoted if it
+contains spaces. The Windows-only `tests/BuildHelperTests.ps1` regression checks
+argument boundaries and compiler selection in PowerShell 5.1 and 7 in CI without
+requiring a compiler; the MinGW job also performs a real helper build and tests.
 
 The default CMake backend selects MinGW Makefiles when both `g++` and
 `mingw32-make` are available; otherwise CMake chooses its default generator.
@@ -110,10 +193,11 @@ supports, so MSYS CMake and native Windows CMake can use their respective tools.
 ## Output directories and tests
 
 Default output is `build/<backend>-<configuration>`, for example
-`build/cmake-Release` or `build/direct-Debug`. CMake multi-configuration generators
-such as Visual Studio place executables in a configuration subdirectory; direct
-builds place `discc`, `discas`, and `discld` directly in the selected build folder
-(with `.exe` on Windows).
+`build/cmake-Release` or `build/direct-Debug`. CMake, Visual Studio and direct
+builds all place `discc`, `discas`, `discld` and test executables in that
+directory's `bin/` subdirectory (with `.exe` on Windows). Switching Visual Studio
+configuration reuses that location; use separate build directories if both
+Debug and Release executables must remain available simultaneously.
 
 Override the directory with `-BuildDir` / `--build-dir`. Relative directories are
 relative to the caller's current directory; source paths are relative to the

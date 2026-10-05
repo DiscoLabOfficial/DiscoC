@@ -1,6 +1,8 @@
 #include "ObjectFile.hpp"
+#include <algorithm>
 #include <limits>
 #include <new>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 
@@ -97,7 +99,10 @@ void ObjectFile::read_vec(std::istream& in, std::vector<T>& vec,
 
 // Main I/O Methods
 
-void ObjectFile::write(const std::string& path) {
+void ObjectFile::validate() const {
+    if (static_cast<std::uint8_t>(config.target) > static_cast<std::uint8_t>(TargetKind::SPC700) ||
+        static_cast<std::uint8_t>(config.mapping) > static_cast<std::uint8_t>(MemoryMapping::HiROM))
+        throw std::runtime_error("Object file: invalid target configuration.");
     config.bitmap.validate();
     if (config.bitmap.enabled && config.target != TargetKind::GSU) throw std::runtime_error("Bitmap configuration requires GSU.");
     if (!data_alignment || data_alignment > 128 || (data_alignment & (data_alignment - 1)) ||
@@ -109,16 +114,67 @@ void ObjectFile::write(const std::string& path) {
     if (symbol_table.size() > MaxSymbolCount || relocation_table.size() > MaxRelocationCount) {
         throw std::runtime_error("Object file table exceeds the supported entry limit.");
     }
-    for (const auto& symbol : symbol_table) {
-        if (symbol.name.size() > MaxStringBytes) {
-            throw std::runtime_error("Object file symbol name exceeds the supported size limit.");
+    const auto valid_name = [](const std::string& name) {
+        if (name.empty() || name.size() > MaxStringBytes || (name.front() == '\x01' && name.size() == 1))
+            throw std::runtime_error("Object file: invalid symbol name length.");
+        for (std::size_t index = 0; index < name.size(); ++index) {
+            const auto byte = static_cast<unsigned char>(name[index]);
+            if ((byte < 32 && !(index == 0 && byte == 1)) || byte == 127)
+                throw std::runtime_error("Object file: symbol names cannot contain control characters.");
         }
-    }
-    for (const auto& relocation : relocation_table) {
-        if (relocation.target_symbol_name.size() > MaxStringBytes) {
-            throw std::runtime_error("Object file relocation target exceeds the supported size limit.");
+    };
+    std::uint64_t serialized_bytes = 35u + (config.bitmap.enabled ? 10u : 0u) +
+        static_cast<std::uint64_t>(code_section.size()) + data_section.size() + ram_section.size();
+    const auto charge = [&](std::uint64_t bytes) {
+        if (serialized_bytes > MaxObjectBytes || bytes > MaxObjectBytes - serialized_bytes)
+            throw std::runtime_error("Object file exceeds the supported total size limit.");
+        serialized_bytes += bytes;
+    };
+    charge(0);
+    try {
+        std::set<std::string> names;
+        for (const auto& symbol : symbol_table) {
+            valid_name(symbol.name);
+            if (static_cast<std::uint8_t>(symbol.section) > static_cast<std::uint8_t>(SymbolSection::RAM))
+                throw std::runtime_error("Object file: invalid symbol section.");
+            const auto& section = symbol.section == SymbolSection::CODE ? code_section :
+                symbol.section == SymbolSection::DATA ? data_section : ram_section;
+            if (symbol.offset > section.size())
+                throw std::runtime_error("Object file has a symbol outside its section.");
+            charge(9u + symbol.name.size());
+            if (!names.insert(symbol.name).second)
+                throw std::runtime_error("Object file has a duplicate symbol: " + symbol.name);
         }
+        // Only operand bytes are patched; adjacent opcode/operand records may
+        // legitimately touch. Sorting is O(n log n), independent of input order.
+        struct Span { SymbolSection section; std::uint64_t begin, end; };
+        std::vector<Span> spans;
+        spans.reserve(relocation_table.size());
+        for (const auto& relocation : relocation_table) {
+            valid_name(relocation.target_symbol_name);
+            validate_relocation(relocation, *this);
+            charge(10u + relocation.target_symbol_name.size());
+            const auto begin = static_cast<std::uint64_t>(relocation.patch_offset) + 1;
+            spans.push_back({relocation.section_to_patch, begin,
+                begin + (relocation.type == RelocationType::ADDR24_BANK ? 1u : 2u)});
+        }
+        std::sort(spans.begin(), spans.end(), [](const Span& left, const Span& right) {
+            return left.section != right.section ? left.section < right.section : left.begin < right.begin;
+        });
+        for (std::size_t index = 1; index < spans.size(); ++index)
+            if (spans[index].section == spans[index - 1].section && spans[index].begin < spans[index - 1].end)
+                throw std::runtime_error("Object file has overlapping relocation operands.");
+    } catch (const std::bad_alloc&) {
+        throw std::runtime_error("Object file: unable to allocate validation tables.");
     }
+    if (serialized_bytes > MaxObjectBytes)
+        throw std::runtime_error("Object file exceeds the supported total size limit.");
+}
+
+void ObjectFile::write(const std::string& path) {
+    // Validate before opening/truncating the destination, just as the reader
+    // validates before exposing an object to relocation or assembly export.
+    validate();
 
     std::ofstream out(path, std::ios::binary);
     if (!out) throw std::runtime_error("Failed to open object file for writing: " + path);
@@ -167,6 +223,10 @@ void ObjectFile::write(const std::string& path) {
         write_u32_le(out, reloc.patch_offset);
         write_u8(out, static_cast<std::uint8_t>(reloc.type));
     }
+    out.flush();
+    if (!out) throw std::runtime_error("Failed to write object file: " + path);
+    out.close();
+    if (!out) throw std::runtime_error("Failed to close object file: " + path);
 }
 
 ObjectFile ObjectFile::read(const std::string& path) {
@@ -177,6 +237,8 @@ ObjectFile ObjectFile::read(const std::string& path) {
 }
 
 ObjectFile ObjectFile::readBytes(const std::vector<std::uint8_t>& bytes) {
+    if (bytes.size() > MaxObjectBytes)
+        throw std::runtime_error("Object file exceeds the supported total size limit.");
     std::string serialized;
     if (!bytes.empty()) {
         serialized.assign(reinterpret_cast<const char*>(bytes.data()), bytes.size());
@@ -186,7 +248,8 @@ ObjectFile ObjectFile::readBytes(const std::vector<std::uint8_t>& bytes) {
 }
 
 ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
-
+    if (remaining_bytes(in) > MaxObjectBytes)
+        throw std::runtime_error("Object file exceeds the supported total size limit: " + path);
     ObjectFile obj;
     char magic[5] = {0};
     in.read(magic, 5);
@@ -243,7 +306,7 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
     if (version >= 5) read_vec(in, obj.ram_section, 65536u, "RAM section");
 
     const uint32_t sym_count = read_u32_le(in, "symbol count");
-    if (sym_count > MaxSymbolCount) {
+    if (sym_count > MaxSymbolCount || sym_count > remaining_bytes(in) / 10u) {
         throw std::runtime_error("Object file has an invalid symbol count: " + path);
     }
     try {
@@ -268,7 +331,7 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
     }
 
     const uint32_t reloc_count = read_u32_le(in, "relocation count");
-    if (reloc_count > MaxRelocationCount) {
+    if (reloc_count > MaxRelocationCount || reloc_count > remaining_bytes(in) / 11u) {
         throw std::runtime_error("Object file has an invalid relocation count: " + path);
     }
     try {
@@ -296,12 +359,16 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
     if (in.peek() != std::istream::traits_type::eof()) {
         throw std::runtime_error("Object file has trailing data: " + path);
     }
-
+    obj.validate();
     return obj;
 }
 
 void ObjectFile::validate_relocation(const RelocationEntry& relocation,
                                      const ObjectFile& object) {
+    if (static_cast<std::uint8_t>(relocation.section_to_patch) > static_cast<std::uint8_t>(SymbolSection::DATA))
+        throw std::runtime_error("Object file: invalid relocation section.");
+    if (static_cast<std::uint8_t>(relocation.type) > static_cast<std::uint8_t>(RelocationType::ADDR16_RAM))
+        throw std::runtime_error("Object file: invalid relocation type.");
     if (relocation.target_symbol_name.empty()) {
         throw std::runtime_error("Object file has a relocation without a target symbol.");
     }
