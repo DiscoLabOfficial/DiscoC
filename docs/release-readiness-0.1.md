@@ -1,16 +1,16 @@
-# Internal v0.1.0-rc readiness
+# DiscoC v0.1.0 release readiness
 
-This is a **local release-readiness pass**, not a tag, published RC, release or
-approval to upload artifacts. The maintainer must explicitly authorize any
-publication after the candidate commit's checks and review pass.
+This record separates baseline acceptance from release publication. The
+maintainer explicitly authorized publishing v0.1.0 on 2026-10-05 after the
+merged baseline passed platform CI. Creating the tag and uploading artifacts
+remain separate release operations.
 
 The candidate is the frozen [Language Baseline 0.1](baseline-0.1.md), with
 correctness and deployment fixes only. It does not require further optimization
-or an executable SPC700 backend. Local evidence below applies to the working
-tree based on merged `main`; it is not CI evidence for an uncommitted candidate.
-After committing, record the exact candidate SHA and its CI results before
-closing the remaining gates. Any code/configuration change invalidates affected
-checks and requires proportionate retesting.
+or an executable SPC700 backend. Local results and exact-commit CI evidence
+are recorded separately below. Any code/configuration change invalidates
+affected checks and requires proportionate retesting. Release preparation
+changes only documentation, not the tested compiler or build configuration.
 
 ## Checklist
 
@@ -24,9 +24,9 @@ checks and requires proportionate retesting.
 - [x] Linker/object/runtime tests pass, including rejected dangerous layouts
   preserving existing binary/assembly outputs.
 - [x] Fresh Windows MSVC Debug/Release and MinGW Release preset builds succeed.
-- [ ] Fresh Ubuntu Debug/Release builds and tests pass for the candidate SHA.
-- [ ] Fresh macOS Debug/Release builds and tests pass for the candidate SHA.
-- [ ] Ubuntu ASan/UBSan tests pass for the candidate SHA.
+- [x] Fresh Ubuntu Debug/Release builds and tests pass for the merged baseline.
+- [x] Fresh macOS Debug/Release builds and tests pass for the merged baseline.
+- [x] Ubuntu ASan/UBSan tests pass for the merged baseline.
 - [x] The official SNES triangle builds from its manifest and passes the complete
   Mesen ROM test, including deliberate red-screen failure.
 - [x] No unresolved silent-codegen defect is currently known in the verified
@@ -35,9 +35,9 @@ checks and requires proportionate retesting.
   documented in [building.md](building.md).
 - [x] `discc build`, TOML schema, path/precedence and runtime contracts are
   documented in [project-manifest.md](project-manifest.md).
-- [ ] Review the exact final diff and candidate CI evidence; confirm no stale
+- [x] Review the exact final diff and merged baseline CI evidence; confirm no stale
   results, skipped required tests or newly reported correctness regressions.
-- [ ] Obtain explicit maintainer permission before creating a tag/publishing.
+- [x] Obtain explicit maintainer permission before creating a tag/publishing.
 
 “Fresh build” means configuration in a new build directory, not a claim that
 every compiler emits zero warnings. Existing MSVC warnings remain visible;
@@ -62,7 +62,7 @@ entry when explicitly enabled.
 | Linker/object/runtime | Golden per-object relocation bases, all relocation types, malformed objects, compatibility, placement/overlap and stack checks pass; invalid layouts preserve binary/assembly sentinels. |
 | DOS compatibility | All three tools cross-compile under GNU C++14; DOS execution is not tested. |
 | SNES integration | WLA-DX + Mesen 2.2.1 verify all 49,152 pixels, 1,024 tilemap entries, startup/result/STOP and both positive/negative ROM outcomes. |
-| Linux/macOS/sanitizers | Workflow configured; not executed locally or attested for this uncommitted candidate. Gates remain open. |
+| Linux/macOS/sanitizers | Not executed locally; verified separately in exact-commit hosted CI below. |
 
 The Windows local GCC installation uses MinGW-w64; the hosted MinGW CI job uses
 UCRT64. That additional environment requires its own candidate CI result.
@@ -71,6 +71,30 @@ engine available; no Ubuntu/container or sanitizer result is claimed from it.
 Complete-ROM checks add independent evidence for this example, not physical
 hardware or complete GSU/SNES timing validation. Fuzzer entry points and a
 sanitizer configuration are not evidence of a long fuzzing campaign.
+
+## Hosted CI record — 2026-10-05
+
+PR [#13](https://github.com/DiscoLabOfficial/DiscoC/pull/13) merged as
+`8f38d40536ddce28d285929a66936a43b4b0dad9`. The
+[main build/test run](https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37259096534)
+completed successfully at that exact SHA:
+
+- Windows MSVC, Ubuntu and macOS Debug/Release: all native tests passed.
+- Windows UCRT64 MinGW static Release: preset and helper builds/tests passed,
+  including compiler-selection regressions in PowerShell 5.1 and 7.
+- Ubuntu Release and macOS Release: direct GCC/Clang helper builds/tests passed.
+- Ubuntu ASan/UBSan: all native tests passed.
+- DOS DJGPP Release: cross-compilation succeeded; DOS execution is unverified.
+
+The [CodeQL run](https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37259096724)
+also completed successfully for the same SHA. Hosted CI does not run the optional
+external Mesen integration; its evidence remains the local record above.
+
+Release binaries must come from a successful run of the tagged source, or an
+explicitly recorded compiler-identical baseline differing only in release
+documentation. Packages must identify their source/run, retain the license,
+include documentation/examples and supply SHA-256 checksums. No locally ignored
+reference files, development-agent files or test executables belong in them.
 
 ## Reproduce
 
@@ -131,5 +155,5 @@ release artifacts and do not authorize publication.
 - Physical hardware, complete bus/cache timing and exhaustive fuzzing remain
   unverified; SPC700 remains frontend/IR-only.
 
-Current decision: **keep the internal candidate open until platform CI/review
-gates pass; do not create or publish a release without permission.**
+Current decision: **baseline readiness gates passed; maintainer-authorized
+v0.1.0 publication may proceed, with the limitations above kept public.**

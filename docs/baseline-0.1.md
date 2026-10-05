@@ -41,7 +41,7 @@ GitHub release/tag or promise a stable ABI across future toolchain versions.
 7. Validate object/version bounds, relocations, effective origin and metadata,
    RAM/bitmap/static/stack placement and known frame requirements before output;
    retain byte-exact multi-file and dynamic runtime-guard regressions.
-8. Keep an explicit [internal v0.1.0-rc checklist](release-readiness-0.1.md),
+8. Keep an explicit [v0.1.0 readiness record](release-readiness-0.1.md),
    separating verified local results from candidate CI/review/publication gates.
 
 The public example and `graphics_triangle` use one canonical source and
@@ -80,7 +80,7 @@ constants is not supported yet.
 
 ## Candidate verification
 
-The canonical dated verification record and outstanding platform gates live in
+The canonical dated verification record and platform CI evidence live in
 [release-readiness-0.1.md](release-readiness-0.1.md). Keep CI results tied to the
 exact candidate commit; local native/emulator evidence does not replace
 Ubuntu/macOS/sanitizer runs or establish physical-hardware/cycle correctness.

@@ -39,18 +39,19 @@ The ordered consolidation work is:
    parsing/writing, relocation spans/targets and per-object bases, metadata,
    placement/overlap diagnostics, known stack floors and frame constraints.
    Preserve output on rejected configurations and execute dynamic stack guards.
-8. [ ] Close the internal **v0.1.0-rc** [release-readiness checklist](docs/release-readiness-0.1.md):
-   retain fresh local evidence and require green Windows/MinGW, Ubuntu, macOS
-   and sanitizer CI for the candidate commit. A configured CI job is not a passed
-   platform build. Publication still requires explicit maintainer permission.
+8. [x] Close the **v0.1.0-rc** [release-readiness record](docs/release-readiness-0.1.md):
+   retain fresh local evidence and green Windows/MinGW, Ubuntu, macOS and
+   sanitizer CI for the merged baseline. The maintainer explicitly authorized
+   v0.1.0 publication on 2026-10-05.
 
 Acceptance: spec == parser == analyzer == verified IR == executable GSU backend
 == examples within the documented limits; reproducible native tests and the
 complete SNES example pass. See [baseline-0.1.md](docs/baseline-0.1.md) for exact
 commands, release/object compatibility, evidence boundaries and non-goals.
 
-Release publication is a separate maintainer action after candidate CI and
-review pass. No release/tag is created by completing this implementation work.
+The [v0.1.0 release notes](docs/release-notes-0.1.0.md) describe this first
+baseline and its pre-1.0 compatibility limits. Publication is a separate
+maintainer action after CI and review, not an optimization milestone.
 
 ## Implemented Foundations
 

@@ -11,19 +11,28 @@ The toolchain is written in C++23, with a C++14-compatible experimental DOS
 cross-build. The executable backend targets the SNES SuperFX (GSU); SPC700
 currently provides a frontend and IR foundation.
 
-> **Status: internal v0.1.0-rc readiness / Experimental**
+> **Status: v0.1.0 baseline / Experimental**
 > Correctness and explicit language contracts take priority over speed. GSU
 > compilation, assembly, linking, and runtime regressions are implemented, but
 > this is not a production-ready compiler. The current language is frozen as
-> **DiscoC Language Baseline 0.1**; new major language features wait while its
-> specification, conformance and end-to-end SuperFX workflows are consolidated.
-> This status does not announce a published release/tag. A linked `.bin` is a
-> GSU payload, not a complete SNES ROM.
+> **DiscoC Language Baseline 0.1**. Syntax, ABI and object format may change
+> before 1.0; optimization is immature and generated code is not yet expected
+> to be optimal. A linked `.bin` is a GSU payload, not a complete SNES ROM.
 
 The [0.1 stabilization contract](docs/baseline-0.1.md) and
-[release-readiness checklist](docs/release-readiness-0.1.md) define release-candidate
+[release-readiness record](docs/release-readiness-0.1.md) define baseline
 acceptance and compatibility limits. The first baseline release does not depend
 on further optimization or executable SPC700 support.
+
+## DiscoC 0.1.0
+
+DiscoC 0.1.0 establishes the first documented and tested language/toolchain
+baseline, with an end-to-end functional SuperFX target.
+
+See the [release notes](docs/release-notes-0.1.0.md) for compatibility limits and
+the [v0.1.0 release](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.1.0)
+for packaged tools, documentation and examples. The release remains experimental;
+SPC700 is a frontend/IR foundation, not a supported executable target.
 
 ## Supported Targets
 
