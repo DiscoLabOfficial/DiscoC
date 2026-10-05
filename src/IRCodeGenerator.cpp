@@ -594,8 +594,9 @@ void IRCodeGenerator::emitHardwareLoop(const IRInstruction& instruction) {
         materialize(instruction.operands[0]);
         emitMove(12, 0);
     }
-    emitByte(0x2D);
-    emitByte(0x1F);
+    // MOVE R13,R15 captures the address of the first body instruction.
+    // The reversed operands would instead jump to the stale R13.
+    emitMove(13, 15);
 }
 
 void IRCodeGenerator::materialize(IRValueId value) {
