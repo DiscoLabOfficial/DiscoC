@@ -87,6 +87,13 @@ jobs:
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-make
 
+      - name: Test Windows helper compiler selection
+        shell: pwsh
+        run: |
+          ./tests/BuildHelperTests.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./tests/BuildHelperTests.ps1
+
       - name: Configure, build and test MinGW preset
         shell: pwsh
         env:

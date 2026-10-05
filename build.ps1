@@ -89,7 +89,9 @@ No tools are installed automatically and no build directories are deleted.
         if ($Generator) { $configureArgs += @('-G', $Generator) }
         if ($Compiler) {
             Require-Command $Compiler
-            $compilerPath = (Get-Command $Compiler -CommandType Application).Source
+            # Application discovery can return every installed compiler. Keep
+            # PATH precedence instead of interpolating all paths into one value.
+            $compilerPath = (Get-Command $Compiler -CommandType Application | Select-Object -First 1).Source
             $configureArgs += "-DCMAKE_CXX_COMPILER=$compilerPath"
         }
         if ($Toolchain) {

@@ -126,6 +126,13 @@ one PowerShell process. It does not change the machine/user policy; organization
 policies can still prohibit execution. Where script execution is already allowed,
 you can invoke `./build.ps1` directly with the same arguments.
 
+For CMake-based builds, a compiler name (for example, `-Compiler g++`) resolves
+to the first matching executable on `PATH`, even with multiple toolchains installed.
+To select another installation, pass its full executable path, quoted if it
+contains spaces. The Windows-only `tests/BuildHelperTests.ps1` regression checks
+argument boundaries and compiler selection in PowerShell 5.1 and 7 in CI without
+requiring a compiler; the MinGW job also performs a real helper build and tests.
+
 The default CMake backend selects MinGW Makefiles when both `g++` and
 `mingw32-make` are available; otherwise CMake chooses its default generator.
 Select a generator explicitly when using another Windows toolchain:
