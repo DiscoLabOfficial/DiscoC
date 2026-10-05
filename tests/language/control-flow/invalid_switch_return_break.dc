@@ -1,0 +1,3 @@
+// error: may reach the end
+word f(word x) { switch (x) { case 0: if (x == 0) { break; } return 1; default: return 2; } }
+void main() { word n = f(0); }

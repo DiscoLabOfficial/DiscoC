@@ -1,5 +1,8 @@
 struct Pair { word a; word b; };
 word select(volatile word* counter) { (*counter)++; return 0; }
+word classify(word value) {
+    switch (value) { case 0: return 10; case 1: fallthrough; case 2: return 20; default: return 30; }
+}
 void main() {
     word count = 0;
     for (word i = 0; i < 6; i++) {
@@ -39,4 +42,5 @@ void main() {
     far word* wide_null = (far word*)empty;
     *(word*)0x118 = (word)(narrow_null == null);
     *(word*)0x11a = (word)(wide_null == null);
+    *(word*)0x11c = classify(0) + classify(1) + classify(2) + classify(9);
 }
