@@ -1,0 +1,16 @@
+bitmap screen { mode bitmap; size 256x192; depth 4bpp; base 0x6000; }
+
+word main() {
+    use bitmap screen;
+    word end_x = 0;
+    plot {
+        options;
+        color 5;
+        at (32, 40);
+        for (word i = 0; i < 128; i++) pixel;
+        end_x = cursor.x;
+        flush;
+    }
+    *(volatile word*)0x0120 = end_x;
+    return end_x;
+}

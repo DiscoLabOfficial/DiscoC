@@ -1,0 +1,8 @@
+word add_step(word value, word increment);
+
+word main() {
+    word result = *(volatile word*)0x0100;
+    for (word i = 0; i < 64; i++) result = add_step(result, i);
+    *(volatile word*)0x0120 = result;
+    return result;
+}

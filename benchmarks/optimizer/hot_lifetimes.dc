@@ -1,0 +1,22 @@
+word pressure(word a, word b, word c, word d, word n) {
+    word sum = 0;
+    for (word j = 0; j < n; j++) {
+        for (word i = 0; i < n; i++) {
+            *(volatile word*)0x130 = b;
+            *(volatile word*)0x132 = c;
+            *(volatile word*)0x134 = d;
+            *(volatile word*)0x136 = b + c + d;
+        }
+    }
+    for (word k = 0; k < n; k++) {
+        *(volatile word*)0x128 = a;
+        *(volatile word*)0x12a = a;
+        sum += a;
+    }
+    return sum + a + b + c + d;
+}
+word main() {
+    word seed = *(volatile word*)0x100;
+    *(volatile word*)0x120 = pressure(seed, seed + 1, seed + 2, seed + 3, 8);
+    return 42;
+}

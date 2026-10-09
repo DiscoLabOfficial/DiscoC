@@ -1,0 +1,80 @@
+{
+  "cases" : 
+  [
+    {
+      "branches" : 5,
+      "calls" : 0,
+      "instructions" : 105,
+      "loads" : 2,
+      "name" : "gvn",
+      "payload_bytes" : 152,
+      "payload_sha256" : "9466f9aae36a46578a20f0c6664e9cca667a61362e7fefce8c11530f302a0363",
+      "source_sha256" : "ef1eed65e1a5c72987c1655f6b139ee8ccbc64f8be01650f40039e3ba1fcb28d",
+      "stack_loads" : 0,
+      "stack_stores" : 1,
+      "stores" : 4
+    },
+    {
+      "branches" : 68,
+      "calls" : 0,
+      "instructions" : 1494,
+      "loads" : 66,
+      "name" : "recurrence",
+      "payload_bytes" : 193,
+      "payload_sha256" : "df796830a04b41ed6f0d616189008ec8e1a361c94cc21d89b5c27ef381438639",
+      "source_sha256" : "1772886c6815b262e9ebcdf93c73928423a1fc16d08aef5ad3502b26b2c20f45",
+      "stack_loads" : 64,
+      "stack_stores" : 35,
+      "stores" : 37
+    },
+    {
+      "branches" : 6,
+      "calls" : 0,
+      "instructions" : 167,
+      "loads" : 4,
+      "name" : "scalar_cells",
+      "payload_bytes" : 236,
+      "payload_sha256" : "322b12097cddfac4540397b3f119ba330b107d8736535948c914dd0724dd9c50",
+      "source_sha256" : "340d7b49bb55db6b6e10ff47952391629eb6aff8bb6d4cdb478cb77cb6f995cb",
+      "stack_loads" : 3,
+      "stack_stores" : 6,
+      "stores" : 8
+    },
+    {
+      "branches" : 3,
+      "calls" : 0,
+      "instructions" : 66,
+      "loads" : 1,
+      "name" : "known_bits",
+      "payload_bytes" : 96,
+      "payload_sha256" : "9f74279bb15d64cf60db7dd784953639f01940656d50b884c630344792d2e75a",
+      "source_sha256" : "0b191f16ebcf3953b49a46fb78d10288409bf8a17d847afe3443a38609419dcd",
+      "stack_loads" : 0,
+      "stack_stores" : 1,
+      "stores" : 3
+    },
+    {
+      "branches" : 174,
+      "calls" : 1,
+      "instructions" : 8128,
+      "loads" : 531,
+      "name" : "hot_lifetimes",
+      "payload_bytes" : 734,
+      "payload_sha256" : "cc8ae54a789921d22d9fefad05ed9af591d1e53743883f31ab07916ad7210857",
+      "source_sha256" : "a0ac4b41756d8c0ab89fad326d3195a30ce6763ea4a66701d97d5a3b3209ccc5",
+      "stack_loads" : 530,
+      "stack_stores" : 297,
+      "stores" : 571
+    }
+  ],
+  "discc_sha256" : "245817788bb11886de1e31636c260d9fd22521f6d610cc4281cbc15dd6a97fa4",
+  "factor" : 7,
+  "measurement" : "gsu-value-opcodes-v1",
+  "model_sha256" : "d7d0510479382a30451f56b12df6792051186fa83a60990a420d21c1227c16ea",
+  "optimization" : 2,
+  "origin" : 32768,
+  "runner_sha256" : "40098280687bc666f5f53064bf032550c2a3a06c986c195decf85560c5d19376",
+  "seed" : 46,
+  "stack_pointer" : 8192,
+  "toolchain_label" : "O2-values"
+}

@@ -13,16 +13,21 @@
 #include "AssemblyGenerator.hpp"
 #include "ASTPrinter.hpp"
 #include "IRCodeGenerator.hpp"
+#include "IRGlobalOptimizer.hpp"
 
 namespace {
 void usage() {
     std::cout << "Usage: discc [options] <file.dc> [-o output]\n"
-        "  --config <discoc.toml>     Load project target/placement defaults\n"
+        "  --config <discoc.toml>     Load project compiler/placement defaults\n"
         "  --import-path <directory> Search after the importing directory (repeatable; -I also accepted)\n"
         "  build [--config manifest] Compile and link project sources\n"
         "  --project <manifest>      Alias for build --config\n"
         "  --target <gsu|spc700>      Select target (default gsu)\n"
         "  --check                   Analyze and verify IR without emitting code\n"
+        "  -O | -O1                  Optimize GSU code (default -O0 baseline)\n"
+        "  -O0                       Retain baseline GSU code generation\n"
+        "  -O2                       CFG/SSA, global registers, loops and bounded inlining\n"
+        "  -Os                       Minimize emitted bytes with verified global optimization\n"
         "  --emit-ast | --emit-ir | --emit-asm\n"
         "  --memory-mapping <lorom|hirom> (default lorom)\n"
         "  --execution-memory <rom|ram>  Select default execution region\n"
@@ -83,6 +88,12 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
             else if (argument == "--emit-ir") emit_ir = true;
             else if (argument == "--emit-asm") emit_asm = true;
             else if (argument == "--check") check = true;
+            else if (argument == "-O" || argument == "-O1") config.optimization = OptimizationLevel::O1;
+            else if (argument == "-O0") config.optimization = OptimizationLevel::Baseline;
+            else if (argument == "-O2") config.optimization = OptimizationLevel::O2;
+            else if (argument == "-Os") config.optimization = OptimizationLevel::Size;
+            else if (argument.compare(0, 2, "-O") == 0)
+                throw std::runtime_error("Unsupported optimization level: " + argument + "; use -O0, -O1 (-O), -O2, or -Os.");
             else if (argument == "-Wall") enabled_warnings = known_warnings;
             else if (argument == "-Werror") warnings_as_errors = true;
             else if (argument == "-Wno-cache-overflow") config.warn_on_cache_overflow = false;
@@ -148,7 +159,11 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
         IRLowerer lowerer(config.target); auto ir = lowerer.lower(program);
         ir.bitmap = analyzer.getBitmapConfig();
         IRVerifier::verify(ir);
-        if (emit_ir) { std::cout << dumpIR(ir); return 0; }
+        if ((emit_ir || check) && isGlobalOptimization(config.optimization))
+            IRGlobalOptimizer::run(ir, analyzer.getAllLocalSymbols(), config.optimization);
+        if (emit_ir) {
+            std::cout << dumpIR(ir); return 0;
+        }
         if (check) return 0;
         if (config.target != TargetKind::GSU)
             throw CompilerError(std::string("Target '") + targetName(config.target) + "' has a target model but no code-generation backend yet.", 1, 1);

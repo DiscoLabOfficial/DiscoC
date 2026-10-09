@@ -1,0 +1,335 @@
+{
+  "measurement": "rotation-mesen-21MHz-and-completed-pose-fps",
+  "comparison": "Frozen pre-bottleneck O2 versus compiler-only, counter-only and incremental renderer workloads; not a published release",
+  "profile": "NTSC CLSR=1 GSU=100% CFGR.MSO=0 RAM-execution CACHE cold",
+  "gsu_window": "First real opcode entry through normal STOP completion; excludes synthetic prefetch and CPU setup/copy/poll/DMA/display",
+  "fps_window": "64 completed-image publication intervals after VRAM DMA; excludes boot/first render and includes CPU/GSU/DMA/presentation and repeated refreshes",
+  "sources": {
+    "reference": "benchmarks/rotation/reference/triangle.dc",
+    "counters": "benchmarks/rotation/counters/triangle.dc",
+    "incremental": "tests/graphics/rotating_triangle/triangle.dc",
+    "whole_helper_experiment": "Incremental source with an explicit @cache on floor_div; same final code-generation policy"
+  },
+  "hashes": {
+    "tests/graphics/rotating_triangle/build-snes.cmake": "a745059d51306c64069699e51b567a4e15b1ccf49870ad5562e1d92928182885",
+    "tests/graphics/rotating_triangle/snes_host.asm": "6eaf1ddc62f04d65272cf782d788aa3522351e83ece20e0712cb4974d6ad5401",
+    "tests/graphics/rotating_triangle/verify.lua": "b55c93bcb71bbec5550b8e8f0d450363cb7eed1a8cb519b631aac0a78d6e8462",
+    "benchmarks/mesen/measure-rotation.lua": "02aa62f85ec5f5dfee4f59fb9088930fb9c984aaf4e6969bafbe46ce3e1adf78",
+    "tests/graphics/rotating_triangle/measure-fps.lua": "66ecdcc88a2ae6fff95965b95813de6c9d8ce7e57b3093f40b81128948676704",
+    "build/bottleneck-before/bin/discc.exe": "c662c391f3d8201d987e5e0ba4686135e896a67b9027bcd63d03b74d4559bd8a",
+    "build/release/bin/discc.exe": "d0f65243e2655e166d61bc6828558df0b88995e9c7ad93206124d72f9b5771b5",
+    "build/release/bin/discld.exe": "cf31dde86f968ec3a05daf5544dd064855288222ef9f84a434edc3bdc3b3d42c",
+    "build/release/bin/discas.exe": "dccfc2a67b7b0789340ba8811aa5ed4fc7f65ceea808913d471c456ca87c10fb",
+    "build/mesence test/Mesen.exe": "8ef403d6b9af32075416193914d7993ce8480b347fe1f20a0cfd9815374933e7",
+    "build/mesence test/SNES Test/WLA-DX/wla-65816.exe": "75cbd4d2f7145984fc19e051c2dda90b7b89105cd10278e14adb487c36dcb59d",
+    "build/mesence test/SNES Test/WLA-DX/wlalink.exe": "bdafcb2dc13ab57ceb6610e71c22b705e96b40963df15f02f066f6ba1364a095"
+  },
+  "final_codegen_validation": {
+    "measured_after_discc_sha256": "d0f65243e2655e166d61bc6828558df0b88995e9c7ad93206124d72f9b5771b5",
+    "final_discc_sha256": "8d72c74e2bdd0963a47548d0da2fc85fd90e0370157fda6269527f4defe162ee",
+    "description": "Final O2-only postcompaction safe LICM/idempotence fix leaves all nine O2/Os benchmark payloads/opcode counts and all three O2 rotation payloads byte-identical to the measured compiler"
+  },
+  "poses_per_run": 64,
+  "additional_wrap_samples_per_run": 1,
+  "pixel_checks_per_pose": 49152,
+  "cases": [
+    {
+      "directory": "build/bottleneck-baseline-O2",
+      "source_sha256": "84373e09999d015f6e74d57791ef8f33e9065862fc4317430a78f64ee5203ccb",
+      "payload_bytes": 2672,
+      "payload_sha256": "6e62fbde5199a9e39f4b02310ceef81e825318b8b46e3cb4a753b0d42e19c72e",
+      "rom_bytes": 65536,
+      "rom_sha256": "b2ef545d6d5b3559429c56c55de34dece473b5573fcbb3a224c466f79db67864",
+      "phase0_cycles": 2494487,
+      "mean_cycles_64_poses": 2844363.546875,
+      "total_cycles_64_poses": 182039267,
+      "minimum_cycles": 2494371,
+      "maximum_cycles": 2879158,
+      "phase_wrap_cycles": 2494487,
+      "displayed_pose_fps": 6.700911412882,
+      "fps_interval_master_clocks": 205128108,
+      "fps_interval_snes_refreshes": 574,
+      "repeated_refreshes": 510,
+      "screenshot_mismatches": 0,
+      "functions": [
+        {
+          "function": "floor_div",
+          "instructions": 104544,
+          "master_clocks": 625000
+        },
+        {
+          "function": "main",
+          "instructions": 841778,
+          "master_clocks": 1866997
+        },
+        {
+          "function": "sine_q6",
+          "instructions": 344,
+          "master_clocks": 2440
+        },
+        {
+          "function": "startup",
+          "instructions": 6,
+          "master_clocks": 50
+        }
+      ],
+      "phase0_instructions": 946672,
+      "normal_oracle": "PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; 588 SNES frames",
+      "negative_oracle": "PASS rotating triangle negative: status=2 result=3281 red backdrop",
+      "label": "baseline-O2",
+      "timing_report": "benchmarks/results/rotation-bottleneck-baseline-O2-21MHz.json",
+      "fps_report": "benchmarks/results/rotation-bottleneck-baseline-O2-fps.json"
+    },
+    {
+      "directory": "build/bottleneck-compiler-O2",
+      "source_sha256": "84373e09999d015f6e74d57791ef8f33e9065862fc4317430a78f64ee5203ccb",
+      "payload_bytes": 2285,
+      "payload_sha256": "2f0f0178a2e2ef9a076eafc3f2a91b2b2d91c141603e80d43daf0136c440c060",
+      "rom_bytes": 65536,
+      "rom_sha256": "fc88c12fbbe8e7491f53876002c36778c26d45a70880e0dce9bb7c8e36d7db8c",
+      "phase0_cycles": 1737705,
+      "mean_cycles_64_poses": 1910470.984375,
+      "total_cycles_64_poses": 122270143,
+      "minimum_cycles": 1737705,
+      "maximum_cycles": 1952989,
+      "phase_wrap_cycles": 1738151,
+      "displayed_pose_fps": 10.068910245328,
+      "fps_interval_master_clocks": 136513808,
+      "fps_interval_snes_refreshes": 382,
+      "repeated_refreshes": 318,
+      "screenshot_mismatches": 0,
+      "functions": [
+        {
+          "function": "floor_div",
+          "instructions": 98496,
+          "master_clocks": 281074
+        },
+        {
+          "function": "main",
+          "instructions": 604730,
+          "master_clocks": 1454141
+        },
+        {
+          "function": "sine_q6",
+          "instructions": 344,
+          "master_clocks": 2440
+        },
+        {
+          "function": "startup",
+          "instructions": 6,
+          "master_clocks": 50
+        }
+      ],
+      "phase0_instructions": 703576,
+      "normal_oracle": "PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; 394 SNES frames",
+      "negative_oracle": "PASS rotating triangle negative: status=2 result=3281 red backdrop",
+      "label": "compiler-O2",
+      "timing_report": "benchmarks/results/rotation-bottleneck-compiler-O2-21MHz.json",
+      "fps_report": "benchmarks/results/rotation-bottleneck-compiler-O2-fps.json"
+    },
+    {
+      "directory": "build/bottleneck-counters-O2",
+      "source_sha256": "b70929bbc826d33d60b55ae423f1eb94074ee719c1bc5c0677fa03bdf83ff8aa",
+      "payload_bytes": 2217,
+      "payload_sha256": "1d7c6737e78ea351fe94258188cb02fb0d903252bbdbeb66f4f5edb942733d0f",
+      "rom_bytes": 65536,
+      "rom_sha256": "43491eb6dc2757b8d00475a54148871a45978d7cc578b11777003146348b1449",
+      "phase0_cycles": 1359770,
+      "mean_cycles_64_poses": 1538819.671875,
+      "total_cycles_64_poses": 98484459,
+      "minimum_cycles": 1359770,
+      "maximum_cycles": 1568768,
+      "phase_wrap_cycles": 1360216,
+      "displayed_pose_fps": 12.095359151697,
+      "fps_interval_master_clocks": 113642370,
+      "fps_interval_snes_refreshes": 318,
+      "repeated_refreshes": 254,
+      "screenshot_mismatches": 0,
+      "functions": [
+        {
+          "function": "floor_div",
+          "instructions": 98496,
+          "master_clocks": 281074
+        },
+        {
+          "function": "main",
+          "instructions": 373963,
+          "master_clocks": 1076206
+        },
+        {
+          "function": "sine_q6",
+          "instructions": 344,
+          "master_clocks": 2440
+        },
+        {
+          "function": "startup",
+          "instructions": 6,
+          "master_clocks": 50
+        }
+      ],
+      "phase0_instructions": 472809,
+      "normal_oracle": "PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; 329 SNES frames",
+      "negative_oracle": "PASS rotating triangle negative: status=2 result=3281 red backdrop",
+      "label": "counters-O2",
+      "timing_report": "benchmarks/results/rotation-bottleneck-counters-O2-21MHz.json",
+      "fps_report": "benchmarks/results/rotation-bottleneck-counters-O2-fps.json"
+    },
+    {
+      "directory": "build/bottleneck-incremental-O2",
+      "source_sha256": "d43ba02e33763adf3205e02842a236d26a3d8bf0e7b4f06c1a41ac7fea4c7cea",
+      "payload_bytes": 2819,
+      "payload_sha256": "5d2263c807d976399f4a9825fef36f8d04211564c729a605c1c7ee09e7d68b36",
+      "rom_bytes": 65536,
+      "rom_sha256": "b46a84f63fade0c577a77eef97ed82dd392f2ccbf3ccbe5019f0faae29bf32c5",
+      "phase0_cycles": 1081031,
+      "mean_cycles_64_poses": 1159469.625,
+      "total_cycles_64_poses": 74206056,
+      "minimum_cycles": 1081031,
+      "maximum_cycles": 1180152,
+      "phase_wrap_cycles": 1081031,
+      "displayed_pose_fps": 15.024708464127,
+      "fps_interval_master_clocks": 91485654,
+      "fps_interval_snes_refreshes": 256,
+      "repeated_refreshes": 192,
+      "screenshot_mismatches": 0,
+      "functions": [
+        {
+          "function": "floor_div",
+          "instructions": 1784,
+          "master_clocks": 4827
+        },
+        {
+          "function": "main",
+          "instructions": 382485,
+          "master_clocks": 1073714
+        },
+        {
+          "function": "sine_q6",
+          "instructions": 344,
+          "master_clocks": 2440
+        },
+        {
+          "function": "startup",
+          "instructions": 6,
+          "master_clocks": 50
+        }
+      ],
+      "phase0_instructions": 384619,
+      "normal_oracle": "PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; 267 SNES frames",
+      "negative_oracle": "PASS rotating triangle negative: status=2 result=3281 red backdrop",
+      "label": "incremental-O2",
+      "timing_report": "benchmarks/results/rotation-bottleneck-incremental-O2-21MHz.json",
+      "fps_report": "benchmarks/results/rotation-bottleneck-incremental-O2-fps.json"
+    },
+    {
+      "directory": "build/bottleneck-incremental-Os",
+      "source_sha256": "d43ba02e33763adf3205e02842a236d26a3d8bf0e7b4f06c1a41ac7fea4c7cea",
+      "payload_bytes": 2818,
+      "payload_sha256": "708a2b7c199f947bf571b3ca0d9e96b9b8c3ae46e2b5df4b30197c553c043cf0",
+      "rom_bytes": 65536,
+      "rom_sha256": "91a2bc3b999cde36f958411aa50dedf247012e7f4be1553a02ae8443a8e4ad75",
+      "phase0_cycles": 1086479,
+      "mean_cycles_64_poses": 1167535.71875,
+      "total_cycles_64_poses": 74722286,
+      "minimum_cycles": 1086479,
+      "maximum_cycles": 1188351,
+      "phase_wrap_cycles": 1086479,
+      "displayed_pose_fps": 15.024702551842,
+      "fps_interval_master_clocks": 91485690,
+      "fps_interval_snes_refreshes": 256,
+      "repeated_refreshes": 192,
+      "screenshot_mismatches": 0,
+      "functions": [
+        {
+          "function": "floor_div",
+          "instructions": 1780,
+          "master_clocks": 10650
+        },
+        {
+          "function": "main",
+          "instructions": 382485,
+          "master_clocks": 1073339
+        },
+        {
+          "function": "sine_q6",
+          "instructions": 344,
+          "master_clocks": 2440
+        },
+        {
+          "function": "startup",
+          "instructions": 6,
+          "master_clocks": 50
+        }
+      ],
+      "phase0_instructions": 384615,
+      "normal_oracle": "PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; 267 SNES frames",
+      "negative_oracle": "PASS rotating triangle negative: status=2 result=3281 red backdrop",
+      "label": "incremental-Os",
+      "timing_report": "benchmarks/results/rotation-bottleneck-incremental-Os-21MHz.json",
+      "fps_report": "benchmarks/results/rotation-bottleneck-incremental-Os-fps.json"
+    },
+    {
+      "directory": "build/bottleneck-incremental-helper-O2",
+      "source_sha256": "31ae7ed64cdd11eff0e16dd31965578f38218cea52ac98b3e4d33a668d246a85",
+      "payload_bytes": 2826,
+      "payload_sha256": "96003aecc51cda11e88c0a05f26e99a75962925fd01765fa9dfd6d97a6fe846f",
+      "rom_bytes": 65536,
+      "rom_sha256": "1eea3e34448c04afc7f556a3de761f86402c843d67f184bf534435fbe7b0c301",
+      "phase0_cycles": 1084173,
+      "mean_cycles_64_poses": 1161763.28125,
+      "total_cycles_64_poses": 74352850,
+      "minimum_cycles": 1084173,
+      "maximum_cycles": 1182217,
+      "phase_wrap_cycles": 1084173,
+      "displayed_pose_fps": 15.024701894921,
+      "fps_interval_master_clocks": 91485694,
+      "fps_interval_snes_refreshes": 256,
+      "repeated_refreshes": 192,
+      "screenshot_mismatches": 0,
+      "functions": [
+        {
+          "function": "floor_div",
+          "instructions": 1784,
+          "master_clocks": 3590
+        },
+        {
+          "function": "main",
+          "instructions": 382485,
+          "master_clocks": 1078093
+        },
+        {
+          "function": "sine_q6",
+          "instructions": 344,
+          "master_clocks": 2440
+        },
+        {
+          "function": "startup",
+          "instructions": 6,
+          "master_clocks": 50
+        }
+      ],
+      "phase0_instructions": 384619,
+      "normal_oracle": "PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; 267 SNES frames",
+      "negative_oracle": "PASS rotating triangle negative: status=2 result=3281 red backdrop",
+      "label": "whole-helper-O2",
+      "timing_report": "benchmarks/results/rotation-bottleneck-whole-helper-O2-21MHz.json",
+      "fps_report": "benchmarks/results/rotation-bottleneck-whole-helper-O2-fps.json"
+    }
+  ],
+  "compiler_only_payload_reduction_percent": 14.483532934131736,
+  "compiler_only_mean_cycle_reduction_percent": 32.83309419170536,
+  "complete_mean_cycle_reduction_percent": 59.236236652172416,
+  "complete_payload_growth_percent": 5.501497005988032,
+  "completed_pose_throughput_multiplier": 2.2421887916982643,
+  "cache_decision": "Retain bounded-kernel CACHE: incremental whole-helper CACHE uses seven more bytes and 2293.65625 more mean cycles; both pass all 64 screenshots and failure oracles",
+  "assembly_round_trips": "All six runs compare direct/compiler assembly/final linked assembly payloads byte for byte",
+  "benchmark_tradeoffs": "O2 improves or preserves all nine measured cycle counts, but memcpy adds 14 CODE bytes and arithmetic adds 4 CODE bytes; Os improves or preserves both bytes and cycles in all nine cases",
+  "verification": {
+    "msvc_release_ctest_passed": 242,
+    "msvc_debug_ctest_passed": 234,
+    "static_mingw_release_ctest_passed": 234,
+    "strict_gcc_cxx14_production_warnings_as_errors": true,
+    "linux_macos_dos_sanitizers_rerun": false
+  },
+  "physical_hardware_tested": false
+}

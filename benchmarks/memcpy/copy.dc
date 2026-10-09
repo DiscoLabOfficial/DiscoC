@@ -1,0 +1,5 @@
+// Isolate the same byte-copy loop used by dc_memcpy, without linking unrelated
+// memmove/memset functions into the code-size measurement.
+void copy_bytes(u8* destination, const u8* source, u16 count) {
+    for (u16 i = 0; i < count; i++) destination[i] = source[i];
+}

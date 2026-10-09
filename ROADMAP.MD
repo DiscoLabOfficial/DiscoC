@@ -209,14 +209,74 @@ core. GSU plotting is not an SPC700 language capability.
 
 These improvements follow correctness and deployment validation.
 
-- [ ] Improve spill/rematerialization heuristics and evaluate allocation for
-  checked-pointer functions, which currently use explicit spill slots.
+- [x] Establish nine reproducible, correctness-checked code-size/opcode
+  [benchmarks](benchmarks/README.md), with a measured v0.1.0 reference and
+  comparable JSON/CSV reports for the current toolchain. Count loads/stores,
+  stack accesses, plotting/color/ROM-buffer operations and control flow.
+- [ ] Extend internal switch-dispatch branch relaxation before using larger
+  switch workloads; a 16-case balanced dispatch can currently exceed its local
+  branch range and is diagnosed rather than emitted incorrectly.
+- [x] Introduce opt-in GSU `-O`/`-O1` and TOML `compiler.optimize`, retaining
+  O0 as the default baseline and the existing object/call ABI. Use eager,
+  block-local R5/R7/R8 allocation for checked-pointer/plot functions, real
+  pressure spills, safe IBT materialization, compact comparisons/loads/stores,
+  checked near-pointer scaling, and conservative redundant-COLOR elimination.
+  Execute both levels and verify code-size, opcode and calibrated Mesen timing
+  improvements across all nine workloads. See [optimization](docs/optimization.md).
+- [x] Add opt-in `-O2` / `compiler.optimization_level = 2`: expose hardware-loop
+  backedges, compute full CFG/PHI liveness, promote eligible scalar locals to
+  pruned SSA, allocate R5/R7/R8 across blocks and reuse noninterfering spill slots.
+- [x] Add safe scalar LICM, checked unsigned near-address induction and bounded
+  same-unit scalar-leaf inlining/constant specialization; retain volatile,
+  alias, fault-point, CACHE and growth constraints. Execute all three levels.
+- [ ] Extend measured O2 allocation/loop heuristics and address patterns; keep
+  size/cycle regressions visible rather than assume every workload improves.
+- [x] Add optional Mesen opcode/function/machine-region profiling and a bounded
+  GSU fetch/RAM/call pressure model. Compare deterministic allocator candidates
+  under warm-CACHE and uncached estimates; retain exact liveness and safe
+  intrablock spill copies in R5/R7/R8. Recheck nine workloads, O0/O1 controls,
+  pressure cases and all 64 rotation images with calibrated cycle/FPS reports.
+- [ ] Extend to general split-location allocation or profile-guided weights
+  only after matching CFG/edge metadata and spill/copy verification exist.
+- [x] Add explicit `-Os` / `compiler.optimization_level = "s"`: reuse verified
+  SSA/SCCP/GVN cleanup, compare bounded candidates by actual CODE/DATA bytes,
+  restrict speed-only growth, pool repeated division/remainder when calls and
+  preservation amortize, share exact effectful tails and omit optional CACHE
+  padding. Keep ABI, required alignment, fault/volatile/plot semantics and
+  mixed-level linking; measure size and cycle tradeoffs separately.
+- [x] Fuse matching dominating word division/remainder into an internal divmod
+  pair, retaining signed/modular results and the first zero-divisor fault point.
+- [x] Share function-local epilogues and in-range identical terminal faults;
+  retain short/long branch relaxation, delay slots and per-path state cleanup.
+- [x] Improve loop-weighted PHI register/spill affinity with bounded exact
+  interference-preserving recoloring, direct moves and register-only R6 cycles.
+  Compare nine workloads and all 64 rotation poses with the proven-check baseline.
+- [x] Remove provably redundant O2 near-RAM frame/address checks and reuse
+  established stack-check bounds. Preserve unknown/far/ROM accesses, wrapped
+  indices, alignment, fault ordering and untaken paths; compare all nine
+  benchmarks and all 64 rotation poses against the frozen SCCP snapshot.
+- [x] Add bounded O2 SCCP and CFG simplification: executable-edge PHIs, typed
+  constants, constant branches/switches, dead blocks and ordinary chain merging.
+  Preserve unknown memory, volatile/graphics effects, fail-stops and hardware
+  backedges; verify regressions and compare bytes/cycles against the O2 baseline.
+- [x] Add bounded O2 delay-slot filling, independent ROM-buffer scheduling,
+  contiguous hot-loop/PHI layout and linker-aware cached function alignment.
+  Calibrate split-byte IWT/IBT and ROM latency with Mesen; preserve flags,
+  selectors, relocations, volatile accesses and PLOT auto-X semantics.
+- [ ] Extend measured hardware-loop/cache scheduling, including deliberately
+  split immediate slots and profile-guided region layout. Do not pad every loop
+  CACHE: the rotation experiment regressed despite identical pixels.
 - [ ] Evaluate dense-switch jump tables using code-size and execution
   measurements, preserving explicit fallthrough behavior.
 - [ ] Optimize integer/fixed-point helpers and repeated bank-selection patterns
   without removing observable accesses or required pointer checks.
-- [ ] Establish reproducible code-size and measured timing benchmarks before
-  claiming speedups; the instruction model is not a cycle-accurate benchmark.
+- [x] Add optional reproducible Mesen timing for the same nine ROM workloads,
+  with fixed fast clock/ownership/cold-entry state, calibration, independent
+  result checks and a v0.1.0 comparison. Report observed master clocks and the
+  guarded model-derived STOP cost separately; the functional instruction
+  model remains untimed, and emulator timings are not hardware measurements.
+- [ ] Add independently validated RAM-execution/warm-entry timing profiles and
+  physical-hardware measurements before making broader deployment claims.
 
 ## Later Language, ABI, and Placement Extensions
 

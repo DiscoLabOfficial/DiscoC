@@ -1,0 +1,11 @@
+word main() {
+    word seed = *(volatile word*)0x100;
+    word factor = *(volatile word*)0x102;
+    word value = seed * factor;
+    *(volatile word*)0x122 = value;
+    word result;
+    if (seed & 1) result = factor * seed + seed * factor;
+    else result = seed * factor - seed * factor;
+    *(volatile word*)0x120 = value + result;
+    return 42;
+}

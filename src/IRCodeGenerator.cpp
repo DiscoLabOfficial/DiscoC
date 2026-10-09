@@ -6,8 +6,14 @@
 #include <limits>
 
 #include "CompilerError.hpp"
+#include "ConstantEvaluator.hpp"
 #include "ABI.hpp"
 #include "Opcodes.hpp"
+#include "IRLocalOptimizer.hpp"
+#include "IRGlobalOptimizer.hpp"
+#include "IRControlFlow.hpp"
+#include "GSUMachineScheduler.hpp"
+#include "GSUCostModel.hpp"
 
 namespace {
 
@@ -34,6 +40,7 @@ void IRCodeGenerator::fail(const std::string& message, const Token& source) cons
 }
 
 void IRCodeGenerator::emitByte(std::uint8_t byte) {
+    m_accumulator_value = IRValueId{};
     m_object_file.code_section.push_back(byte);
 }
 
@@ -48,27 +55,36 @@ void IRCodeGenerator::emitLiteral(std::int64_t value) {
         fail("IR codegen: literal is outside the 16-bit GSU range.",
              Token(TokenType::UNKNOWN, "", 0, 0));
     }
-    emitByte(static_cast<std::uint8_t>(OpCode::IWT));
-    emitWord(static_cast<std::uint16_t>(value));
+    emitRegisterLiteral(0, static_cast<std::uint16_t>(value));
 }
 
 void IRCodeGenerator::emitMove(std::uint8_t destination, std::uint8_t source) {
+    m_spill_cache.clobber(destination);
+    const auto cached = m_accumulator_value;
+    if (destination == GSUAbi::StackPointerRegister) m_stack_check_credit.reset();
     // TO alone only selects a destination. WITH is required even for R0
     // to form an immediate register copy and clear the selection afterwards.
     emitByte(static_cast<std::uint8_t>(0x20 | source));
     emitByte(static_cast<std::uint8_t>(0x10 | destination));
+    // A completed WITH/TO copy clears the selectors but changes only its
+    // destination. Retain an R0 snapshot across copies out of R0, not across
+    // arbitrary bytes (which might instead be operands or prefixes).
+    if (globallyOptimized() && destination != 0) m_accumulator_value = cached;
 }
 
 void IRCodeGenerator::emitStackGuard(std::size_t required, const Token& source) {
     if (required > 65535u) fail("Stack requirement exceeds one bank.", source);
+    if (globallyOptimized() && m_stack_check_credit.covers(required)) return;
     const auto patch = m_object_file.code_section.size();
-    emitRegisterLiteral(3, 0);
+    emitWordLiteral(3, 0); // The linker patches an IWT, never a shortened IBT.
     addRelocation(std::string(GSUAbi::StackLimitPrefix) + std::to_string(required), patch, RelocationType::ADDR16_RAM);
     emitByte(0xba); emitByte(0x3f); emitByte(0x63);
     emitGuard(13, 2);
+    if (globallyOptimized()) m_stack_check_credit.checked(required);
 }
 
 void IRCodeGenerator::emitPush(std::uint8_t reg) {
+    m_last_ram_word_address = IRValueId{};
     emitStackGuard(2, Token(TokenType::UNKNOWN, "", 0, 0));
     if (reg != 0) {
         emitByte(static_cast<std::uint8_t>(0x20 | reg));
@@ -76,18 +92,23 @@ void IRCodeGenerator::emitPush(std::uint8_t reg) {
     emitByte(0x3A);
     emitByte(0xEA);
     emitByte(0xEA);
+    if (globallyOptimized()) m_stack_check_credit.decrease(2);
 }
 
 void IRCodeGenerator::emitPop(std::uint8_t reg) {
+    m_spill_cache.clobber(reg);
+    m_last_ram_word_address = IRValueId{};
     emitByte(0xDA);
     emitByte(0xDA);
     if (reg != 0) {
         emitByte(static_cast<std::uint8_t>(0x20 | reg));
     }
     emitByte(0x4A);
+    if (globallyOptimized()) m_stack_check_credit.increase(2);
 }
 
 void IRCodeGenerator::emitStore(std::uint8_t address_reg, std::uint8_t value_reg, bool byte) {
+    m_last_ram_word_address = IRValueId{};
     if (value_reg != 0) {
         emitByte(static_cast<std::uint8_t>(0x20 | value_reg));
     }
@@ -97,6 +118,18 @@ void IRCodeGenerator::emitStore(std::uint8_t address_reg, std::uint8_t value_reg
     emitByte(static_cast<std::uint8_t>(0x30 | address_reg));
 }
 
+bool IRCodeGenerator::matchesLastRamWordAddress(IRValueId address) const {
+    if (!m_last_ram_word_address.isValid()) return false;
+    if (address.value == m_last_ram_word_address.value) return true;
+    const auto& previous = producer(m_last_ram_word_address, Token(TokenType::UNKNOWN, "", 0, 0));
+    const auto& current = producer(address, Token(TokenType::UNKNOWN, "", 0, 0));
+    // Fresh Address nodes for the same declaration are equivalent. Never
+    // equate distinct pointer loads: an alias may have changed the pointer.
+    return previous.opcode == IROpcode::Address && current.opcode == IROpcode::Address &&
+        previous.operation.empty() && current.operation.empty() &&
+        previous.symbol_id.isValid() && previous.symbol_id == current.symbol_id;
+}
+
 void IRCodeGenerator::emitImmediateArithmetic(std::uint8_t op_base,
                                                std::int64_t value,
                                                const Token& source) {
@@ -104,6 +137,11 @@ void IRCodeGenerator::emitImmediateArithmetic(std::uint8_t op_base,
         fail("IR codegen: immediate arithmetic value cannot be negative.", source);
     }
     auto remaining = static_cast<std::uint64_t>(value);
+    if (optimized() && remaining > 30 && remaining <= 65535) {
+        emitRegisterLiteral(3, static_cast<std::uint16_t>(remaining));
+        emitByte(static_cast<std::uint8_t>(op_base | 3));
+        return;
+    }
     while (remaining > 0) {
         const auto chunk = static_cast<std::uint8_t>(std::min<std::uint64_t>(remaining, 15));
         emitByte(static_cast<std::uint8_t>(OpCode::ALT2));
@@ -113,7 +151,17 @@ void IRCodeGenerator::emitImmediateArithmetic(std::uint8_t op_base,
 }
 
 void IRCodeGenerator::emitAdjustStack(std::size_t bytes, bool add, const Token& source) {
+    if (globallyOptimized()) {
+        if (add) m_stack_check_credit.increase(bytes);
+        else m_stack_check_credit.decrease(bytes);
+    }
     const auto op_base = static_cast<std::uint8_t>(add ? 0x50 : 0x60);
+    if (optimized() && bytes > 15 && bytes <= 65535) {
+        emitRegisterLiteral(3, static_cast<std::uint16_t>(bytes));
+        emitByte(0x2a);
+        emitByte(static_cast<std::uint8_t>(op_base | 3));
+        return;
+    }
     while (bytes > 0) {
         const auto chunk = static_cast<std::uint8_t>(std::min<std::size_t>(bytes, 15));
         emitByte(0x2A);
@@ -125,6 +173,11 @@ void IRCodeGenerator::emitAdjustStack(std::size_t bytes, bool add, const Token& 
 }
 
 void IRCodeGenerator::emitFunctionEpilogue() {
+    if (globallyOptimized()) {
+        if (!m_epilogue_label.empty()) { emitLocalJump(m_epilogue_label); return; }
+        m_epilogue_label = localLabel();
+        bindLabel(m_epilogue_label);
+    }
     emitMove(GSUAbi::StackPointerRegister, GSUAbi::FramePointerRegister);
     if (m_current_function->name == "main") {
         // A scalar-only entry may call a checked callee from another unit.
@@ -145,11 +198,17 @@ std::uint8_t IRCodeGenerator::scratchRegister() const {
 }
 
 void IRCodeGenerator::buildRegisterAllocation(const IRFunction& function) {
+    if (globallyOptimized()) { m_register_allocator.runGlobal(function, {5, 7, 8}, m_allocation_policy); return; }
     // R0 is the expression accumulator, R1/R3 are backend temporaries, R9 is
     // the frame pointer, and R10-R15 have ABI or hardware roles. R5, R7, and
     // R8 are general-purpose registers for the current backend operations.
     m_register_allocator = LinearScanAllocator{};
-    if (!m_checked_pointer_mode) m_register_allocator.run(function, {5, 7, 8});
+    if (optimized()) m_register_allocator.runEager(function, {5, 7, 8});
+    else if (!m_checked_pointer_mode) {
+        for (const auto& block : function.blocks) for (const auto& instruction : block.instructions)
+            if (instruction.opcode == IROpcode::HardwareLoop) return;
+        m_register_allocator.run(function, {5, 7, 8});
+    }
 }
 
 bool IRCodeGenerator::usesRegisterAllocation(IRValueId value) const {
@@ -157,7 +216,7 @@ bool IRCodeGenerator::usesRegisterAllocation(IRValueId value) const {
     const auto location = m_register_allocator.find(value);
     const auto uses = m_use_counts.find(value.value);
     return location != nullptr && location->has_register &&
-           uses != m_use_counts.end() && uses->second > 1;
+           uses != m_use_counts.end() && (optimized() || uses->second > 1);
 }
 
 void IRCodeGenerator::saveLiveRegistersForCall(
@@ -167,9 +226,10 @@ void IRCodeGenerator::saveLiveRegistersForCall(
     for (const auto& pair : m_register_allocator.locations()) {
         const auto& location = pair.second;
         const auto uses = m_use_counts.find(pair.first);
-        if (m_spill_offsets.count(pair.first) || !location.has_register || uses == m_use_counts.end() || uses->second <= 1 ||
-            location.start > m_current_instruction_position ||
-            location.end < m_current_instruction_position ||
+        if (m_spill_offsets.count(pair.first) || !location.has_register || uses == m_use_counts.end() || (!optimized() && uses->second <= 1) ||
+            (globallyOptimized() ? !m_register_allocator.liveAcrossCall(IRValueId{pair.first}, m_current_instruction_position) :
+             (location.start > m_current_instruction_position ||
+              (optimized() ? location.end <= m_current_instruction_position : location.end < m_current_instruction_position))) ||
             (instruction.result.isValid() && pair.first == instruction.result.value)) {
             continue;
         }
@@ -233,7 +293,8 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
         }
         materialize(instruction.operands[0]);
         if (instruction.immediate > 0) {
-            if (m_checked_pointer_mode) {
+            if (m_checked_pointer_mode && !(provenAddress(instruction.result, instruction.type, 1) &&
+                provenAddress(instruction.operands[0], producer(instruction.operands[0], instruction.source).type, 1))) {
                 if (instruction.immediate > 65535) fail("IR codegen: member offset exceeds one bank.", instruction.source);
                 emitCompare(0, static_cast<std::uint16_t>(65536 - instruction.immediate));
                 emitGuard(12, 3);
@@ -248,7 +309,7 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
     if (m_data_manager.hasSymbol(instruction.symbol) &&
         m_data_manager.getEntries().at(instruction.symbol).storage == AddressSpace::RAM) {
         const auto patch = m_object_file.code_section.size();
-        emitRegisterLiteral(0, 0);
+        emitWordLiteral(0, 0);
         addRelocation(m_data_manager.getEntries().at(instruction.symbol).link_name, patch, RelocationType::ADDR16_RAM);
         return;
     }
@@ -290,21 +351,36 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
 }
 
 void IRCodeGenerator::emitLoadIndirect(const IRInstruction& instruction) {
+    m_last_ram_word_address = IRValueId{};
     if (instruction.operands.size() != 1) {
         fail("IR codegen: indirect load must have one address operand.", instruction.source);
     }
     const auto& address = producer(instruction.operands[0], instruction.source);
     materialize(instruction.operands[0]);
+    m_last_ram_word_address = IRValueId{};
     if (instruction.type.base == BaseType::STRUCT && instruction.type.pointer_level == 0)
         fail("IR codegen: aggregate by-value loads are not supported.", instruction.source);
     const bool far_address = isFarPointer(address.type);
     if (m_checked_pointer_mode && !(address.opcode == IROpcode::Address &&
         address.operation.empty() && address.symbol_id.isValid()))
-        emitAddressCheck(address.type, instruction.type.sizeInBytes);
+        ensureAddressChecked(instruction.operands[0], instruction.type.sizeInBytes);
     if (far_address) emitSelectBank(4, address.type.space);
     else if (address.type.space == AddressSpace::ROM) {
         emitNearBank(3, AddressSpace::ROM);
         emitSelectBank(3, AddressSpace::ROM);
+    }
+    if (optimized() && address.type.space == AddressSpace::RAM && !far_address && !isFarPointer(instruction.type)) {
+        // LOAD samples its address register before writing the destination.
+        // R0 can therefore carry both without copying it through R3.
+        if (usesByteStorage(instruction.type)) emitByte(0x3d);
+        emitByte(0x40);
+        if (instruction.type.pointer_level > 0) {
+            const auto element = pointeeType(instruction.type);
+            emitPointerValueCheck(instruction.type, element.sizeInBytes > 0 ? element.sizeInBytes : 1);
+        } else if (instruction.type.base == BaseType::BOOL) emitBoolNormalization();
+        if (!usesByteStorage(instruction.type) && instruction.type.sizeInBytes == 2)
+            m_last_ram_word_address = instruction.operands[0];
+        return;
     }
     emitMove(3, 0);
     const auto load_word = [&](std::uint8_t destination, bool byte) {
@@ -340,12 +416,34 @@ void IRCodeGenerator::emitLoadIndirect(const IRInstruction& instruction) {
     } else if (instruction.type.base == BaseType::BOOL) emitBoolNormalization();
 }
 
+void IRCodeGenerator::emitBinaryOperands(IRValueId left, IRValueId right) {
+    std::int64_t immediate = 0;
+    if (optimized() && constantValue(right, immediate) &&
+        producer(right, Token(TokenType::UNKNOWN, "", 0, 0)).type.pointer_level == 0) {
+        materialize(left);
+        emitRegisterLiteral(scratchRegister(), static_cast<std::uint16_t>(immediate));
+        return;
+    }
+    const auto* right_location = m_register_allocator.find(right);
+    if (optimized() && right_location && right_location->has_register) {
+        materialize(left);
+        emitMove(scratchRegister(), right_location->physical_register);
+    } else if (optimized()) {
+        materialize(right); emitMove(6, 0);
+        materialize(left); emitMove(scratchRegister(), 6);
+    } else {
+        materialize(right); emitPush(0);
+        materialize(left); emitPop(scratchRegister());
+    }
+}
+
 void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
     if (instruction.operands.size() != 2) {
         fail("IR codegen: binary instruction must have two operands.", instruction.source);
     }
     const auto left = instruction.operands[0];
     const auto right = instruction.operands[1];
+    if (optimized() && emitConstantArithmetic(instruction)) return;
     std::int64_t immediate = 0;
     const bool right_immediate = constantValue(right, immediate) && immediate >= 0 && immediate <= 15;
     const auto right_literal = immediate;
@@ -357,6 +455,10 @@ void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
 
     if (op_base != 0 && right_immediate) {
         materialize(left);
+        if (optimized() && right_literal == 1) {
+            emitByte(op_base == 0x50 ? 0xd0 : 0xe0);
+            return;
+        }
         emitByte(static_cast<std::uint8_t>(OpCode::ALT2));
         emitByte(static_cast<std::uint8_t>(op_base | right_literal));
         return;
@@ -369,10 +471,30 @@ void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
         return;
     }
 
-    materialize(right);
-    emitPush(0);
-    materialize(left);
-    emitPop(scratchRegister());
+    if (optimized() && constantValue(right, immediate)) {
+        if ((instruction.operation == "&" || instruction.operation == "|" || instruction.operation == "^") &&
+            immediate >= 1 && immediate <= 15) {
+            materialize(left);
+            emitByte(instruction.operation == "^" ? 0x3f : 0x3e);
+            emitByte(static_cast<std::uint8_t>((instruction.operation == "&" ? 0x70 : 0xc0) | immediate));
+            return;
+        }
+        if ((instruction.operation == "<<" || instruction.operation == ">>") && immediate >= 0 && immediate < 16) {
+            materialize(left);
+            bool nonnegative = instruction.type.is_unsigned;
+            const auto& input = producer(left, instruction.source);
+            if (input.opcode == IROpcode::Binary && input.operation == "&") {
+                std::int64_t mask = 0;
+                for (const auto operand : input.operands)
+                    if (constantValue(operand, mask) && (static_cast<std::uint64_t>(mask) & 0x8000u) == 0)
+                        nonnegative = true;
+            }
+            emitConstantShift(instruction.operation == "<<", static_cast<unsigned>(immediate), nonnegative);
+            return;
+        }
+    }
+
+    emitBinaryOperands(left, right);
 
     if (instruction.operation == "&" || instruction.operation == "|" || instruction.operation == "^" ||
         instruction.operation == "<<" || instruction.operation == ">>" || instruction.operation == "/" || instruction.operation == "%") {
@@ -471,6 +593,8 @@ void IRCodeGenerator::emitCast(const IRInstruction& instruction) {
     if (instruction.type.pointer_level > 0) {
         if (source.operation == "null") return;
         if (!needsPointerSpill(instruction)) return;
+        const auto element = pointeeType(instruction.type);
+        if (provenAddress(instruction.result, instruction.type, element.sizeInBytes > 0 ? element.sizeInBytes : 1)) return;
         const auto nonnull = localLabel(), done = localLabel();
         emitCompare(0, 0); emitLocalJump(nonnull, 8);
         if (isFarPointer(source.type)) { emitCompare(4, 0); emitLocalJump(nonnull, 8); }
@@ -484,7 +608,6 @@ void IRCodeGenerator::emitCast(const IRInstruction& instruction) {
         } else if (!isFarPointer(source.type) && isFarPointer(instruction.type)) {
             emitNearBank(4, instruction.type.space);
         }
-        const auto element = pointeeType(instruction.type);
         emitAddressCheck(instruction.type, element.sizeInBytes > 0 ? element.sizeInBytes : 1);
         bindLabel(done);
         return;
@@ -501,8 +624,12 @@ void IRCodeGenerator::emitCast(const IRInstruction& instruction) {
 }
 
 void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
+    m_checked_addresses.clear();
+    m_spill_cache.clear();
+    m_last_ram_word_address = IRValueId{};
     std::vector<std::uint8_t> saved_registers;
     saveLiveRegistersForCall(instruction, saved_registers);
+    if (m_has_hardware_loop) { emitPush(12); emitPush(13); }
     if (m_isInPlottingContext) { emitPush(1); emitPush(2); }
     std::size_t argument_bytes = 0;
     for (auto argument = instruction.operands.rbegin();
@@ -521,12 +648,16 @@ void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
     // IWT R15 leaves the next opcode in the pipeline. LINK #4 returns after
     // this delay slot, so caller cleanup must begin after the NOP.
     emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+    // Even a no-argument call can perform arbitrary RAM accesses in its callee.
+    m_last_ram_word_address = IRValueId{};
+    m_stack_check_credit.reset();
     if (instruction.operands.size() >
         std::numeric_limits<std::size_t>::max() / GSUAbi::ParameterSlotSize) {
         fail("IR codegen: call argument area is too large.", instruction.source);
     }
     emitAdjustStack(argument_bytes, true, instruction.source);
     if (m_isInPlottingContext) { emitPop(2); emitPop(1); }
+    if (m_has_hardware_loop) { emitPop(13); emitPop(12); }
     restoreRegistersAfterCall(saved_registers);
 }
 
@@ -538,17 +669,60 @@ void IRCodeGenerator::emitStoreIndirect(const IRInstruction& instruction) {
     const auto value = instruction.operands[1];
     const auto& target = producer(address, instruction.source);
     const bool byte = usesByteStorage(instruction.type);
-    if (m_checked_pointer_mode) {
-        const auto& pointer = producer(address, instruction.source).type;
-        if (pointer.space == AddressSpace::ROM)
+    if (optimized() || m_checked_pointer_mode) {
+        if (target.type.space == AddressSpace::ROM)
             fail("IR codegen: cannot store through a ROM address.", instruction.source);
         if (instruction.type.base == BaseType::STRUCT && instruction.type.pointer_level == 0)
             fail("IR codegen: aggregate by-value stores are not supported.", instruction.source);
+    }
+    if (optimized() && !isFarPointer(target.type) && !isFarPointer(instruction.type)) {
+        const auto* location = m_register_allocator.find(value);
+        const auto value_reg = static_cast<std::uint8_t>(location && location->has_register ? location->physical_register : 0);
+        if (m_ephemeral_values.count(address.value) && m_accumulator_value.value == address.value &&
+            provenAddress(address, target.type, instruction.type.sizeInBytes)) {
+            std::int64_t literal = 0;
+            if (value_reg || constantValue(value, literal)) {
+                if (!value_reg) emitRegisterLiteral(6, static_cast<std::uint16_t>(literal));
+                emitStore(0, value_reg ? value_reg : 6, byte);
+                if (!byte) m_last_ram_word_address = address;
+                return;
+            }
+        }
+        if (value_reg == 0) materialize(value);
+        // Test after materializing the value: a spill/reload may have replaced
+        // the address latch. SBK is always 16-bit, including after byte loads.
+        const bool word = !byte && instruction.type.sizeInBytes == 2;
+        if (word && matchesLastRamWordAddress(address)) {
+            if (value_reg != 0) emitByte(static_cast<std::uint8_t>(0x20 | value_reg));
+            emitByte(0x90); // SBK: same checked address/bank, no address reload.
+            return;
+        }
+        const auto* address_location = m_register_allocator.find(address);
+        if (globallyOptimized() && address_location && address_location->has_register &&
+            provenAddress(address, target.type, instruction.type.sizeInBytes)) {
+            // The address is already live in an allocatable RAM-address
+            // register. STW/STB reads it before consuming the selected value.
+            emitStore(address_location->physical_register, value_reg, byte);
+            m_last_ram_word_address = word ? address : IRValueId{};
+            return;
+        }
+        const auto reg = static_cast<std::uint8_t>(value_reg == 0 ? 6 : value_reg);
+        if (value_reg == 0) emitMove(6, 0);
+        materialize(address);
+        if (!(target.opcode == IROpcode::Address && target.operation.empty() && target.symbol_id.isValid()))
+            ensureAddressChecked(address, instruction.type.sizeInBytes);
+        emitStore(0, reg, byte);
+        if (word) m_last_ram_word_address = address;
+        return;
+    }
+    if (m_checked_pointer_mode) {
+        const auto& pointer = producer(address, instruction.source).type;
         materialize(value);
         emitPush(0);
         if (isFarPointer(instruction.type)) emitPush(4);
         materialize(address);
-        if (!(target.opcode == IROpcode::Address && target.operation.empty() && target.symbol_id.isValid()))
+        if (!(target.opcode == IROpcode::Address && target.operation.empty() && target.symbol_id.isValid()) &&
+            !provenAddress(address, pointer, instruction.type.sizeInBytes))
             emitAddressCheck(pointer, instruction.type.sizeInBytes);
         emitMove(3, 0);
         if (isFarPointer(pointer)) emitMove(6, 4);
@@ -583,36 +757,78 @@ void IRCodeGenerator::emitStoreIndirect(const IRInstruction& instruction) {
 }
 
 void IRCodeGenerator::emitHardwareLoop(const IRInstruction& instruction) {
+    m_last_ram_word_address = IRValueId{};
     if (instruction.operands.size() != 1) {
         fail("IR codegen: hardware loop must have a count operand.", instruction.source);
     }
+    // The body has an implicit backedge: straight-line state before its first
+    // iteration cannot justify eliding COLOR/CMODE on subsequent iterations.
+    m_known_color = m_known_plot_options = -1;
+    // Inline IR scopes can nest or call a function that owns another LOOP,
+    // just like exposed CFG scopes. Preserve both implicit loop registers.
+    emitPush(12); emitPush(13);
     std::int64_t count = 0;
     if (constantValue(instruction.operands[0], count)) {
-        emitByte(static_cast<std::uint8_t>(OpCode::IWT) | 0x0C);
-        emitWord(static_cast<std::uint16_t>(count));
+        emitRegisterLiteral(12, static_cast<std::uint16_t>(count));
     } else {
         materialize(instruction.operands[0]);
         emitMove(12, 0);
     }
-    // MOVE R13,R15 captures the address of the first body instruction.
-    // The reversed operands would instead jump to the stale R13.
-    emitMove(13, 15);
+    // TO executes with R15 at the prefetched first body byte. Copy PC to R13,
+    // never R13 to PC; LOOP executes its prefetched NOP before returning here.
+    if (instruction.targets.empty()) emitMove(13, 15);
+    else {
+        const auto patch = m_object_file.code_section.size();
+        emitWordLiteral(13, 0);
+        addRelocation(loopEntrySymbol(instruction.loop_target, true), patch, RelocationType::ADDR16_IWT);
+        const auto header = m_hardware_headers.find(instruction.loop_id);
+        if (header != m_hardware_headers.end() && m_cache_trips.count(header->second.value) && count >= 2) {
+            m_auto_caches.push_back({m_object_file.code_section.size(), header->second,
+                static_cast<std::uint32_t>(count), false});
+            emitByte(1); // Same selector reset as CACHE; decide after layout.
+        }
+        emitBranch(instruction.targets.front(), instruction.source);
+    }
+    // The next emitted byte is also the hardware backedge target. Its first
+    // iteration cannot lend an address-latch assumption to later iterations.
+    m_last_ram_word_address = IRValueId{};
+    m_stack_check_credit.reset();
 }
 
 void IRCodeGenerator::materialize(IRValueId value) {
     const auto& instruction = producer(value, Token(TokenType::UNKNOWN, "", 0, 0));
+    const bool scalar_snapshot = optimized() && ((instruction.type.pointer_level == 0 &&
+        (instruction.type.base == BaseType::BYTE || instruction.type.base == BaseType::WORD || instruction.type.base == BaseType::BOOL)) ||
+        m_ephemeral_values.count(value.value));
+    if (scalar_snapshot && value.value != m_emitting_value.value && m_accumulator_value.value == value.value) return;
     if (m_spill_offsets.count(value.value) && value.value != m_emitting_value.value) {
-        emitSpill(value, true);
+        const auto copy = globallyOptimized() && scalar_snapshot ? m_spill_cache.find(value) : -1;
+        if (copy >= 0) emitMove(0, static_cast<std::uint8_t>(copy));
+        else { emitSpill(value, true); retainSpillCopy(value, true); }
+        if (scalar_snapshot) m_accumulator_value = value;
         return;
     }
     const auto* location = m_register_allocator.find(value);
-    if (location != nullptr && !location->has_register && !location->rematerializable) {
+    if (scalar_snapshot && value.value == m_emitting_value.value && usesRegisterAllocation(value) &&
+        emitAllocatedOperation(instruction, location->physical_register)) {
+        // Eager emission has no R0-result contract: later consumers load the
+        // allocated register. Do not claim an accumulator snapshot here.
+        m_materialized_values.insert(value.value);
+        return;
+    }
+    if (optimized() && value.value != m_emitting_value.value && location && location->has_register) {
+        emitMove(0, location->physical_register);
+        if (scalar_snapshot) m_accumulator_value = value;
+        return;
+    }
+    if (!optimized() && location != nullptr && !location->has_register && !location->rematerializable) {
         fail("IR codegen: value with observable effects requires a spill slot.",
              instruction.source);
     }
     if (usesRegisterAllocation(value) &&
         m_materialized_values.count(value.value) != 0) {
         emitMove(0, location->physical_register);
+        if (scalar_snapshot) m_accumulator_value = value;
         return;
     }
     if (!m_active_values.insert(value.value).second) {
@@ -624,6 +840,7 @@ void IRCodeGenerator::materialize(IRValueId value) {
             emitMove(0, instruction.immediate == 0 ? 1 : 2);
             break;
         case IROpcode::Rpix:
+            m_last_ram_word_address = IRValueId{};
             emitByte(0x10); // Explicitly direct the read result to R0, never R1/R2.
             emitByte(0x3d); emitByte(0x4c);
             break;
@@ -648,6 +865,15 @@ void IRCodeGenerator::materialize(IRValueId value) {
             break;
         case IROpcode::Binary:
             emitBinary(instruction);
+            break;
+        case IROpcode::DivMod:
+            emitDivMod(instruction);
+            break;
+        case IROpcode::DivModResult:
+            emitDivModResult(instruction);
+            break;
+        case IROpcode::BitExtract:
+            emitBitExtract(instruction);
             break;
         case IROpcode::Unary: {
             if (instruction.operation == "!") {
@@ -692,27 +918,341 @@ void IRCodeGenerator::materialize(IRValueId value) {
         emitMove(location->physical_register, 0);
         m_materialized_values.insert(value.value);
     }
-    if (m_spill_offsets.count(value.value)) emitSpill(value, false);
+    if (m_spill_offsets.count(value.value)) { emitSpill(value, false); retainSpillCopy(value, false); }
     m_active_values.erase(value.value);
+    if (scalar_snapshot) m_accumulator_value = value;
+}
+
+void IRCodeGenerator::emitPhiCopies(IRBlockId target, const Token& source) {
+    m_checked_addresses.clear();
+    m_spill_cache.clear();
+    struct Move { IRValueId destination, source; bool saved = false; };
+    std::vector<Move> moves;
+    const auto same = [&](IRValueId a, IRValueId b) {
+        if (a.value == b.value) return true;
+        const auto* x = m_register_allocator.find(a);
+        const auto* y = m_register_allocator.find(b);
+        if (x && y && x->has_register && y->has_register) return x->physical_register == y->physical_register;
+        const auto sx = m_spill_offsets.find(a.value), sy = m_spill_offsets.find(b.value);
+        return sx != m_spill_offsets.end() && sy != m_spill_offsets.end() && sx->second == sy->second;
+    };
+    for (const auto& phi : m_current_function->blocks.at(target.value).instructions) {
+        if (phi.opcode != IROpcode::Phi) break;
+        if (!m_use_counts[phi.result.value]) continue;
+        for (std::size_t e = 0; e < phi.targets.size(); ++e)
+            if (phi.targets[e].value == m_current_block_index && !same(phi.result, phi.operands[e]))
+                moves.push_back({phi.result, phi.operands[e], false});
+    }
+    const bool register_only = std::all_of(moves.begin(), moves.end(), [&](const Move& move) {
+        const auto* destination = m_register_allocator.find(move.destination);
+        const auto* input = m_register_allocator.find(move.source);
+        return destination && input && destination->has_register && input->has_register;
+    });
+    while (!moves.empty()) {
+        std::size_t ready = moves.size();
+        for (std::size_t m = 0; m < moves.size(); ++m) {
+            bool needed = false;
+            for (std::size_t other = 0; other < moves.size(); ++other)
+                if (m != other && !moves[other].saved && same(moves[m].destination, moves[other].source)) needed = true;
+            if (!needed) { ready = m; break; }
+        }
+        if (ready == moves.size()) {
+            // R6 is volatile edge scratch, never an allocated value/cursor.
+            // A register-only cycle cannot clobber it while copying its other
+            // edges. Mixed memory/rematerialization cycles keep checked pushes.
+            const auto saved = moves.front().destination;
+            if (register_only) emitMove(6, m_register_allocator.find(saved)->physical_register);
+            else materialize(saved);
+            for (auto& move : moves) if (!move.saved && same(saved, move.source)) {
+                if (!register_only) emitPush(0);
+                move.saved = true;
+            }
+            m_accumulator_value = IRValueId{};
+            continue;
+        }
+        const auto move = moves[ready];
+        const auto* destination = m_register_allocator.find(move.destination);
+        const auto* input = m_register_allocator.find(move.source);
+        if (destination && destination->has_register && ((move.saved && register_only) ||
+            (!move.saved && input && input->has_register))) {
+            emitMove(destination->physical_register, move.saved ? 6 : input->physical_register);
+        } else if (optimized() && !move.saved && input && input->has_register &&
+                   m_spill_offsets.count(move.destination.value) &&
+                   !isFarPointer(producer(move.destination, source).type)) {
+            emitWordSpillStore(move.destination, input->physical_register);
+        } else {
+            if (move.saved) emitPop(0); else materialize(move.source);
+            if (destination && destination->has_register) emitMove(destination->physical_register, 0);
+            else if (m_spill_offsets.count(move.destination.value)) emitSpill(move.destination, false);
+            else fail("IR codegen: live phi has no register or spill slot.", source);
+        }
+        m_accumulator_value = IRValueId{}; m_last_ram_word_address = IRValueId{};
+        moves.erase(moves.begin() + static_cast<std::ptrdiff_t>(ready));
+    }
+}
+
+void IRCodeGenerator::emitMemoryInitialize(const IRInstruction& instruction) {
+    const auto& root = producer(instruction.operands.at(0), instruction.source);
+    const auto symbols = m_all_local_symbols.find(m_current_function->name);
+    if (symbols == m_all_local_symbols.end()) fail("IR codegen: initializer has no local table.", instruction.source);
+    const auto found = symbols->second.find(root.symbol_id);
+    if (found == symbols->second.end() || found->second.stackOffset >= 0 || found->second.type.is_volatile ||
+        found->second.type.pointer_level || found->second.type.array_size < 4 ||
+        static_cast<std::int64_t>(found->second.type.array_size) * found->second.type.sizeInBytes != instruction.immediate ||
+        found->second.type.base != instruction.type.base)
+        fail("IR codegen: initializer is not a proven local array.", instruction.source);
+    const auto& values = instruction.initialization_values;
+    const bool uniform = values.size() >= 32 && std::all_of(values.begin(), values.end(),
+        [&](std::uint16_t v) { return v == values[0]; });
+    m_spill_cache.clear(); m_last_ram_word_address = IRValueId{};
+    // Preserve the ABI loop registers before calculating R3: a stack guard
+    // can itself use R3. No saved SSA value or plotting cursor is overwritten.
+    if (uniform) { emitPush(12); emitPush(13); }
+    emitAddress(root); emitMove(3, 0);
+    const bool byte = usesByteStorage(instruction.type);
+    if (uniform) {
+        emitRegisterLiteral(12, static_cast<std::uint16_t>(values.size()));
+        const auto label = localLabel();
+        const auto patch = m_object_file.code_section.size();
+        emitWordLiteral(13, 0); addRelocation(label, patch, RelocationType::ADDR16_IWT);
+        emitLiteral(values[0]);
+        // Small, completely known emitted body. Fetch savings repay all cold
+        // cache lines even at the worst final 16-byte alignment.
+        if (!m_manual_cache) emitByte(static_cast<std::uint8_t>(OpCode::CACHE));
+        bindLabel(label);
+        emitStore(3, 0, byte); emitByte(0xd3); if (!byte) emitByte(0xd3);
+        emitByte(0x3c); emitByte(1);
+        emitPop(13); emitPop(12);
+    } else {
+        for (std::size_t n = 0; n < values.size(); ++n) {
+            if (n == 0 || values[n] != values[n - 1]) emitLiteral(values[n]);
+            emitStore(3, 0, byte);
+            if (n + 1 < values.size()) { emitByte(0xd3); if (!byte) emitByte(0xd3); }
+        }
+    }
+    m_accumulator_value = m_last_ram_word_address = IRValueId{};
+}
+
+void IRCodeGenerator::planLocalValues() {
+    for (const auto& block : m_current_function->blocks) {
+        std::map<std::uint32_t, std::size_t> positions;
+        for (std::size_t n = 0; n < block.instructions.size(); ++n)
+            if (block.instructions[n].result.isValid()) positions.emplace(block.instructions[n].result.value, n);
+        for (std::size_t n = 0; n < block.instructions.size(); ++n) {
+            const auto& write = block.instructions[n];
+            if (write.opcode != IROpcode::PlotCoordinateWrite) continue;
+            const auto& update = producer(write.operands[0], write.source);
+            if (update.opcode != IROpcode::Binary || update.operands.size() != 2 ||
+                (update.operation != "+" && update.operation != "-") || m_use_counts[update.result.value] != 1) continue;
+            const auto& read = producer(update.operands[0], write.source);
+            std::int64_t step = 0;
+            if (read.opcode != IROpcode::PlotCoordinateRead || read.immediate != write.immediate ||
+                m_use_counts[read.result.value] != 1 || !constantValue(update.operands[1], step) ||
+                (step != 1 && step != -1) || !positions.count(read.result.value) ||
+                !positions.count(update.result.value) || positions.at(read.result.value) >= n) continue;
+            bool adjacent = true;
+            for (auto p = positions.at(read.result.value) + 1; p < n; ++p) {
+                const auto& i = block.instructions[p];
+                if (i.opcode != IROpcode::Constant && i.result.value != update.result.value) {
+                    adjacent = false; break;
+                }
+            }
+            if (!adjacent) continue;
+            const bool increment = (step == 1) == (update.operation == "+");
+            m_cursor_updates.emplace(update.result.value, static_cast<std::uint8_t>((increment ? 0xd0 : 0xe0) | (write.immediate ? 2 : 1)));
+            m_cursor_elided_values.insert(read.result.value); m_cursor_elided_values.insert(update.result.value);
+        }
+        for (std::size_t n = 0; n + 1 < block.instructions.size(); ++n) {
+            const auto& value = block.instructions[n];
+            if (!value.producesValue() || m_use_counts[value.result.value] != 1 ||
+                m_cursor_elided_values.count(value.result.value) || m_branch_comparisons.count(value.result.value)) continue;
+            const auto* location = m_register_allocator.find(value.result);
+            if (!location || location->has_register || location->rematerializable) continue;
+            auto next = n + 1;
+            while (next < block.instructions.size() && block.instructions[next].opcode == IROpcode::Constant &&
+                !isFarPointer(block.instructions[next].type)) ++next;
+            if (next == block.instructions.size()) continue;
+            const auto& consumer = block.instructions[next];
+            if (consumer.operands.empty()) continue;
+            bool first = consumer.operands[0].value == value.result.value;
+            bool direct = first && (consumer.opcode == IROpcode::Cast || consumer.opcode == IROpcode::Unary ||
+                consumer.opcode == IROpcode::BitExtract || consumer.opcode == IROpcode::Return ||
+                consumer.opcode == IROpcode::PlotCoordinateWrite || consumer.opcode == IROpcode::SetColor ||
+                consumer.opcode == IROpcode::LoadIndirect || consumer.opcode == IROpcode::CondBranch);
+            if (first && consumer.opcode == IROpcode::Binary && consumer.operands.size() == 2) {
+                std::int64_t literal = 0;
+                const auto* right = m_register_allocator.find(consumer.operands[1]);
+                direct = constantValue(consumer.operands[1], literal) || (right && right->has_register);
+            }
+            if (consumer.opcode == IROpcode::StoreIndirect) {
+                const auto* stored = m_register_allocator.find(consumer.operands[1]);
+                std::int64_t literal = 0;
+                direct = first && !isFarPointer(consumer.type) && provenAddress(value.result, value.type, consumer.type.sizeInBytes) &&
+                    ((stored && stored->has_register) || constantValue(consumer.operands[1], literal));
+                // Value-first store materialization consumes R0 before calculating
+                // the address; no pointer arithmetic is deferred or reordered.
+                direct = direct || consumer.operands[1].value == value.result.value;
+            }
+            if (!direct || (consumer.opcode == IROpcode::PlotCoordinateWrite &&
+                m_cursor_updates.count(consumer.operands[0].value))) continue;
+            const auto address_width = first && (consumer.opcode == IROpcode::LoadIndirect || consumer.opcode == IROpcode::StoreIndirect)
+                ? consumer.type.sizeInBytes : 1;
+            if (value.type.pointer_level && (!provenAddress(value.result, value.type, address_width) || isFarPointer(value.type))) continue;
+            if (value.opcode == IROpcode::DivMod || value.opcode == IROpcode::Phi || isFarPointer(value.type)) continue;
+            m_ephemeral_values.insert(value.result.value);
+            if (value.type.pointer_level) m_ephemeral_address_widths.emplace(value.result.value, address_width);
+        }
+    }
+}
+
+std::string IRCodeGenerator::loopEntrySymbol(IRBlockId target, bool backedge) const {
+    auto symbol = internalBlockSymbol(m_current_function->name, target);
+    if (backedge && m_cached_headers.count(target.value)) symbol += "@after_cache";
+    return symbol;
+}
+
+void IRCodeGenerator::planLoopCaches() {
+    if (m_current_function->blocks.size() > 256 || m_current_function->value_count > 4096) return;
+    const IRControlFlow cfg(*m_current_function);
+    std::vector<const std::set<std::uint32_t>*> manual_scopes;
+    for (const auto& loop : cfg.loops) {
+        const auto& code = m_current_function->blocks[loop.header].instructions;
+        auto first = code.begin();
+        while (first != code.end() && first->opcode == IROpcode::Phi) ++first;
+        if (first != code.end() && first->opcode == IROpcode::Cache) manual_scopes.push_back(&loop.blocks);
+    }
+    std::size_t work = 0;
+    for (const auto& loop : cfg.loops) {
+        if (loop.latches.size() != 1 || !cfg.reachable[loop.header]) continue;
+        unsigned caches = 0; bool rebases = false;
+        for (const auto b : loop.blocks) for (const auto& i : m_current_function->blocks[b].instructions) {
+            if (++work > 1000000) return;
+            caches += i.opcode == IROpcode::Cache;
+            rebases = rebases || i.opcode == IROpcode::Call || i.opcode == IROpcode::HardwareLoop ||
+                i.opcode == IROpcode::MemoryInitialize || i.opcode == IROpcode::DivMod ||
+                (i.opcode == IROpcode::Binary && (i.operation == "/" || i.operation == "%"));
+        }
+        const auto& header = m_current_function->blocks[loop.header];
+        auto first = header.instructions.begin();
+        while (first != header.instructions.end() && first->opcode == IROpcode::Phi) ++first;
+        if (!rebases && caches == 1 && first != header.instructions.end() && first->opcode == IROpcode::Cache) {
+            m_cached_headers.insert(loop.header);
+            for (const auto b : loop.blocks) if (std::find(cfg.successors[b].begin(), cfg.successors[b].end(), loop.header) != cfg.successors[b].end())
+                m_cached_backedges.emplace(b, loop.header);
+        }
+        const bool manual_scope = std::any_of(manual_scopes.begin(), manual_scopes.end(),
+            [&](const std::set<std::uint32_t>* blocks) { return blocks->count(loop.header) != 0; });
+        for (const auto& block : m_current_function->blocks) {
+            if (loop.blocks.count(block.id.value) || block.instructions.empty()) continue;
+            const auto& setup = block.instructions.back();
+            if (setup.opcode != IROpcode::HardwareLoop || !setup.loop_target.isValid() ||
+                !loop.blocks.count(setup.loop_target.value)) continue;
+            bool matches = false;
+            for (const auto b : loop.blocks) for (const auto& i : m_current_function->blocks[b].instructions) {
+                if (++work > 1000000) return;
+                matches = matches || (i.opcode == IROpcode::HardwareLoopEnd && i.loop_id == setup.loop_id);
+            }
+            if (!matches) continue;
+            m_hardware_headers.emplace(setup.loop_id, IRBlockId{loop.header});
+            std::int64_t trips = 0;
+            if (m_allow_auto_cache && !manual_scope && !m_current_function->is_cached && !rebases && !caches &&
+                m_cache_trips.size() < 32 && constantValue(setup.operands[0], trips) && trips >= 2 && trips <= 65535)
+                m_cache_trips.emplace(loop.header, static_cast<std::uint32_t>(trips));
+        }
+        if (!m_allow_auto_cache || manual_scope || m_current_function->is_cached || rebases || caches || m_cache_trips.count(loop.header) ||
+            cfg.predecessors[loop.header].size() != 2 || header.instructions.empty()) continue;
+        const auto& branch = header.instructions.back();
+        if (branch.opcode != IROpcode::CondBranch || branch.targets.size() != 2 ||
+            !loop.blocks.count(branch.targets[0].value) || loop.blocks.count(branch.targets[1].value)) continue;
+        const auto& test = producer(branch.operands[0], branch.source);
+        if (test.opcode != IROpcode::Binary || test.operands.size() != 2 || (test.operation != "<" && test.operation != "<=")) continue;
+        const auto& phi = producer(test.operands[0], test.source);
+        const auto& limit = producer(test.operands[1], test.source);
+        if (phi.opcode != IROpcode::Phi || phi.operands.size() != 2 || phi.type.pointer_level || phi.type.base != BaseType::WORD ||
+            phi.type.base != limit.type.base || phi.type.is_unsigned != limit.type.is_unsigned) continue;
+        IRValueId initial, update;
+        for (std::size_t edge = 0; edge < 2; ++edge) {
+            if (loop.latches.count(phi.targets[edge].value)) update = phi.operands[edge];
+            else if (!loop.blocks.count(phi.targets[edge].value)) initial = phi.operands[edge];
+        }
+        if (!initial.isValid() || !update.isValid()) continue;
+        const auto& step = producer(update, test.source);
+        std::int64_t start = 0, bound = 0, stride = 0;
+        if (step.opcode != IROpcode::Binary || step.operation != "+" || step.operands.size() != 2 ||
+            step.operands[0].value != phi.result.value || !constantValue(step.operands[1], stride) || stride != 1 ||
+            !constantValue(initial, start) || !constantValue(limit.result, bound)) continue;
+        start = ConstantEvaluator::convert(start, phi.type); bound = ConstantEvaluator::convert(bound, phi.type);
+        const auto trips = bound - start + (test.operation == "<=" ? 1 : 0);
+        if (trips < 2 || trips > 65535 || start + trips > (phi.type.is_unsigned ? 65535 : 32767)) continue;
+        bool exits = false;
+        for (const auto b : loop.blocks) if (b != loop.header) for (const auto target : cfg.successors[b])
+            exits = exits || !loop.blocks.count(target);
+        if (!exits && m_cache_trips.size() < 32) m_cache_trips.emplace(loop.header, static_cast<std::uint32_t>(trips));
+    }
+}
+
+void IRCodeGenerator::selectAutomaticCaches() {
+    if (m_auto_caches.empty()) return;
+    m_had_cache_probe = true;
+    const IRControlFlow cfg(*m_current_function);
+    std::set<std::uint32_t> selected;
+    for (const auto& candidate : m_auto_caches) {
+        for (const auto& loop : cfg.loops) if (loop.header == candidate.header.value) {
+            const auto anchor = candidate.entry_slot ? m_block_addresses.at(loop.header) : candidate.offset + 1;
+            std::size_t end = anchor;
+            bool ordered = true;
+            bool overlaps = false;
+            for (const auto block : loop.blocks) {
+                const auto start = m_block_addresses.at(block);
+                ordered = ordered && start >= anchor;
+                overlaps = overlaps || selected.count(block) != 0;
+                const auto next = static_cast<std::size_t>(block) + 1;
+                end = std::max(end, next < m_current_function->blocks.size() ? m_block_addresses.at(static_cast<std::uint32_t>(next)) :
+                    m_object_file.code_section.size());
+            }
+            const auto bytes = end - anchor;
+            // The linker can place this object at any byte alignment. Reserve
+            // 15 bytes, not just the current object's observed low PC bits.
+            const auto cold = 80u * ((bytes + 30u) / 16u);
+            if (ordered && !overlaps && bytes <= 496 && static_cast<std::uint64_t>(candidate.trips - 1) * bytes * 4 > cold + 80) {
+                m_object_file.code_section.at(candidate.offset) = static_cast<std::uint8_t>(OpCode::CACHE);
+                m_selected_auto_cache = true;
+                selected.insert(loop.blocks.begin(), loop.blocks.end());
+            }
+        }
+    }
 }
 
 void IRCodeGenerator::emitBranch(IRBlockId target, const Token& source) {
-    if (target.isValid() && target.value == m_current_block_index + 1) {
+    if (globallyOptimized()) emitPhiCopies(target, source);
+    const bool bypass = m_cached_backedges.count({static_cast<std::uint32_t>(m_current_block_index), target.value}) != 0;
+    const auto alias = bypass ? loopEntrySymbol(target, true) : std::string{};
+    if (!bypass && target.isValid() && target.value == m_current_block_index + 1) {
         return;
     }
-    if (m_force_long_branches) {
+    const auto serial = m_branch_serial++;
+    if (longBranch(serial)) {
         emitByte(static_cast<std::uint8_t>(OpCode::IWT) | GSUAbi::ProgramCounterRegister);
         const auto patch_offset = m_object_file.code_section.size();
         emitWord(0);
         emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-        m_branch_fixups.push_back({patch_offset, target, source, true});
+        m_branch_fixups.push_back({patch_offset, target, source, true, alias, serial});
+        if (!bypass && m_cache_trips.count(target.value))
+            m_auto_caches.push_back({patch_offset + 2, target, m_cache_trips.at(target.value), true});
         return;
     }
     emitByte(static_cast<std::uint8_t>(OpCode::BRA));
     const auto patch_offset = m_object_file.code_section.size();
     emitByte(0);
     emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-    m_branch_fixups.push_back({patch_offset, target, source});
+    m_branch_fixups.push_back({patch_offset, target, source, false, alias, serial});
+    if (!bypass && m_cache_trips.count(target.value))
+        m_auto_caches.push_back({patch_offset + 1, target, m_cache_trips.at(target.value), true});
+}
+
+bool IRCodeGenerator::longBranch(std::size_t serial) const {
+    const auto found = m_long_branches.find(m_current_function->name);
+    return m_force_long_branches || (found != m_long_branches.end() && found->second.count(serial));
 }
 
 void IRCodeGenerator::emitBlockBranch(std::uint8_t opcode, IRBlockId target,
@@ -721,12 +1261,15 @@ void IRCodeGenerator::emitBlockBranch(std::uint8_t opcode, IRBlockId target,
         emitBranch(target, source);
         return;
     }
-    if (!m_force_long_branches) {
+    const auto serial = m_branch_serial++;
+    const auto alias = m_cached_backedges.count({static_cast<std::uint32_t>(m_current_block_index), target.value})
+        ? loopEntrySymbol(target, true) : std::string{};
+    if (!longBranch(serial)) {
         emitByte(opcode);
         const auto patch_offset = m_object_file.code_section.size();
         emitByte(0);
         emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-        m_branch_fixups.push_back({patch_offset, target, source});
+        m_branch_fixups.push_back({patch_offset, target, source, false, alias, serial});
         return;
     }
 
@@ -750,16 +1293,78 @@ void IRCodeGenerator::emitBlockBranch(std::uint8_t opcode, IRBlockId target,
     const auto patch_offset = m_object_file.code_section.size();
     emitWord(0);
     emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-    m_branch_fixups.push_back({patch_offset, target, source, true});
+    m_branch_fixups.push_back({patch_offset, target, source, true, alias, serial});
 }
 
 void IRCodeGenerator::emitConditionalBranch(const IRInstruction& instruction) {
     if (instruction.operands.size() != 1 || instruction.targets.size() != 2) {
         fail("IR codegen: conditional branch shape is invalid.", instruction.source);
     }
+    if (optimized() && m_branch_comparisons.count(instruction.operands.front().value)) {
+        const auto& comparison = producer(instruction.operands.front(), instruction.source);
+        // A just-emitted word +/- 1 already set Z for its register result.
+        // Constants emit no bytes here; any other intervening instruction,
+        // spill store, byte normalization or different predicate fences this
+        // reuse. In particular, loads/calls/graphics effects never qualify.
+        bool reuse_zero = false;
+        std::int64_t zero = 1;
+        const auto& code = m_current_function->blocks.at(m_current_block_index).instructions;
+        if (globallyOptimized() && (comparison.operation == "==" || comparison.operation == "!=") &&
+            constantValue(comparison.operands[1], zero) && zero == 0 && code.size() >= 3) {
+            std::size_t prior = code.size() - 2;
+            while (prior && code[prior - 1].opcode == IROpcode::Constant) --prior;
+            if (prior) {
+                const auto& update = code[prior - 1];
+                const auto* place = m_register_allocator.find(update.result);
+                const auto* input = update.operands.empty() ? nullptr : m_register_allocator.find(update.operands[0]);
+                std::int64_t one = 0;
+                reuse_zero = update.opcode == IROpcode::Binary && update.operands.size() == 2 &&
+                    update.result.value == comparison.operands[0].value &&
+                    update.type.base == BaseType::WORD && update.type.sizeInBytes == 2 && !update.type.pointer_level &&
+                    (update.operation == "+" || update.operation == "-") &&
+                    place && place->has_register && input && input->has_register &&
+                    constantValue(update.operands[1], one) && one == 1;
+            }
+        }
+        if (!reuse_zero) {
+            emitBinaryOperands(comparison.operands[0], comparison.operands[1]);
+            emitByte(0x3f); emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
+        }
+        const bool is_unsigned = producer(comparison.operands[0], instruction.source).type.is_unsigned;
+        const std::uint8_t less = is_unsigned ? 12 : 7;
+        const std::uint8_t ge = is_unsigned ? 13 : 6;
+        const auto yes = instruction.targets[0], no = instruction.targets[1];
+        const auto& op = comparison.operation;
+        if (op == "<=") {
+            emitBlockBranch(less, yes, instruction.source);
+            emitBlockBranch(9, yes, instruction.source);
+            emitBranch(no, instruction.source);
+        } else if (op == ">") {
+            emitBlockBranch(less, no, instruction.source);
+            emitBlockBranch(9, no, instruction.source);
+            emitBranch(yes, instruction.source);
+        } else {
+            const std::uint8_t false_opcode = op == "<" ? ge : op == ">=" ? less : op == "==" ? 8 : 9;
+            if (no.value == m_current_block_index + 1) {
+                emitBlockBranch(static_cast<std::uint8_t>(false_opcode ^ 1u), yes, instruction.source);
+            } else {
+                emitBlockBranch(false_opcode, no, instruction.source);
+                emitBranch(yes, instruction.source);
+            }
+        }
+        return;
+    }
     // Materialize every condition as 0 or 1. This keeps comparison semantics
     // in one place and also makes nested comparisons ordinary values.
     materialize(instruction.operands.front());
+    if (optimized()) {
+        emitRegisterLiteral(scratchRegister(), 0);
+        emitByte(0x3f); emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
+        const auto yes = instruction.targets[0], no = instruction.targets[1];
+        if (no.value == m_current_block_index + 1) emitBlockBranch(8, yes, instruction.source);
+        else { emitBlockBranch(9, no, instruction.source); emitBranch(yes, instruction.source); }
+        return;
+    }
     emitByte(static_cast<std::uint8_t>(OpCode::IWT) | scratchRegister());
     emitWord(0);
     emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
@@ -772,13 +1377,13 @@ void IRCodeGenerator::emitConditionalBranch(const IRInstruction& instruction) {
         const auto false_patch = m_object_file.code_section.size();
         emitWord(0);
         emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-        m_branch_fixups.push_back({false_patch, instruction.targets[1], instruction.source, true});
+        m_branch_fixups.push_back({false_patch, instruction.targets[1], instruction.source, true, {}, 0});
     } else {
         emitByte(static_cast<std::uint8_t>(OpCode::BEQ));
         const auto false_patch = m_object_file.code_section.size();
         emitByte(0);
         emitByte(static_cast<std::uint8_t>(OpCode::NOP));
-        m_branch_fixups.push_back({false_patch, instruction.targets[1], instruction.source});
+        m_branch_fixups.push_back({false_patch, instruction.targets[1], instruction.source, false, {}, 0});
     }
     emitBranch(instruction.targets[0], instruction.source);
 }
@@ -791,9 +1396,22 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
         ? instruction.targets.size() - 1
         : instruction.targets.size();
 
+    const auto& selector_type = producer(instruction.operands.front(), instruction.source).type;
+    const bool unsigned_selector = selector_type.is_unsigned;
+    const bool byte_selector = selector_type.sizeInBytes == 1;
+    const std::int64_t minimum = unsigned_selector ? 0 : byte_selector ? -128 : -32768;
+    const std::int64_t maximum = unsigned_selector ? (byte_selector ? 255 : 65535) : (byte_selector ? 127 : 32767);
+    std::vector<std::size_t> order;
+    for (std::size_t index = 0; index < instruction.case_values.size(); ++index) {
+        // An out-of-domain label is legal but cannot match. In particular,
+        // do not alias case -1 with unsigned 65535, or case 256 with byte 0.
+        if (instruction.case_values[index] >= minimum && instruction.case_values[index] <= maximum)
+            order.push_back(index);
+    }
+
     std::int64_t constant_selector = 0;
     if (constantValue(instruction.operands.front(), constant_selector)) {
-        for (std::size_t index = 0; index < instruction.case_values.size(); ++index) {
+        for (const auto index : order) {
             if (instruction.case_values[index] == constant_selector) {
                 emitBranch(instruction.targets[index], instruction.source);
                 return;
@@ -806,15 +1424,17 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
     }
 
     materialize(instruction.operands.front());
+    // LDB supplies raw, zero-extended bits. Dispatch compares the byte's
+    // signed value in the GSU's 16-bit comparison domain.
+    if (byte_selector && !unsigned_selector) emitByte(static_cast<std::uint8_t>(OpCode::SEX));
     emitMove(scratchRegister(), 0);
 
     // A short switch remains a compact linear chain. For larger switches,
     // compare against the median case and recursively search each half. This
     // reduces comparisons from O(n) to O(log n) without changing case/fall-
     // through semantics or the object-file relocation model.
-    if (instruction.case_values.size() < 4) {
-        for (std::size_t case_index = 0;
-             case_index < instruction.case_values.size(); ++case_index) {
+    if (order.size() < 4) {
+        for (const auto case_index : order) {
             emitLiteral(instruction.case_values[case_index]);
             emitByte(static_cast<std::uint8_t>(OpCode::ALT3));
             emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
@@ -828,8 +1448,6 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
         return;
     }
 
-    std::vector<std::size_t> order(instruction.case_values.size());
-    for (std::size_t index = 0; index < order.size(); ++index) order[index] = index;
     std::stable_sort(order.begin(), order.end(), [&](std::size_t left, std::size_t right) {
         return instruction.case_values[left] < instruction.case_values[right];
     });
@@ -853,6 +1471,7 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
 
     std::function<void(std::size_t, std::size_t, std::size_t)> emit_search;
     emit_search = [&](std::size_t begin, std::size_t end, std::size_t label) {
+        m_stack_check_credit.reset(); // Each search node is a control-flow entry.
         labels[label] = m_object_file.code_section.size();
         const auto middle = begin + (end - begin) / 2;
         const auto case_index = order[middle];
@@ -868,11 +1487,11 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
         std::size_t right_label = 0;
         if (has_left) {
             left_label = new_label();
-            // The GSU CMP/branch convention used by the existing relational
-            // emitter selects the lower half with BPL after cmp scratch,R0.
-            emit_local_branch(static_cast<std::uint8_t>(OpCode::BPL), left_label);
+            // CMP computes case - selector. Equality was handled above;
+            // signed ordering needs S == V, not just a nonnegative result.
+            emit_local_branch(static_cast<std::uint8_t>(unsigned_selector ? OpCode::BCS : OpCode::BGE), left_label);
         } else if (default_index < instruction.targets.size()) {
-            emit_block_branch(static_cast<std::uint8_t>(OpCode::BPL),
+            emit_block_branch(static_cast<std::uint8_t>(unsigned_selector ? OpCode::BCS : OpCode::BGE),
                               instruction.targets[default_index]);
         }
         if (has_right) {
@@ -900,6 +1519,7 @@ void IRCodeGenerator::emitSwitch(const IRInstruction& instruction) {
 }
 
 void IRCodeGenerator::patchLocalBranches(const std::vector<LocalBranchFixup>& fixups) {
+    m_stack_check_credit.reset(); // Manual comparison/switch joins also fence credit.
     for (const auto& fixup : fixups) {
         const auto next_instruction = static_cast<std::int64_t>(fixup.patch_offset) + 1;
         const auto distance = static_cast<std::int64_t>(fixup.target_offset) - next_instruction;
@@ -914,11 +1534,18 @@ void IRCodeGenerator::patchLocalBranches(const std::vector<LocalBranchFixup>& fi
 void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
     switch (instruction.opcode) {
         case IROpcode::PlotCoordinateWrite:
+            if (m_cursor_updates.count(instruction.operands.front().value)) {
+                emitByte(m_cursor_updates.at(instruction.operands.front().value));
+                break;
+            }
             materialize(instruction.operands.front());
             emitMove(instruction.immediate == 0 ? 1 : 2, 0);
             break;
         case IROpcode::StoreIndirect:
             emitStoreIndirect(instruction);
+            break;
+        case IROpcode::MemoryInitialize:
+            emitMemoryInitialize(instruction);
             break;
         case IROpcode::PlotBegin:
         case IROpcode::PlotEnd:
@@ -926,6 +1553,7 @@ void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
             // blocks happen to be emitted (return/break can skip plot.end).
             break;
         case IROpcode::Plot:
+            m_last_ram_word_address = IRValueId{};
             // PLOT reads the persistent cursor and increments R1 in hardware.
             emitByte(0x4C);
             break;
@@ -941,13 +1569,22 @@ void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
                 // with that buffer in hardware, just like GETB; no address operand.
                 emitByte(0xdf);
                 if (isFarPointer(address)) { emitNearBank(3, AddressSpace::ROM); emitSelectBank(3, AddressSpace::ROM); }
-            } else emitByte(static_cast<std::uint8_t>(OpCode::COLOR_R));
+                m_known_color = -1;
+            } else {
+                std::int64_t color = 0;
+                const bool constant = constantValue(instruction.operands.front(), color);
+                const auto byte = static_cast<int>(static_cast<std::uint16_t>(color) & 255u);
+                if (!optimized() || !constant || m_known_color != byte)
+                    emitByte(static_cast<std::uint8_t>(OpCode::COLOR_R));
+                m_known_color = constant ? byte : -1;
+            }
             break;
         case IROpcode::CMode:
             if (m_known_plot_options != instruction.immediate) {
                 emitLiteral(instruction.immediate);
                 emitByte(static_cast<std::uint8_t>(OpCode::ALT1)); emitByte(0x4E);
                 m_known_plot_options = static_cast<int>(instruction.immediate);
+                m_known_color = -1;
             }
             break;
         case IROpcode::Cache:
@@ -955,6 +1592,7 @@ void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
             break;
         case IROpcode::Rpix:
             emitByte(0x10);
+            m_last_ram_word_address = IRValueId{};
             emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
             emitByte(0x4C);
             break;
@@ -962,8 +1600,15 @@ void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
             emitHardwareLoop(instruction);
             break;
         case IROpcode::HardwareLoopEnd:
+            m_last_ram_word_address = IRValueId{};
             emitByte(0x3C);
             emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+            if (!instruction.targets.empty()) emitBranch(instruction.targets[1], instruction.source);
+            else { emitPop(13); emitPop(12); }
+            m_known_color = m_known_plot_options = -1;
+            break;
+        case IROpcode::HardwareLoopLeave:
+            emitPop(13); emitPop(12);
             break;
         case IROpcode::Branch:
             emitBranch(instruction.targets.front(), instruction.source);
@@ -989,13 +1634,27 @@ void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
 }
 
 void IRCodeGenerator::emitBlock(const IRBasicBlock& block) {
+    m_spill_cache.clear();
+    m_checked_addresses.clear();
+    m_block_remaining_uses.clear();
+    for (const auto& i : block.instructions) if (i.opcode != IROpcode::Phi)
+        for (const auto v : i.operands) ++m_block_remaining_uses[v.value];
+    m_stack_check_credit.reset();
+    m_accumulator_value = IRValueId{};
+    m_last_ram_word_address = IRValueId{};
     // POR is unknown at a CFG join/backedge. Only elide straight-line repeats.
     m_known_plot_options = -1;
+    m_known_color = -1;
     m_materialized_values.clear();
     for (const auto& instruction : block.instructions) {
         m_current_instruction_position = m_emission_position++;
+        if (globallyOptimized()) m_spill_cache.enter(m_register_allocator.spareRegisters(m_current_instruction_position));
+        if (instruction.opcode != IROpcode::Phi) for (const auto v : instruction.operands) {
+            auto& remaining = m_block_remaining_uses.at(v.value);
+            if (remaining) --remaining;
+        }
         m_isInPlottingContext = instruction.in_plot_context;
-        if (instruction.opcode == IROpcode::Call) m_known_plot_options = -1;
+        if (instruction.opcode == IROpcode::Call) { m_known_plot_options = -1; m_known_color = -1; }
         // A void call has no SSA result, but it is still a side effect that
         // must be emitted when it appears as an expression statement.
         if (instruction.opcode == IROpcode::Call &&
@@ -1004,6 +1663,17 @@ void IRCodeGenerator::emitBlock(const IRBasicBlock& block) {
             continue;
         }
         if (instruction.producesValue()) {
+            if (instruction.opcode == IROpcode::Phi) continue;
+            if (m_cursor_elided_values.count(instruction.result.value)) continue;
+            if (optimized()) {
+                if (m_branch_comparisons.count(instruction.result.value)) continue;
+                const auto* location = m_register_allocator.find(instruction.result);
+                if (location && location->rematerializable) continue;
+                m_emitting_value = instruction.result;
+                materialize(instruction.result);
+                m_emitting_value = IRValueId{};
+                continue;
+            }
             if (m_spill_offsets.count(instruction.result.value)) {
                 m_emitting_value = instruction.result;
                 materialize(instruction.result);
@@ -1019,34 +1689,91 @@ void IRCodeGenerator::emitBlock(const IRBasicBlock& block) {
             continue;
         }
         emitInstruction(instruction);
+        if (instruction.opcode == IROpcode::Cache && m_cached_headers.count(block.id.value)) {
+            m_object_file.symbol_table.push_back({loopEntrySymbol(block.id, true), SymbolSection::CODE,
+                static_cast<std::uint32_t>(m_object_file.code_section.size())});
+        }
     }
 }
 
 void IRCodeGenerator::patchBranches() {
+    std::map<std::string, std::size_t> labels;
+    if (optimized()) for (const auto& symbol : m_object_file.symbol_table)
+        if (symbol.section == SymbolSection::CODE) labels.emplace(symbol.name, symbol.offset);
+    bool widen = false;
     for (const auto& fixup : m_branch_fixups) {
         const auto target = m_block_addresses.find(fixup.target.value);
-        if (target == m_block_addresses.end()) {
+        const auto local = labels.find(fixup.local_target);
+        if (fixup.local_target.empty() ? target == m_block_addresses.end() : local == labels.end()) {
             fail("IR codegen: branch target was not emitted.", fixup.source);
         }
         if (fixup.long_form) {
             // Branch fixups point at the operand, but ADDR16_IWT relocations
             // point at the opcode and patch its following two bytes.
-            addRelocation(internalBlockSymbol(m_current_function->name, fixup.target),
+            addRelocation(fixup.local_target.empty() ? internalBlockSymbol(m_current_function->name, fixup.target) : fixup.local_target,
                           fixup.patch_offset - 1, RelocationType::ADDR16_IWT);
             continue;
         }
         const auto next_instruction = static_cast<std::int64_t>(fixup.patch_offset) + 1;
-        const auto distance = static_cast<std::int64_t>(target->second) - next_instruction;
+        const auto distance = static_cast<std::int64_t>(fixup.local_target.empty() ? target->second : local->second) - next_instruction;
         if (distance < -128 || distance > 127) {
-            throw NeedsLongBranch{};
+            if (!optimized()) throw NeedsLongBranch{};
+            m_long_branches[m_current_function->name].insert(fixup.serial);
+            widen = true;
+            continue;
         }
         m_object_file.code_section.at(fixup.patch_offset) =
             static_cast<std::uint8_t>(static_cast<std::int8_t>(distance));
     }
+    if (widen) throw NeedsLongBranch{};
+}
+
+int IRCodeGenerator::planFrameStorage() {
+    m_spill_offsets.clear(); m_divmod_offsets.clear();
+    int frame_bytes = m_current_function->total_local_alloc_size;
+    std::map<int, int> shared_spills;
+    for (const auto& value : m_values) {
+        if (optimized()) {
+            const auto* location = m_register_allocator.find(IRValueId{value.first});
+            if (m_branch_comparisons.count(value.first) || m_cursor_elided_values.count(value.first) ||
+                m_ephemeral_values.count(value.first) || !m_use_counts[value.first] ||
+                (location && (location->has_register || location->rematerializable))) continue;
+        } else {
+            const auto opcode = value.second->opcode;
+            const bool observable = opcode == IROpcode::PlotCoordinateRead || opcode == IROpcode::LoadIndirect || opcode == IROpcode::Load || opcode == IROpcode::Call || value.second->hardwareEffects().observable();
+            const bool arithmetic_check = opcode == IROpcode::Binary &&
+                (value.second->operation == "/" || value.second->operation == "%" || value.second->operation == "<<" || value.second->operation == ">>");
+            if (!observable && !arithmetic_check && !(m_checked_pointer_mode && needsPointerSpill(*value.second))) continue;
+        }
+        const auto width = isFarPointer(value.second->type) ? 4 : 2;
+        const auto* location = globallyOptimized() ? m_register_allocator.find(IRValueId{value.first}) : nullptr;
+        if (location && location->spill_slot >= 0) {
+            const auto existing = shared_spills.find(location->spill_slot);
+            if (existing != shared_spills.end()) { m_spill_offsets.emplace(value.first, existing->second); continue; }
+        }
+        if (frame_bytes > 65526 - width)
+            fail("IR codegen: checked pointer frame exceeds one RAM bank.", value.second->source);
+        frame_bytes += width;
+        m_spill_offsets.emplace(value.first, -frame_bytes);
+        if (location && location->spill_slot >= 0) shared_spills.emplace(location->spill_slot, -frame_bytes);
+    }
+    if (!m_spill_offsets.empty()) frame_bytes += 2; // Empty word below the last spill.
+    if (globallyOptimized()) {
+        for (const auto& block : m_current_function->blocks) for (const auto& instruction : block.instructions) {
+            if (instruction.opcode != IROpcode::DivMod) continue;
+            if (frame_bytes > 65524) fail("IR codegen: divmod frame exceeds one RAM bank.", instruction.source);
+            frame_bytes += 2;
+            m_divmod_offsets.emplace(instruction.result.value, -frame_bytes);
+        }
+        if (!m_divmod_offsets.empty()) frame_bytes += 2; // Keep the last pair above the empty/null bottom word.
+    }
+    return frame_bytes;
 }
 
 ObjectFile IRCodeGenerator::generateInternal(const IRModule& module) {
     m_object_file = ObjectFile();
+    m_selected_auto_cache = m_had_cache_probe = false;
+    m_division_helpers.clear();
     m_object_file.config = m_config;
     m_object_file.config.bitmap = module.bitmap;
 
@@ -1056,21 +1783,41 @@ ObjectFile IRCodeGenerator::generateInternal(const IRModule& module) {
         m_use_counts.clear();
         m_active_values.clear();
         m_materialized_values.clear();
+        m_branch_comparisons.clear();
         m_block_addresses.clear();
         m_branch_fixups.clear();
+        m_branch_serial = 0;
         m_current_block_index = 0;
         m_current_instruction_position = 0;
         m_emission_position = 0;
         m_isInPlottingContext = false;
         m_spill_offsets.clear();
+        m_spill_cache.clear();
+        m_block_remaining_uses.clear();
+        m_divmod_offsets.clear();
+        m_fault_offsets.clear();
+        m_epilogue_label.clear();
         m_emitting_value = IRValueId{};
+        m_accumulator_value = IRValueId{};
+        m_last_ram_word_address = IRValueId{};
         m_local_label_serial = 0;
+        m_stack_check_credit.reset();
+        m_address_proof = GSUAddressProof{};
         m_checked_pointer_mode = function.return_type.pointer_level > 0;
+        m_has_hardware_loop = false;
+        m_auto_caches.clear(); m_manual_cache = function.is_cached;
+        m_cache_trips.clear(); m_hardware_headers.clear();
+        m_cached_headers.clear(); m_cached_backedges.clear();
+        m_cursor_updates.clear(); m_cursor_elided_values.clear(); m_ephemeral_values.clear();
+        m_ephemeral_address_widths.clear();
+        m_checked_addresses.clear();
         for (const auto& parameter : function.parameters)
             m_checked_pointer_mode = m_checked_pointer_mode || parameter.type.pointer_level > 0;
 
         for (const auto& block : function.blocks) {
             for (const auto& instruction : block.instructions) {
+                m_has_hardware_loop = m_has_hardware_loop || instruction.opcode == IROpcode::HardwareLoop;
+                m_manual_cache = m_manual_cache || instruction.opcode == IROpcode::Cache;
                 if (instruction.memory_volatile || instruction.in_plot_context) m_checked_pointer_mode = true;
                 if (instruction.result.isValid()) {
                     m_values[instruction.result.value] = &instruction;
@@ -1084,23 +1831,49 @@ ObjectFile IRCodeGenerator::generateInternal(const IRModule& module) {
                 }
             }
         }
-        int frame_bytes = function.total_local_alloc_size;
-        {
-            for (const auto& value : m_values) {
-                const auto opcode = value.second->opcode;
-                const bool observable = opcode == IROpcode::PlotCoordinateRead || opcode == IROpcode::LoadIndirect || opcode == IROpcode::Load || opcode == IROpcode::Call || value.second->hardwareEffects().observable();
-                const bool arithmetic_check = opcode == IROpcode::Binary &&
-                    (value.second->operation == "/" || value.second->operation == "%" || value.second->operation == "<<" || value.second->operation == ">>");
-                if (!observable && !arithmetic_check && !(m_checked_pointer_mode && needsPointerSpill(*value.second))) continue;
-                const auto width = isFarPointer(value.second->type) ? 4 : 2;
-                if (frame_bytes > 65526 - width)
-                    fail("IR codegen: checked pointer frame exceeds one RAM bank.", value.second->source);
-                frame_bytes += width;
-                m_spill_offsets.emplace(value.first, -frame_bytes);
+        if (optimized()) buildRegisterAllocation(function);
+        if (optimized()) {
+            for (const auto& block : function.blocks) {
+                if (block.instructions.size() < 2) continue;
+                const auto& branch = block.instructions.back();
+                const auto& comparison = block.instructions[block.instructions.size() - 2];
+                const auto& op = comparison.operation;
+                if (branch.opcode == IROpcode::CondBranch && comparison.opcode == IROpcode::Binary &&
+                    branch.operands.front().value == comparison.result.value && m_use_counts[comparison.result.value] == 1 &&
+                    (op == "<" || op == ">" || op == "<=" || op == ">=" || op == "==" || op == "!="))
+                    m_branch_comparisons.insert(comparison.result.value);
             }
-            if (!m_spill_offsets.empty()) frame_bytes += 2; // Empty word below the last spill.
         }
-        buildRegisterAllocation(function);
+        if (globallyOptimized()) {
+            const auto locals = m_all_local_symbols.find(function.name);
+            const Analyzer::LocalSymbolTable empty;
+            m_address_proof.run(function, locals == m_all_local_symbols.end() ? empty : locals->second,
+                static_cast<std::size_t>(function.total_local_alloc_size), m_checked_pointer_mode);
+            planLocalValues();
+            planLoopCaches();
+        }
+        int frame_bytes = planFrameStorage();
+        if (!optimized()) buildRegisterAllocation(function);
+        if (globallyOptimized()) {
+            const auto locals = m_all_local_symbols.find(function.name);
+            const Analyzer::LocalSymbolTable empty;
+            m_address_proof.run(function, locals == m_all_local_symbols.end() ? empty : locals->second,
+                                static_cast<std::size_t>(frame_bytes), m_checked_pointer_mode);
+            const bool lost_proof = std::any_of(m_ephemeral_address_widths.begin(), m_ephemeral_address_widths.end(),
+                [&](const std::pair<const std::uint32_t, int>& address) {
+                    return !provenAddress(IRValueId{address.first}, m_values.at(address.first)->type, address.second);
+                });
+            if (lost_proof) {
+                // Spill/divmod bottom words can exceed the proof's frame cap.
+                // Restore every pointer spill in one bounded retry; no emitter
+                // may rematerialize an unchecked address across a saved value.
+                for (const auto& address : m_ephemeral_address_widths) m_ephemeral_values.erase(address.first);
+                m_ephemeral_address_widths.clear();
+                frame_bytes = planFrameStorage();
+                m_address_proof.run(function, locals == m_all_local_symbols.end() ? empty : locals->second,
+                                    static_cast<std::size_t>(frame_bytes), m_checked_pointer_mode);
+            }
+        }
 
         const auto function_offset = static_cast<std::uint32_t>(m_object_file.code_section.size());
         m_object_file.symbol_table.push_back({function.link_name.empty() ? function.name : function.link_name, SymbolSection::CODE, function_offset});
@@ -1136,7 +1909,10 @@ ObjectFile IRCodeGenerator::generateInternal(const IRModule& module) {
             emitBlock(function.blocks[block_index]);
         }
         patchBranches();
+        selectAutomaticCaches();
     }
+
+    emitDivisionHelpers();
 
     for (const auto& pair : m_data_manager.getEntries()) {
         const auto& entry = pair.second;
@@ -1161,11 +1937,93 @@ ObjectFile IRCodeGenerator::generateInternal(const IRModule& module) {
         m_object_file.data_section.insert(m_object_file.data_section.end(),
                                           entry.bytes.begin(), entry.bytes.end());
     }
+    if (globallyOptimized()) GSUMachineScheduler::run(m_object_file);
     return m_object_file;
 }
 
 ObjectFile IRCodeGenerator::generate(const IRModule& module) {
+    if (sizeOptimized()) {
+        // Eight IR/helper policies with scheduled cache/no-cache alternatives.
+        // Compare emitted CODE plus
+        // DATA alignment, not IR node counts or frequency-weighted timing.
+        // The O2-policy candidate retains speed transformations only when they
+        // actually shrink bytes; it uses O2 allocation but no CACHE padding.
+        const auto bytes = [](const ObjectFile& object) {
+            return object.code_section.size() + object.data_section.size() +
+                (object.data_section.empty() ? 0u : static_cast<unsigned>(object.code_section.size() & 1u));
+        };
+        m_share_division = false;
+        auto best = generateOptimized(module, OptimizationLevel::O2);
+        std::size_t instructions = 0;
+        for (const auto& f : module.functions) for (const auto& b : f.blocks) instructions += b.instructions.size();
+        if (module.functions.size() > 64 || instructions > 16000) return best;
+        for (const auto policy : {OptimizationLevel::O2, OptimizationLevel::Size}) {
+            for (const bool shared : {false, true}) {
+                if (policy == OptimizationLevel::O2 && !shared) continue;
+                m_share_division = shared;
+                auto candidate = generateOptimized(module, policy);
+                if (bytes(candidate) < bytes(best)) best = std::move(candidate);
+            }
+        }
+        // LOOP's ABI saves and pointer SSA can be faster yet larger. Retain
+        // conservative IR alternatives rather than charging size mode for a
+        // speed win. Machine selection remains byte-exact in every candidate.
+        for (const auto policy : {OptimizationLevel::O2, OptimizationLevel::Size}) {
+            for (const bool shared : {false, true}) {
+                m_share_division = shared;
+                auto candidate = generateOptimized(module, policy, IRCompactionPolicy::Disabled);
+                if (bytes(candidate) < bytes(best)) best = std::move(candidate);
+            }
+        }
+        return best;
+    }
+    return generateOptimized(module, m_config.optimization);
+}
+
+ObjectFile IRCodeGenerator::generateOptimized(const IRModule& module, OptimizationLevel policy,
+    IRCompactionPolicy compaction) {
+    m_allocation_policy = policy;
+    m_division_candidates.clear();
     m_force_long_branches = false;
+    m_long_branches.clear();
+    if (optimized()) {
+        auto optimized_module = module;
+        if (globallyOptimized()) IRGlobalOptimizer::run(optimized_module, m_all_local_symbols, policy, compaction);
+        else IRLocalOptimizer::run(optimized_module, m_all_local_symbols);
+        if (sizeOptimized() && m_share_division) {
+            std::map<bool, unsigned> counts;
+            for (const auto& f : optimized_module.functions) for (const auto& b : f.blocks) for (const auto& i : b.instructions)
+                if (i.opcode == IROpcode::DivMod || (i.opcode == IROpcode::Binary && (i.operation == "/" || i.operation == "%")))
+                    ++counts[i.type.is_unsigned];
+            for (const auto& count : counts) if (count.second >= 2) m_division_candidates.insert(count.first);
+        }
+        // Monotonic widening, bounded independently of source size. If a
+        // pathological cascade needs more rounds, the checked long form wins.
+        const auto emit = [&]() {
+            for (unsigned pass = 0; pass < 8; ++pass) {
+                try { return generateInternal(optimized_module); }
+                catch (const NeedsLongBranch&) {}
+            }
+            m_force_long_branches = true;
+            return generateInternal(optimized_module);
+        };
+        m_allow_auto_cache = true;
+        auto result = emit();
+        const bool selected = m_selected_auto_cache, probed = m_had_cache_probe;
+        if (probed && (sizeOptimized() || !selected)) {
+            // Rejected probes must not leave padding. In size mode CACHE can
+            // also block useful-slot scheduling: compare actual scheduled bytes,
+            // not the pre-scheduler NOP replacement's apparent neutral cost.
+            m_allow_auto_cache = false;
+            m_force_long_branches = false; m_long_branches.clear();
+            auto uncached = emit();
+            const auto bytes = [](const ObjectFile& o) { return o.code_section.size() + o.data_section.size() +
+                (o.data_section.empty() ? 0u : static_cast<unsigned>(o.code_section.size() & 1u)); };
+            if (!selected || bytes(uncached) < bytes(result)) result = std::move(uncached);
+        }
+        m_allow_auto_cache = true;
+        return result;
+    }
     try {
         return generateInternal(module);
     } catch (const NeedsLongBranch&) {

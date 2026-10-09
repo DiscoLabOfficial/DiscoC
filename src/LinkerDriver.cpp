@@ -1,4 +1,5 @@
 #include "LinkerDriver.hpp"
+#include "GSUCodeLayout.hpp"
 #include "ProjectManifest.hpp"
 #include "Placement.hpp"
 #include <iostream>
@@ -284,7 +285,13 @@ int runLinker(std::vector<std::string> arguments) {
         }
 
         std::uint64_t current_code_offset = startup_size;
+        std::vector<std::uint64_t> code_bases;
         for (const auto& obj : objects) {
+            const auto code_alignment = GSUCodeLayout::alignment(obj);
+            while ((config.code_start_address + current_code_offset) % code_alignment) {
+                final_code.push_back(1); ++current_code_offset;
+            }
+            code_bases.push_back(current_code_offset);
             for (const auto& sym : obj.symbol_table)
                 if (sym.name == GSUAbi::NearRamBankSymbol || sym.name == GSUAbi::NearRomBankSymbol ||
                     sym.name.compare(0, std::string(GSUAbi::StackLimitPrefix).size(), GSUAbi::StackLimitPrefix) == 0)
@@ -404,6 +411,7 @@ int runLinker(std::vector<std::string> arguments) {
                 static_cast<std::uint64_t>(config.code_start_address) + final_code.size() + final_data.size());
 
         for (const auto& obj : objects) {
+            current_code_base = code_bases.at(current_object);
             while ((data_start_address + current_data_base) % obj.data_alignment) ++current_data_base;
             // The object owns these entries for the whole relocation pass.
             // Index local symbols once rather than rescanning for every use.

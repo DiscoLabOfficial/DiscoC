@@ -1,0 +1,59 @@
+bitmap screen { mode bitmap; size 256x128; depth 2bpp; base 0x4000; }
+
+void witness(word tag) { *(volatile word*)0x0150 += tag; }
+
+word constant_join(word seed) {
+    word selector;
+    if (seed & 1) selector = 5; else selector = 5;
+    word result = 0;
+    switch (selector) {
+        case 5: result = 42; break;
+        default: witness(999); result = -1; break;
+    }
+    return result;
+}
+
+word main() {
+    use bitmap screen;
+    word seed = *(volatile word*)0x0100;
+    volatile word* out = (volatile word*)0x0120;
+    word a;
+    word b;
+    if (seed) { a = 12; b = 30; } else { a = 12; b = 30; }
+    word sum = a + b;
+    if (sum == 42) witness(3); else witness(999);
+    out[0] = sum;
+    out[1] = constant_join(seed);
+    word varying;
+    if (seed) varying = 11; else varying = 19;
+    out[2] = varying;
+    word high;
+    if (seed) high = 32767; else high = 32767;
+    out[3] = high + 1;
+    out[4] = (word)(byte)high;
+
+    // The loop PHI starts as zero but becomes variable after its backedge.
+    word index = 0;
+    while (index == 0) index++;
+    out[5] = index;
+    word repeated = 0;
+    for (word count = 3; count > 0; count = count - 1) {
+        if (sum == 42) repeated += 6; else repeated += 999;
+    }
+    out[6] = repeated;
+    bool gate;
+    if (seed) gate = false; else gate = false;
+    if (gate && *(volatile word*)0x0102 != 0) witness(9);
+
+    plot {
+        options;
+        at (1, 2);
+        if (sum == 42) { color 1; pixel; pixel; }
+        else { color 3; pixel; }
+        out[7] = cursor.x;
+        at (1, 2);
+        out[8] = (word)read_pixel;
+        flush;
+    }
+    return 42;
+}

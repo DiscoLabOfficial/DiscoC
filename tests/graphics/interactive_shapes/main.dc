@@ -1,0 +1,301 @@
+// Two independently presented 64x64 OBJ panels. The host owns input and DMA;
+// DiscoC owns transforms, line rasterization and polygon filling.
+bitmap objects {
+    mode obj;
+    depth 4bpp;
+    base 0;
+}
+
+word sine_q6(word* quarter, word phase) {
+    phase &= 63;
+    word index = phase & 15;
+    if ((phase & 16) != 0) index = 16 - index;
+    word value = quarter[index];
+    if ((phase & 32) != 0) value = -value;
+    return value;
+}
+
+word round_q6(word value) {
+    // Arithmetic >>15 contributes -1 only for negative values. The four
+    // scalar operations inline under O2 and retain symmetric midpoint ties.
+    // All call sites are bounded to [-2016,2016], so adding 32 cannot overflow.
+    return (value + 32 + (value >> 15)) >> 6;
+}
+
+// Canonicalize each edge along its increasing major axis. This gives the same
+// pixels in either direction, including midpoint ties and duplicate vertices.
+void edge_draw(word x0, word y0, word x1, word y1, word origin_x, word ink) {
+    word dx = x1 - x0;
+    word dy = y1 - y0;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    bool horizontal = dx >= dy;
+    if ((horizontal && x0 > x1) || (!horizontal && y0 > y1)) {
+        word temporary = x0; x0 = x1; x1 = temporary;
+        temporary = y0; y0 = y1; y1 = temporary;
+    }
+    plot {
+        options object;
+        color ink;
+        cursor.x = origin_x + x0;
+        cursor.y = 64 + y0;
+        if (horizontal) {
+            word error = dx >> 1;
+            // PLOT supplies every X step. Only the occasional Y carry needs
+            // an explicit update; the hot loop never reloads R1 or R2.
+            if (y1 >= y0) {
+                @cache for (word k = 0; k <= dx; k++) {
+                    pixel; error += dy;
+                    if (error >= dx) { error -= dx; cursor.y++; }
+                }
+            } else {
+                @cache for (word k = 0; k <= dx; k++) {
+                    pixel; error += dy;
+                    if (error >= dx) { error -= dx; cursor.y--; }
+                }
+            }
+        } else {
+            word error = dy >> 1;
+            if (x1 >= x0) {
+                @cache for (word k = 0; k <= dy; k++) {
+                    pixel; error += dx;
+                    if (error >= dy) { error -= dy; } else { cursor.x--; }
+                    cursor.y++;
+                }
+            } else {
+                @cache for (word k = 0; k <= dy; k++) {
+                    pixel; cursor.x--; error += dx;
+                    if (error >= dy) { error -= dy; cursor.x--; }
+                    cursor.y++;
+                }
+            }
+        }
+    }
+}
+
+// Collect only one interval per touched row, not two checked array accesses
+// for every X on a shallow edge. No plot context or color update is needed.
+void edge_collect(word x0, word y0, word x1, word y1, word* left, word* right) {
+    word dx=x1-x0; word dy=y1-y0;
+    if (dx<0) dx=-dx;
+    if (dy<0) dy=-dy;
+    bool horizontal=dx>=dy;
+    if ((horizontal && x0>x1) || (!horizontal && y0>y1)) {
+        word temporary=x0; x0=x1; x1=temporary;
+        temporary=y0; y0=y1; y1=temporary;
+    }
+    word direction=1;
+    if (horizontal) {
+        if (y1<y0) direction=-1;
+        word first_x=x0;
+        word error=dx>>1;
+        @cache for (word k=0; k<=dx; k++) {
+            word next_error=error+dy;
+            if (k==dx || next_error>=dx) {
+                word* l=left+y0; word* r=right+y0;
+                if (first_x<*l) *l=first_x;
+                if (x0>*r) *r=x0;
+                if (k==dx) break;
+                first_x=x0+1;
+                y0+=direction;
+                next_error-=dx;
+            }
+            error=next_error;
+            x0++;
+        }
+    } else {
+        if (x1<x0) direction=-1;
+        word error=dy>>1;
+        @cache for (word k=0; k<=dy; k++) {
+            word* l=left+y0; word* r=right+y0;
+            if (x0<*l) *l=x0;
+            if (x0>*r) *r=x0;
+            error+=dx;
+            if (error>=dy) { error-=dy; x0+=direction; }
+            y0++;
+        }
+    }
+}
+
+void polygon(word* xs, word* ys, word count, word origin_x, word ink,
+             word* left, word* right) {
+    word top = 63; word bottom = 0;
+    for (word i = 0; i < count; i++) {
+        word y = ys[i];
+        if (y < top) top = y;
+        if (y > bottom) bottom = y;
+    }
+    word* l=left+top; word* r=right+top;
+    @cache for (word y = top; y <= bottom; y++) { *l=64; *r=-1; l++; r++; }
+    for (word vertex = 0; vertex < count; vertex++) {
+        word next = vertex + 1;
+        if (next == count) next = 0;
+        edge_collect(xs[vertex], ys[vertex], xs[next], ys[next], left, right);
+    }
+    plot {
+        options object;
+        color ink;
+        l=left+top; r=right+top;
+        for (word y = top; y <= bottom; y++) {
+            word start=*l;
+            word width = *r - start + 1;
+            if (width > 0) {
+                cursor.x = origin_x + start;
+                cursor.y = 64 + y;
+                // PLOT itself advances R1. No software increment/reload here.
+                @cache for (word x = 0; x < width; x++) pixel;
+            }
+            l++; r++;
+        }
+    }
+}
+
+word main() {
+    use bitmap objects;
+    word yaw = *(volatile word*)0xF002 & 63;
+    word pitch = *(volatile word*)0xF004 & 63;
+    word size = *(volatile word*)0xF006;
+    if (size < 6) size = 6;
+    if (size > 16) size = 16;
+    bool filled = (*(volatile word*)0xF008 & 1) != 0;
+
+    // CACHE + counted PLOT spans avoid thousands of checked pointer stores.
+    // Opaque zero clears exactly the displayed panels; the final flush also
+    // drains any pending clear pixels. No code/stack/mailbox address is touched.
+    plot {
+        options object;
+        color 0;
+        for (word y = 64; y < 128; y++) {
+            cursor.y = y;
+            cursor.x = 32;
+            @cache for (word i = 0; i < 64; i++) pixel;
+            cursor.x = 160;
+            @cache for (word i = 0; i < 64; i++) pixel;
+        }
+    }
+
+    // Construct once per render, not once per vertex or trigonometric call.
+    word quarter[17] = {0, 6, 12, 19, 24, 30, 36, 41, 45,
+                        49, 53, 56, 59, 61, 63, 64, 64};
+    word sy = sine_q6(&quarter[0], yaw);
+    word cy = sine_q6(&quarter[0], yaw + 16);
+    word sx = sine_q6(&quarter[0], pitch);
+    word cx = sine_q6(&quarter[0], pitch + 16);
+    word cube_x[8]; word cube_y[8];
+    // Share raw products, never already-rounded components. Antipodal
+    // symmetry is exact because round_q6(-n) == -round_q6(n).
+    word sc = size * cy; word ss = size * sy;
+    word sum = round_q6(sc + ss); word difference = round_q6(sc - ss);
+    word height = size * cx;
+    word p = sum * sx; word r = difference * sx;
+    word hp = round_q6(height + p); word hm = round_q6(height - p);
+    word rp = round_q6(height + r); word rm = round_q6(height - r);
+    cube_x[0]=32-sum; cube_y[0]=32+rm;
+    cube_x[1]=32+difference; cube_y[1]=32+hm;
+    cube_x[2]=32-sum; cube_y[2]=32-rp;
+    cube_x[3]=32+difference; cube_y[3]=32-hp;
+    cube_x[4]=32-difference; cube_y[4]=32+hp;
+    cube_x[5]=32+sum; cube_y[5]=32+rp;
+    cube_x[6]=32-difference; cube_y[6]=32-hm;
+    cube_x[7]=32+sum; cube_y[7]=32-rm;
+
+    word left[64]; word right[64];
+    word primitives = 0;
+    if (!filled) {
+        // Binary vertex IDs differ in exactly one bit for each cube edge.
+        for (word i = 0; i < 8; i++) {
+            for (word axis = 1; axis <= 4; axis <<= 1) {
+                if ((i & axis) == 0) {
+                    word j = i | axis;
+                    edge_draw(cube_x[i], cube_y[i], cube_x[j], cube_y[j], 32, 8);
+                    primitives++;
+                }
+            }
+        }
+    } else {
+        // Outward winding for binary X/Y/Z vertex IDs. Orthographic visible
+        // faces do not overlap internally, so no depth buffer/sort is needed.
+        word faces[24] = {0,2,3,1, 4,5,7,6, 0,4,6,2,
+                          1,3,7,5, 0,1,5,4, 2,6,7,3};
+        word face_x[4]; word face_y[4];
+        for (word face = 0; face < 6; face++) {
+            for (word i = 0; i < 4; i++) {
+                word vertex = faces[face * 4 + i];
+                face_x[i] = cube_x[vertex]; face_y[i] = cube_y[vertex];
+            }
+            word cross = (face_x[1]-face_x[0]) * (face_y[2]-face_y[0])
+                       - (face_y[1]-face_y[0]) * (face_x[2]-face_x[0]);
+            if (cross < 0) {
+                polygon(&face_x[0], &face_y[0], 4, 32, face + 1, &left[0], &right[0]);
+                primitives++;
+            }
+        }
+    }
+
+    // Icosahedral sphere: 12 vertices, 30 edges, 20 outward triangular faces.
+    // Q6 constants 34/55 approximate its normalized golden-ratio coordinates.
+    word sphere_x[12]; word sphere_y[12];
+    word radius = size + size - 2;
+    word a = round_q6(radius * 34);
+    word b = round_q6(radius * 55);
+    word ac=a*cy; word as=a*sy; word bc=b*cy; word bs=b*sy;
+    word u=round_q6(ac); word t=round_q6(as);
+    word v=round_q6(bs); word w=round_q6(bc);
+    word h=b*cx; word n=t*sx;
+    word ap=round_q6(h+n); word am=round_q6(h-n);
+    word f=a*cx; word m=w*sx;
+    word bp=round_q6(f+m); word bm=round_q6(f-m);
+    word xp=round_q6(bc+as); word xm=round_q6(bc-as);
+    word zp=round_q6(ac+bs); word zm=round_q6(ac-bs);
+    word yp=round_q6(zp*sx); word ym=round_q6(zm*sx);
+    sphere_x[0]=32-u; sphere_y[0]=32-am;
+    sphere_x[1]=32+u; sphere_y[1]=32-ap;
+    sphere_x[2]=32-u; sphere_y[2]=32+ap;
+    sphere_x[3]=32+u; sphere_y[3]=32+am;
+    sphere_x[4]=32+v; sphere_y[4]=32+bp;
+    sphere_x[5]=32+v; sphere_y[5]=32-bm;
+    sphere_x[6]=32-v; sphere_y[6]=32+bm;
+    sphere_x[7]=32-v; sphere_y[7]=32-bp;
+    sphere_x[8]=32+xm; sphere_y[8]=32-yp;
+    sphere_x[9]=32+xp; sphere_y[9]=32+ym;
+    sphere_x[10]=32-xp; sphere_y[10]=32-ym;
+    sphere_x[11]=32-xm; sphere_y[11]=32+yp;
+    if (filled) {
+        word sphere_faces[60] = {0,11,5, 0,5,1, 0,1,7, 0,7,10, 0,10,11,
+            1,5,9, 5,11,4, 11,10,2, 10,7,6, 7,1,8,
+            3,9,4, 3,4,2, 3,2,6, 3,6,8, 3,8,9,
+            4,9,5, 2,4,11, 6,2,10, 8,6,7, 9,8,1};
+        word triangle_x[3]; word triangle_y[3];
+        word ink = 1;
+        for (word face = 0; face < 20; face++) {
+            for (word i = 0; i < 3; i++) {
+                word vertex = sphere_faces[face * 3 + i];
+                triangle_x[i] = sphere_x[vertex]; triangle_y[i] = sphere_y[vertex];
+            }
+            word cross = (triangle_x[1]-triangle_x[0]) * (triangle_y[2]-triangle_y[0])
+                       - (triangle_y[1]-triangle_y[0]) * (triangle_x[2]-triangle_x[0]);
+            if (cross < 0) {
+                polygon(&triangle_x[0], &triangle_y[0], 3, 160, ink, &left[0], &right[0]);
+                primitives++;
+            }
+            ink++;
+            if (ink == 7) ink = 1;
+        }
+    } else {
+        word sphere_edges[60] = {0,1, 0,5, 0,7, 0,10, 0,11, 1,5, 1,7, 1,8, 1,9,
+            2,3, 2,4, 2,6, 2,10, 2,11, 3,4, 3,6, 3,8, 3,9,
+            4,5, 4,9, 4,11, 5,9, 5,11, 6,7, 6,8, 6,10, 7,8, 7,10, 8,9, 10,11};
+        for (word i = 0; i < 30; i++) {
+            word from = sphere_edges[i+i]; word to = sphere_edges[i+i+1];
+            edge_draw(sphere_x[from], sphere_y[from], sphere_x[to], sphere_y[to], 160, 9);
+            primitives++;
+        }
+    }
+    flush;
+    *(volatile word*)0xF000 = primitives;
+    *(volatile word*)0xF010 = yaw;
+    *(volatile word*)0xF012 = pitch;
+    *(volatile word*)0xF014 = size;
+    *(volatile word*)0xF016 = (word)filled;
+    return primitives;
+}

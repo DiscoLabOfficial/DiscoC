@@ -24,6 +24,8 @@ enum class OpCode : uint8_t {
 
     // These opcodes have their argument register encoded in the lower nibble
     LOB = 0x9E, // Load low byte and zero-extend
+    HIB = 0xC0, // Load high byte and zero-extend (S reflects byte bit 7)
+    SWAP = 0x4D, // Exchange high/low bytes
     SEX = 0x95, // Sign-extend low byte
     TO   = 0x10, // Base for TO R0-R15 -> 0x10-0x1F
     STW_R = 0x30, // Base for STW (Rn) -> 0x30-0x3F, e.g. STW (R1) is 0x31

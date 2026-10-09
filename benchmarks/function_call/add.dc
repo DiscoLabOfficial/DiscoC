@@ -1,0 +1,4 @@
+// Separate compilation keeps the benchmark's call boundary explicit.
+word add_step(word value, word increment) {
+    return value + increment;
+}

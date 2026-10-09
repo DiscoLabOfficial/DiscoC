@@ -120,5 +120,17 @@ int main() {
     bool rejected_pixel_rematerialization = false;
     try { allocator.run(graphics, {}); } catch (const std::runtime_error&) { rejected_pixel_rematerialization = true; }
     require(rejected_pixel_rematerialization, "Single-use RPIX is not movable/rematerializable");
+    allocator.runEager(observable, {5});
+    require(allocator.find(IRValueId{1})->rematerializable && !allocator.find(IRValueId{1})->has_register,
+            "Eager constants do not occupy registers");
+    require(allocator.find(IRValueId{2})->has_register && !allocator.find(IRValueId{2})->rematerializable,
+            "Eager loads are stable even with one register");
+    require(!allocator.find(IRValueId{3})->has_register && !allocator.find(IRValueId{3})->rematerializable,
+            "Pressure requires an actual frame spill, not recomputation");
+    allocator.runEager(reordered, {5});
+    require(!allocator.find(IRValueId{1})->has_register, "Cross-block values cannot use block-local allocations");
+    allocator.runEager(graphics, {1, 2, 5});
+    require(allocator.find(IRValueId{1})->has_register && allocator.find(IRValueId{1})->physical_register == 5,
+            "Eager RPIX reserves the cursor and has a stable result");
     return 0;
 }

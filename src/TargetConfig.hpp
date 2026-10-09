@@ -43,11 +43,19 @@ enum class MemoryMapping : std::uint8_t {
     HiROM = 1
 };
 
+// A compilation policy, not placement/ABI metadata in serialized objects.
+enum class OptimizationLevel : std::uint8_t { Baseline, O1, O2, Size };
+
+inline bool isGlobalOptimization(OptimizationLevel level) {
+    return level == OptimizationLevel::O2 || level == OptimizationLevel::Size;
+}
+
 struct CompilerConfig {
     TargetKind target = TargetKind::GSU;
     MemoryMapping mapping = MemoryMapping::LoROM;
     std::uint32_t code_start_address = 0x8000;
     bool optimize_loop_setup = false;
+    OptimizationLevel optimization = OptimizationLevel::Baseline;
     bool warn_on_cache_overflow = true;
     BitmapConfig bitmap;
 };

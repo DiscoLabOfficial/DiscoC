@@ -95,6 +95,11 @@ void main() { plot {
     *(word*)0x104 = cursor.x; flush;
 } }
 ]=] --word 0x700100 0 --byte 0x700102 5 --word 0x700104 65535 --plots 0 1)
+    set(control_modes 3)
+    if(OPTIMIZATION STREQUAL "2" OR OPTIMIZATION STREQUAL "s")
+        # Inlined identity does not clobber POR; the second dither is redundant.
+        set(control_modes 2)
+    endif()
     graphics_fixture(control [=[
 word identity(word v) { return v; }
 void main() { plot {
@@ -109,7 +114,7 @@ void main() { plot {
     options dither;
     flush;
 } }
-]=] --word 0x700100 3 --plots 0 3 --rpix 0 1 --cmode 0 3)
+]=] --word 0x700100 3 --plots 0 3 --rpix 0 1 --cmode 0 ${control_modes} --por 0 3)
 elseif(CASE STREQUAL "graphics_colors")
     graphics_fixture(palette [=[
 rom const byte original[] = { 5, 7, 9 };
@@ -305,11 +310,59 @@ elseif(CASE STREQUAL "graphics_rotation")
     file(READ "${TEST_DIR}/triangle.s" assembly)
     string(REGEX MATCHALL "\n[ \t]+cache[ \t]+" cache_instructions "${assembly}")
     list(LENGTH cache_instructions cache_count)
-    if(NOT cache_count EQUAL 2)
-        message(FATAL_ERROR "Rotating triangle must retain both instruction-cache requests")
+    string(FIND "${assembly}" "floor_div:" floor_start)
+    string(FIND "${assembly}" "main:" main_start)
+    if(floor_start LESS 0 OR main_start LESS_EQUAL floor_start)
+        message(FATAL_ERROR "Missing rotation functions for CACHE accounting")
+    endif()
+    math(EXPR floor_length "${main_start} - ${floor_start}")
+    string(SUBSTRING "${assembly}" ${floor_start} ${floor_length} floor_assembly)
+    string(REGEX MATCHALL "\n[ \t]+cache[ \t]+" floor_caches "${floor_assembly}")
+    list(LENGTH floor_caches divider_cache)
+    set(expected_main_caches 2)
+    if(OPTIMIZATION STREQUAL "2" OR OPTIMIZATION STREQUAL "s")
+        # A third window covers the ordinary three-edge loop. The two
+        # source-requested windows retain their original CBR anchors.
+        set(expected_main_caches 3)
+    endif()
+    math(EXPR expected_cache_instructions "${expected_main_caches} + ${divider_cache}")
+    if(divider_cache GREATER 1 OR NOT cache_count EQUAL expected_cache_instructions)
+        message(FATAL_ERROR "Rotating triangle lost a cache hint or gained an unexpected CACHE")
+    endif()
+    string(SUBSTRING "${assembly}" ${main_start} -1 main_assembly)
+    # CMake treats semicolons inside MATCHALL results as list separators.
+    string(REPLACE ";" "|" main_assembly "${main_assembly}")
+    string(REGEX MATCHALL "cache [|] CODE\\+\\$[0-9A-F]+" main_caches "${main_assembly}")
+    list(LENGTH main_caches main_cache_count)
+    if(NOT main_cache_count EQUAL expected_main_caches)
+        message(FATAL_ERROR "Rotating triangle has an unexpected explicit/automatic CACHE topology")
+    endif()
+    list(GET main_caches 0 clear_cache)
+    math(EXPR pixel_cache_index "${expected_main_caches} - 1")
+    list(GET main_caches ${pixel_cache_index} pixel_cache)
+    string(FIND "${main_assembly}" "${clear_cache}" clear_start)
+    string(FIND "${main_assembly}" "${pixel_cache}" pixel_start)
+    math(EXPR clear_length "${pixel_start} - ${clear_start}")
+    string(SUBSTRING "${main_assembly}" ${clear_start} ${clear_length} clear_body)
+    string(SUBSTRING "${main_assembly}" ${pixel_start} -1 pixel_body)
+    string(REGEX MATCHALL "\n[ \t]+loop [|]" clear_loops "${clear_body}")
+    string(REGEX MATCHALL "\n[ \t]+loop [|]" pixel_loops "${pixel_body}")
+    list(LENGTH clear_loops clear_hardware_loop)
+    list(LENGTH pixel_loops pixel_hardware_loop)
+    if(clear_hardware_loop GREATER 1 OR pixel_hardware_loop GREATER 1)
+        message(FATAL_ERROR "Unexpected rotation LOOP topology")
     endif()
     string(REGEX REPLACE ".*cache ; CODE\\+\\$([0-9A-F]+).*" "\\1" cache_offset "${assembly}")
     math(EXPR final_cache_base "(0x6000 + 0x${cache_offset} + 1) & 0xfff0")
+    if(OPTIMIZATION STREQUAL "2" OR OPTIMIZATION STREQUAL "s")
+        # Empty scanlines after the final filled span still execute the edge
+        # loop. Its jump-slot CACHE anchors at the prefetched destination PC.
+        string(REGEX MATCH "iwt r15, #\\$([0-9A-F]+) [|] CODE\\+\\$[0-9A-F]+\n    cache [|]" edge_cache "${main_assembly}")
+        if(NOT edge_cache)
+            message(FATAL_ERROR "Missing automatic edge-loop CACHE delay-slot anchor")
+        endif()
+        math(EXPR final_cache_base "0x${CMAKE_MATCH_1} & 0xfff0")
+    endif()
     file(SHA256 "${TEST_DIR}/triangle.bin" direct)
     # Independent per-pixel half-plane reference vectors. Fields: host input,
     # masked phase, total/white/black counts, four planar byte landmarks and
@@ -343,6 +396,24 @@ elseif(CASE STREQUAL "graphics_rotation")
             list(GET fields 7 byte18c0)
             list(GET fields 8 byte18c1)
             list(GET fields 9 cache_requests)
+            # A counted LOOP no longer revisits a failed header comparison.
+            # Keep exact counts for the selected emitted speed/size strategy,
+            # including the bounded divider kernel's optional CACHE request.
+            math(EXPR occupied_rows "${cache_requests} - 14 * 113 - ${pixels}")
+            if(OPTIMIZATION STREQUAL "2" OR OPTIMIZATION STREQUAL "s")
+                # Explicit CACHE runs once per column/span; internal backedges
+                # bypass only that opcode, including split PHI-copy edges.
+                # The automatic three-edge backedge window runs 3 * 112 times.
+                math(EXPR cache_requests "14 + ${occupied_rows} + 3 * 112")
+            else()
+                math(EXPR cache_requests "${cache_requests} - 14 * ${clear_hardware_loop} - ${occupied_rows} * ${pixel_hardware_loop}")
+            endif()
+            if(phase EQUAL 0 OR phase EQUAL 32)
+                set(divisions 4)
+            else()
+                set(divisions 6)
+            endif()
+            math(EXPR cache_requests "${cache_requests} + ${divisions} * ${divider_cache}")
             run_command("${GSU_RUNNER}" "${TEST_DIR}/triangle${suffix}.bin" 0x706000
                 --screen-mode 0x20 --screen-base 0 --initial-ram-bank 1 --initial-sp 0x1234
                 --ram-byte 0x70f002 "${input}" --ram-byte 0x701000 255 --ram-byte 0x704000 165
@@ -353,6 +424,175 @@ elseif(CASE STREQUAL "graphics_rotation")
                 --rambr 0 0 --byte 0x704000 165 --byte 0x700dd0 0 --byte 0x70228f 0
                 --byte 0x701888 "${byte1888}" --byte 0x701890 "${byte1890}"
                 --byte 0x7018c0 "${byte18c0}" --byte 0x7018c1 "${byte18c1}")
+        endforeach()
+    endforeach()
+elseif(CASE STREQUAL "graphics_scaling")
+    set(source "${ROOT_DIR}/tests/graphics/scaling_triangle/triangle.dc")
+    set(link_options --origin 0x706000 --init-runtime --ram-bank 0 --stack-pointer 0xFFFE)
+    run_command("${DISCC}" --target gsu --execution-memory ram "${source}" -o "${TEST_DIR}/triangle.o")
+    run_command("${DISCC}" --target gsu --execution-memory ram --emit-asm "${source}" -o "${TEST_DIR}/triangle-compiler.s")
+    run_command("${DISCAS}" "${TEST_DIR}/triangle-compiler.s" -o "${TEST_DIR}/triangle-asm.o")
+    run_command("${DISCLD}" "${TEST_DIR}/triangle.o" ${link_options}
+        --emit-asm "${TEST_DIR}/triangle.s" -o "${TEST_DIR}/triangle.bin")
+    run_command("${DISCLD}" "${TEST_DIR}/triangle-asm.o" ${link_options} -o "${TEST_DIR}/triangle-asm.bin")
+    run_command("${DISCAS}" "${TEST_DIR}/triangle.s" -o "${TEST_DIR}/triangle-final.o")
+    run_command("${DISCLD}" "${TEST_DIR}/triangle-final.o" -o "${TEST_DIR}/triangle-roundtrip.bin")
+    file(READ "${TEST_DIR}/triangle.s" assembly)
+    if(NOT assembly MATCHES "__DISCO_BITMAP_SCMR[ \t]+\\$21" OR
+       NOT assembly MATCHES "__DISCO_BITMAP_SCBR[ \t]+\\$00")
+        message(FATAL_ERROR "Scaling triangle lost its 4bpp/192-line bitmap metadata")
+    endif()
+    file(SHA256 "${TEST_DIR}/triangle.bin" direct)
+    foreach(suffix IN ITEMS "" "-asm" "-roundtrip")
+        file(SHA256 "${TEST_DIR}/triangle${suffix}.bin" assembled)
+        if(NOT assembled STREQUAL direct)
+            message(FATAL_ERROR "Scaling triangle assembly is not byte-exact: ${suffix}")
+        endif()
+        # Growth, maximum, shrink, wrap and full-width volatile input masking.
+        foreach(input IN ITEMS 0 1 16 31 32 33 48 63 64 255 511 65535)
+            math(EXPR phase "${input} & 63")
+            set(amplitude ${phase})
+            if(phase GREATER 32)
+                math(EXPR amplitude "64 - ${phase}")
+            endif()
+            math(EXPR height "24 + ${amplitude}")
+            math(EXPR rows "${height} + 1")
+            math(EXPR pixels "${rows} * ${rows}")
+            math(EXPR low "${input} & 255")
+            math(EXPR high "${input} >> 8")
+            set(plots ${pixels})
+            set(colors 8)
+            if(phase EQUAL 0 OR phase GREATER 32)
+                # The two old edges share one apex, erased twice deliberately.
+                math(EXPR plots "${pixels} + 2 * (${height} + 2)")
+                set(colors 9)
+            endif()
+            set(landmarks)
+            # Independently reconstruct four planar bytes from the analytic
+            # shape/color definition, not from the emitted code or its counters.
+            foreach(y IN ITEMS 72 96 104 120 128)
+                foreach(plane RANGE 0 3)
+                    set(expected 0)
+                    foreach(bit RANGE 0 7)
+                        math(EXPR x "128 + 7 - ${bit}")
+                        math(EXPR row "${y} - (128 - ${height})")
+                        math(EXPR delta "${x} - 128")
+                        if(row GREATER_EQUAL 0 AND row LESS_EQUAL height AND delta LESS_EQUAL row)
+                            math(EXPR color "1 + 8 * ${row} / ${rows}")
+                            math(EXPR expected "${expected} | (((${color} >> ${plane}) & 1) << ${bit})")
+                        endif()
+                    endforeach()
+                    math(EXPR address "0x700000 + (16 * 24 + (${y} >> 3)) * 32 + (${y} & 7) * 2 + (${plane} >> 1) * 16 + (${plane} & 1)")
+                    list(APPEND landmarks --byte "${address}" "${expected}")
+                endforeach()
+            endforeach()
+            run_command("${GSU_RUNNER}" "${TEST_DIR}/triangle${suffix}.bin" 0x706000
+                --screen-mode 0x21 --screen-base 0 --initial-ram-bank 1 --initial-sp 0x1234
+                --ram-byte 0x70f002 "${low}" --ram-byte 0x70f003 "${high}"
+                --ram-byte 0x703200 255 --ram-byte 0x700000 165
+                --word 0x70f000 "${pixels}" --word 0x70f004 "${height}" --word 0x70f006 "${rows}"
+                --word 0x70f008 "${phase}" --plots 0 "${plots}" --color 0 "${colors}" --rpix 0 1 --getc 0 0
+                --register 0 "${pixels}" --register 6 0 --register 10 0xfffa --rambr 0 0
+                --byte 0x700000 165 ${landmarks})
+        endforeach()
+    endforeach()
+elseif(CASE STREQUAL "graphics_interactive")
+    set(source "${ROOT_DIR}/tests/graphics/interactive_shapes/main.dc")
+    set(origin 0x708000)
+    set(execution_memory ram)
+    if(NOT OPTIMIZATION MATCHES "^[2s]$")
+        # O1 is semantically tested in the full-width GSU ROM mirror bank.
+        # O0 additionally checks the explicit oversized-program diagnostic.
+        set(origin 0x400000)
+        set(execution_memory rom)
+    endif()
+    set(link_options --origin ${origin} --init-runtime --ram-bank 0 --stack-pointer 0xEFFE)
+    run_command("${DISCC}" --target gsu --execution-memory ${execution_memory} "${source}" -o "${TEST_DIR}/shapes.o")
+    run_command("${DISCC}" --target gsu --execution-memory ${execution_memory} --emit-asm "${source}" -o "${TEST_DIR}/shapes-compiler.s")
+    run_command("${DISCAS}" "${TEST_DIR}/shapes-compiler.s" -o "${TEST_DIR}/shapes-asm.o")
+    if(execution_memory STREQUAL "rom")
+        run_expected_failure_contains("program-bank boundary" "${DISCLD}" "${TEST_DIR}/shapes.o"
+            --origin 0x708000 --init-runtime --ram-bank 0 --stack-pointer 0xEFFE -o "${TEST_DIR}/too-large.bin")
+    endif()
+    if(NOT OPTIMIZATION MATCHES "^[12s]$")
+        foreach(object IN ITEMS shapes.o shapes-asm.o)
+            run_expected_failure_contains("program-bank boundary" "${DISCLD}" "${TEST_DIR}/${object}"
+                ${link_options} -o "${TEST_DIR}/too-large.bin")
+        endforeach()
+        message(STATUS "O0 full renderer analyzes/assembles, and oversized RAM/ROM placements are rejected; execution coverage uses O1/O2/Os")
+        return()
+    endif()
+    run_command("${DISCLD}" "${TEST_DIR}/shapes.o" ${link_options} --emit-asm "${TEST_DIR}/shapes.s" -o "${TEST_DIR}/shapes.bin")
+    run_command("${DISCLD}" "${TEST_DIR}/shapes-asm.o" ${link_options} -o "${TEST_DIR}/shapes-asm.bin")
+    run_command("${DISCAS}" "${TEST_DIR}/shapes.s" -o "${TEST_DIR}/shapes-final.o")
+    run_command("${DISCLD}" "${TEST_DIR}/shapes-final.o" -o "${TEST_DIR}/shapes-roundtrip.bin")
+    file(READ "${TEST_DIR}/shapes.s" assembly)
+    if(NOT assembly MATCHES "__DISCO_BITMAP_SCMR[ \t]+\\$25" OR
+       NOT assembly MATCHES "__DISCO_BITMAP_SCBR[ \t]+\\$00")
+        message(FATAL_ERROR "Interactive shapes lost OBJ/4bpp bitmap metadata")
+    endif()
+    file(SHA256 "${TEST_DIR}/shapes.bin" direct)
+    foreach(suffix IN ITEMS "" "-asm" "-roundtrip")
+        file(SHA256 "${TEST_DIR}/shapes${suffix}.bin" assembled)
+        if(NOT assembled STREQUAL direct)
+            message(FATAL_ERROR "Interactive shapes assembly is not byte-exact: ${suffix}")
+        endif()
+        # Analytic major-axis edge points and outward face normals produce
+        # these counts independently of the renderer's error accumulator.
+        foreach(record IN ITEMS
+            "0,0,6,0,42,8554,9" "48,48,6,0,42,8554,9" "8,8,16,0,42,9174,9" "63,63,16,0,42,9188,9"
+            "0,0,16,1,9,11757,5" "16,0,6,1,9,8715,6" "0,16,16,1,9,11757,2" "32,32,16,1,9,11757,5"
+            "63,0,16,1,12,12085,2" "0,63,6,1,10,8754,5" "8,8,6,1,13,8852,5" "12,1,16,1,13,12311,6"
+            "9,7,16,1,13,12833,5" "63,63,6,1,13,8809,5"
+            "255,511,0,255,13,8809,5" "65535,65535,32767,65534,42,9188,9"
+            "65535,65535,65535,65535,13,8809,5")
+            string(REPLACE "," ";" fields "${record}")
+            list(GET fields 0 yaw)
+            list(GET fields 1 pitch)
+            list(GET fields 2 size)
+            list(GET fields 3 mode)
+            list(GET fields 4 primitives)
+            list(GET fields 5 plots)
+            list(GET fields 6 ink)
+            set(inputs)
+            foreach(field IN ITEMS yaw pitch size mode)
+                if(field STREQUAL "yaw")
+                    set(address 0x70f002)
+                elseif(field STREQUAL "pitch")
+                    set(address 0x70f004)
+                elseif(field STREQUAL "size")
+                    set(address 0x70f006)
+                else()
+                    set(address 0x70f008)
+                endif()
+                math(EXPR high_address "${address}+1")
+                math(EXPR low "${${field}} & 255")
+                math(EXPR high "${${field}} >> 8")
+                list(APPEND inputs --ram-byte ${address} ${low} --ram-byte ${high_address} ${high})
+            endforeach()
+            math(EXPR yaw "${yaw}&63")
+            math(EXPR pitch "${pitch}&63")
+            math(EXPR mode "${mode}&1")
+            if(size GREATER 32767)
+                math(EXPR size "${size}-65536")
+            endif()
+            if(size LESS 6)
+                set(size 6)
+            elseif(size GREATER 16)
+                set(size 16)
+            endif()
+            run_command("${GSU_RUNNER}" "${TEST_DIR}/shapes${suffix}.bin" ${origin}
+                --screen-mode 0x25 --screen-base 0 --initial-ram-bank 1 --initial-sp 0x7770
+                ${inputs}
+                --ram-byte 0x700000 165 --ram-byte 0x702000 90
+                --ram-byte 0x701080 165 --ram-byte 0x701090 90
+                --ram-byte 0x703080 165 --ram-byte 0x703090 90
+                --register 0 ${primitives} --register 6 0 --register 10 0xeffa --rambr 0 0
+                --word 0x70f000 ${primitives} --word 0x70f010 ${yaw} --word 0x70f012 ${pitch}
+                --word 0x70f014 ${size} --word 0x70f016 ${mode}
+                --plots 0 ${plots} --rpix 0 1 --getc 0 0 --por 0 17 --colr 0 ${ink}
+                --byte 0x700000 165 --byte 0x702000 90
+                --byte 0x701080 0 --byte 0x701090 0 --byte 0x703080 0 --byte 0x703090 0)
         endforeach()
     endforeach()
 elseif(CASE STREQUAL "graphics_diagnostics")

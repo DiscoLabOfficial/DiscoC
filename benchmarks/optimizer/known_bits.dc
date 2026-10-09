@@ -1,0 +1,9 @@
+word main() {
+    word seed = *(volatile word*)0x100;
+    u16 bounded = (u16)seed & (u16)63;
+    word result = (word)(bounded & (u16)255);
+    if (bounded > (u16)63) result += 99;
+    result += (word)((bounded | (u16)256) & (u16)256);
+    *(volatile word*)0x120 = result;
+    return 42;
+}

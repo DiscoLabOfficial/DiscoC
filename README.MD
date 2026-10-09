@@ -246,6 +246,104 @@ To build the repository's original multi-file example from the repository root:
 discc build --config examples/multifile/discoc.toml
 ```
 
+### Optimized GSU code
+
+Use `-O` (alias `-O1`) for local optimization or `-O2` for global SSA/CFG
+optimization. The default `-O0` retains the baseline generation policy:
+
+```sh
+discc build -O
+discc -O1 main.dc -o main.o
+discc build -O2
+```
+
+Or enable it for a project and all discovered source dependencies:
+
+```toml
+[compiler]
+optimize = true
+```
+
+CLI wins: `discc build -O0` overrides `optimize = true`. O1 reduces expression
+spills, stack traffic and instruction overhead without changing the ABI,
+language semantics, pointer checks, or volatile accesses. It uses `IBT` only
+when its sign-extended byte equals the required 16-bit value. Plot cursor
+registers stay reserved; PLOT still performs the physical X increment.
+It also selects `SBK` for word stores when the implicit last-RAM address is
+proven unchanged; stack accesses, spills, bank changes and calls fence reuse.
+O1 folds scalar constants through casts, specializes high-byte shifts/bit
+extraction, removes adjacent accumulator copies, keeps short local branches
+where they fit, and forwards proven unescaped scalar-local loads/stores.
+It also selects direct allocated ALU destinations, reuses identical pure
+block-local expressions, removes overwritten unobserved local stores, and
+specializes power-of-two multiply/divide/remainder with signed truncation
+toward zero. Whole mask/shift patterns can become a single bit extraction.
+Unknown writes, calls, volatile accesses, framebuffer effects and control-flow
+boundaries invalidate memory facts; pointer checks remain intact.
+
+O2 adds pruned scalar-local SSA with PHIs, full CFG/hardware-loop liveness,
+cross-block R5/R7/R8 allocation, shared spill slots, safe loop-invariant motion,
+checked address induction and bounded leaf inlining/constant specialization.
+SCCP propagates typed constants through executable PHI edges and simplifies
+constant branches/switches, unreachable paths and straight-line CFG chains.
+Bounded frame/address proofs remove only redundant near-RAM checks; stack
+checks reuse established bounds without moving failures ahead of effects.
+R1/R2 remain reserved for plotting, and nested LOOP scopes preserve R12/R13.
+Matching word `/` and `%` operations can share a single `divmod` helper.
+Function-local terminal faults/epilogues share code, and bounded PHI affinity
+improves register/spill copies without weakening interference or fault checks.
+Pure scalar GVN reuses dominating expressions across blocks. Small nonescaping
+arrays/struct fields with constant indices can become separate SSA cells.
+Known-bit/range proofs simplify masks and comparisons; modular numeric induction
+replaces eligible repeated products with increments. Bounded hot/cold lifetime
+splitting and proven accumulator snapshots reduce register-pressure traffic.
+It also fills proven one-byte delay slots, schedules independent work during
+ROM-buffer reads, keeps hot loop/PHI edges together and aligns cached function
+entries at their actual link address. Split IWT/IBT delay-slot operand tricks
+are tested but not generated automatically.
+Select it for every project unit with:
+
+```toml
+[compiler]
+optimization_level = 2
+```
+
+Use this key **instead of** `optimize`; it accepts integers 0/1/2 or `"s"` for Os. CLI still
+wins. O2 preserves the object/call ABI, volatile effects and checked failures,
+but can trade a little code size for fewer cycles; measure your workload.
+`discc -O2 --emit-ir main.dc` displays optimized SSA.
+See [optimization and measured results](docs/optimization.md).
+The [five focused O2 workloads](benchmarks/optimizer/README.md) retain verified
+before/after bytes and opcode counts. The rotating triangle's latest measured
+change is 3,114 → 3,008 payload bytes and 4.26% fewer mean GSU cycles; completed
+image throughput stays about 6.70 FPS in its fixed 21 MHz Mesen profile.
+O2 now compares bounded allocator candidates with a GSU fetch/RAM/call cost
+model and retains safe spill copies in temporarily free R5/R7/R8 registers.
+See [profiling and allocator results](docs/optimization.md#profiling-cost-model-and-allocation).
+
+Use `-Os` when payload size matters more than speed:
+
+```sh
+discc -Os main.dc -o main.o
+discc build -Os
+```
+
+```toml
+[compiler]
+optimization_level = "s"
+```
+
+Os reuses SSA/SCCP/GVN/dead-code elimination, compares bounded candidates by
+actual emitted bytes, pools repeated division/remainder kernels only when
+calls and register preservation amortize, shares exact effectful tails and
+omits optional CACHE padding. Required alignment, explicit CACHE, volatile
+effects, graphics state and checked failures remain intact. It may trade
+cycles for bytes; the current rotating triangle stays identical to O2 rather
+than acquiring a larger helper. A verified signed/unsigned division probe
+shrinks 657 → 536 bytes with about 2.1% more emulated cycles. Conversely,
+`triangle_fill` saves 8.1% of its bytes but runs about 2.60 times slower;
+prefer O2 for speed-critical drawing. See the [size policy and measurements](docs/optimization.md#size-policy--os).
+
 Configuration precedence is **built-in defaults → manifest → explicit CLI
 options**. Manifest paths resolve relative to the manifest, not the terminal's
 working directory. Root sources and outputs are explicit, while `.dc` imports
@@ -431,6 +529,10 @@ selects the angle and transfers the completed GSU framebuffer during VBlank.
 
 Real Mesen captures, replayed at **8 fps**. Playback is accelerated; the ROM
 is a correctness demonstration, not yet a smooth-animation benchmark.
+The host starts each new render immediately after presentation, with no
+six-VBlank hold. Missed refreshes repeat the last completed image; VRAM uploads
+remain inside VBlank. The verified run reports completed-pose FPS separately
+from the GIF playback rate and GSU-only render time.
 
 Here is the actual drawing loop from the demo's `plot` block. Scanline clipping
 provides `left` and `right`; `sine` and `cosine` are Q6 rotation coefficients.
@@ -467,13 +569,31 @@ host-visible diagnostics. With the DiscoC and WLA-DX tools on `PATH`, build
 the complete SNES ROM from the repository root:
 
 ```sh
-cmake -P tests/graphics/rotating_triangle/build-snes.cmake
+cmake -DOPTIMIZATION=2 -P tests/graphics/rotating_triangle/build-snes.cmake
 ```
 
 Open `build/plot-rotating-triangle/rotating-triangle.sfc` in a SuperFX-capable
 SNES emulator. The optional Mesen checks compare **all 49,152 pixels at all
 64 angles**, including phase wrap, RAM/VRAM transfers, and the red-screen
 failure path. See [build and verification instructions](tests/graphics/rotating_triangle/README.md).
+
+### Interactive OBJ Cube and Sphere
+
+The [interactive shapes demo](tests/graphics/interactive_shapes/README.md) renders
+a 3D wireframe cube and an icosahedral sphere, switching to filled colored faces
+with A. The D-Pad rotates both axes; Select + Up/Down resizes. It uses genuine
+GSU OBJ/4bpp layout and two SNES sprites, with the GSU at approximately 21 MHz.
+Geometry is integer-only, with shared projections, cached PLOT spans and
+hardware cursor increments. The host samples controls even during rendering,
+uploads only complete poses during VBlank and skips unchanged poses.
+
+```sh
+cmake -DDISCO_TOOLS_DIR=build/release/bin -P tests/graphics/interactive_shapes/build-snes.cmake
+```
+
+Open `build/interactive-shapes/interactive-shapes.sfc`. Optional Mesen tests
+verify actual controller transitions and compare every framebuffer/VRAM byte
+and the visible sprite image against an independent rasterizer.
 
 ## Freestanding Libraries and Examples
 
@@ -519,6 +639,80 @@ manifests, assembly/binary equivalence, and GSU execution regressions.
 Optional sanitizer and fuzzing configurations are documented in
 [Testing](docs/testing.md).
 
+### Measuring backend optimization
+
+Nine [GSU workloads](benchmarks/README.md) measure code/payload size, executed
+opcodes, loads/stores, stack accesses, graphics instructions and control flow.
+Each result is checked before reporting, and the same suite/model compares
+current tools with the published v0.1.0 baseline:
+
+```sh
+cmake --build --preset release --target benchmarks
+cmake --build --preset release --target benchmarks-O1
+cmake --build --preset release --target benchmarks-O2
+cmake --build --preset release --target benchmarks-Os
+```
+
+JSON/CSV measurements and signed comparison deltas are written to
+`build/release/benchmark-results`, `benchmark-O1-results` and
+`benchmark-O2-results` and `benchmark-Os-results`. These are instruction-level measurements,
+not cycles or FPS; no speedup is claimed from an opcode reduction alone.
+
+For calibrated **emulated cycles**, the optional `benchmarks-mesen` and
+`benchmarks-mesen-O1`/`benchmarks-mesen-O2`/`benchmarks-mesen-Os` targets
+run the same nine payloads in complete SNES ROMs, with a fixed clock/ROM/cache
+profile and independent result/framebuffer checks. It reports SNES master
+clocks and fast GSU clock ticks separately, preserving the observed interval
+and the model-derived STOP completion cost. See the
+[timing setup and limits](benchmarks/README.md#optional-mesen-timing).
+The optional `benchmarks-profile-O2` target additionally records verified
+opcode-entry intervals by function, linked machine-label region and opcode
+category. Use these [profiling reports](benchmarks/README.md#gsu-profiling) to
+identify expensive code; they are not independent instruction latencies or PGO.
+WLA-DX/Mesen are external prerequisites; these are not physical-hardware timings.
+
+With the documented cold-entry LoROM profile, `triangle_fill` changes from
+1,200 to 383 code bytes and 7,359,330 to 1,997,705 emulated fast GSU cycles
+with O1. All nine workloads retain their independently checked results.
+These figures describe the fixed benchmark profile, not a general FPS claim.
+
+The initial O2 snapshot reduces `triangle_fill` to 872,075 emulated cycles
+with 395 code bytes; stack accesses fall from 39,294 to 1,367. The unchanged
+21 MHz cache-enabled rotating checkerboard uses 4,766 payload bytes and averages
+3,279,943 cycles across 64 poses, 0.62% fewer cycles but 45 more bytes than O1.
+All 64 screenshots match. O2 does not win every workload: `arithmetic` is
+0.52% slower despite smaller code. See the
+[full O2 comparison and measurement limits](docs/optimization.md#global-o2-ssa-allocation-and-loops).
+
+O2's subsequent pipeline scheduling reduces `triangle_fill` further to 393 code
+bytes and 870,625 cycles, and `function_call` from 46,450 to 46,130 cycles.
+A cache-resident ROM-read calibration falls from 99 to 96 cycles. The rotating
+checkerboard saves 29 payload bytes (4,737 total), but its 64-pose average rises
+0.12% to 3,283,994 cycles; all screenshots remain identical. Blanket loop-CACHE
+padding was measured and rejected. See the
+[pipeline results and boundaries](docs/optimization.md#pipeline-measurements).
+
+SCCP/CFG cleanup further reduces `triangle_fill` to **390 code bytes and
+822,610 emulated cycles** (5.51% fewer cycles than pipeline O2). Four of the
+nine fixed workloads improve and five remain equal. The unchanged 21 MHz
+RAM/CACHE rotation averages **3,276,385.125 cycles** over 64 poses (0.23% less),
+with **4,748 payload bytes** (11 more). All pixels/screenshots still match;
+O0/O1 payloads remain unchanged. See the
+[SCCP comparison and tradeoffs](docs/optimization.md#sccp-and-cfg-measurements).
+
+Proven-check elimination reduces the same rotating payload further to
+**3,453 bytes** (27.3% smaller) and **3,158,312.75 mean emulated cycles**
+(3.6% fewer). All 64 poses/screenshots match. Each of the nine benchmarks also
+shrinks and improves its timing, with unchanged memory/graphics counts;
+O0/O1 payloads remain identical. Unknown/illegal accesses retain their checks.
+See [proof rules and measured results](docs/optimization.md#proven-check-elimination-measurements).
+
+Divmod fusion and shared-code/PHI improvements reduce the same payload to
+**3,126 bytes** (another 9.47% smaller) and **3,045,929.8125 mean emulated cycles**
+(another 3.56% fewer), with all 64 screenshots unchanged. Every benchmark
+shrinks; `arithmetic` drops from 148,479 to 81,229 cycles, while the other eight
+retain their timing. See [comparison and boundaries](docs/optimization.md#divmod-and-shared-code-measurements).
+
 The default execution tests use an instruction-level GSU model. A separate,
 optional static and rotating triangle integration tests have also been verified
 in Mesen using complete SNES ROMs, including the host and PPU display. This does not constitute
@@ -540,6 +734,8 @@ See [ROADMAP.MD](ROADMAP.MD) for completed milestones and future work.
   [language conformance](tests/language/README.md): stabilization acceptance,
   rule-to-test index and release boundaries.
 - [Project manifests](docs/project-manifest.md): TOML configuration and builds.
+- [GSU optimization](docs/optimization.md): O0/O1/O2/Os policies, special registers,
+  preserved semantics and measured size/cycle improvements.
 - [Architecture](docs/architecture.md): compiler pipeline, ABI, and ownership.
 - [IR and CFG](docs/ir-cfg.md): intermediate representation and verification.
 - [Object format](docs/object-format.md): serialization and relocation contracts.
@@ -550,6 +746,8 @@ See [ROADMAP.MD](ROADMAP.MD) for completed milestones and future work.
 - [SPC700 foundation](docs/spc700-target.md): target model and planned backend.
 - [Building](docs/building.md) and [Testing](docs/testing.md): build paths and
   regression tooling.
+- [GSU benchmarks](benchmarks/README.md): workloads, counters and reproducible
+  v0.1.0 versus O0/O1/O2 comparisons.
 
 ## License
 

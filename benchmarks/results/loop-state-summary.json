@@ -1,0 +1,237 @@
+{
+  "schema": 1,
+  "measurement": "phase2-loop-state-comparison",
+  "revision": "unknown",
+  "release_evidence": false,
+  "sources_changed": false,
+  "mesen_version": "2.2.1+20ba206cef5ba207c21203176d02cb9f43dda9fb",
+  "toolchain_after": [
+    {
+      "name": "discc.exe",
+      "sha256": "21422ee0de045b5004fa0424ab6da17184da4e53468a7471d919858b4f311883"
+    },
+    {
+      "name": "discas.exe",
+      "sha256": "dccfc2a67b7b0789340ba8811aa5ed4fc7f65ceea808913d471c456ca87c10fb"
+    },
+    {
+      "name": "discld.exe",
+      "sha256": "cf31dde86f968ec3a05daf5544dd064855288222ef9f84a434edc3bdc3b3d42c"
+    },
+    {
+      "name": "disco_gsu_benchmarks.exe",
+      "sha256": "93212b570dcbd4dc087c56501bdf3b08c5e68e7fa1e74b11c5d45f47ae337491"
+    }
+  ],
+  "native_verification": {
+    "platform": "Windows x86-64",
+    "compiler": "MSVC",
+    "release": {
+      "passed": 254,
+      "failed": 0,
+      "includes_optional_mesen_tests": true
+    },
+    "debug": {
+      "passed": 246,
+      "failed": 0,
+      "includes_optional_mesen_tests": false
+    },
+    "changed_production_gcc_cxx14_warnings_as_errors": "passed"
+  },
+  "benchmark_reports": [
+    {
+      "level": "O2",
+      "stage": "before",
+      "path": "gsu-loop-state-O2-before-mesen.json"
+    },
+    {
+      "level": "O2",
+      "stage": "after",
+      "path": "gsu-loop-state-O2-mesen.json"
+    },
+    {
+      "level": "Os",
+      "stage": "before",
+      "path": "gsu-loop-state-Os-before-mesen.json"
+    },
+    {
+      "level": "Os",
+      "stage": "after",
+      "path": "gsu-loop-state-Os-mesen.json"
+    }
+  ],
+  "demos": [
+    {
+      "level": "O2",
+      "rotation": {
+        "source": "tests/graphics/rotating_triangle/triangle.dc",
+        "source_sha256": "d43ba02e33763adf3205e02842a236d26a3d8bf0e7b4f06c1a41ac7fea4c7cea",
+        "profile": "NTSC CLSR=1 GSU=100% CFGR.MSO=0 RAM-execution CACHE cold",
+        "origin": 7364608,
+        "stack_pointer": 65534,
+        "mean_cycles_poses": 64,
+        "before": {
+          "payload_bytes": 2806,
+          "payload_sha256": "d1fe0915f10fded8f0450284341b73aea6d4c73e4268a401598963db74d66906",
+          "mean_gsu_cycles": 1149680.375,
+          "displayed_pose_fps": 15.024702223382
+        },
+        "after": {
+          "payload_bytes": 2733,
+          "payload_sha256": "ff8dbc49547132066774bc5f99f962eb3b46215a31120a30acf2b8c9ea1b8a9b",
+          "mean_gsu_cycles": 945534.515625,
+          "displayed_pose_fps": 20.032931334445
+        },
+        "verification": {
+          "poses": 64,
+          "phase_wrap": true,
+          "pixels_per_pose": 49152,
+          "negative_red_screen": true,
+          "assembly_roundtrip": "byte-exact"
+        },
+        "timing_includes_cpu_dma_presentation": false,
+        "fps_includes_cpu_dma_presentation": true,
+        "rom_bytes": 65536
+      },
+      "interactive_shapes": {
+        "source": "tests/graphics/interactive_shapes/main.dc",
+        "source_sha256": "adf6f6a94444b98555c64460992b8ea0a73a19f53f42ccf52c1bb0a075bc80d5",
+        "profile": "NTSC CLSR=1 GSU=100% normal multiply RAM CACHE cold",
+        "origin": 7372800,
+        "stack_pointer": 61438,
+        "pose": {
+          "yaw": 8,
+          "pitch": 5,
+          "size": 12
+        },
+        "before": {
+          "payload_bytes": 13794,
+          "payload_sha256": "5dbbaf5b1adb9f355a18216edd1fb38aa5440fdda4e8df02c7c8ea353e3b016f",
+          "wire_gsu_cycles": [
+            469556,
+            469556,
+            469556,
+            469556
+          ],
+          "filled_gsu_cycles": [
+            1900815,
+            1901192,
+            1901192,
+            1901192
+          ]
+        },
+        "after": {
+          "payload_bytes": 12987,
+          "payload_sha256": "b4a9fc12839514543e9bed816ec00f8f10aa372f17acef0d4b9e38314ea4bcba",
+          "wire_gsu_cycles": [
+            407584,
+            407584,
+            407584,
+            407584
+          ],
+          "filled_gsu_cycles": [
+            1739658,
+            1739658,
+            1739658,
+            1739658
+          ]
+        },
+        "verification": {
+          "full_obj_framebuffers": 35,
+          "controller_polls": 255,
+          "negative_red_screen": true
+        },
+        "timing_includes_cpu_dma_presentation": false
+      }
+    },
+    {
+      "level": "Os",
+      "rotation": {
+        "source": "tests/graphics/rotating_triangle/triangle.dc",
+        "source_sha256": "d43ba02e33763adf3205e02842a236d26a3d8bf0e7b4f06c1a41ac7fea4c7cea",
+        "profile": "NTSC CLSR=1 GSU=100% CFGR.MSO=0 RAM-execution CACHE cold",
+        "origin": 7364608,
+        "stack_pointer": 65534,
+        "mean_cycles_poses": 64,
+        "before": {
+          "payload_bytes": 2806,
+          "payload_sha256": "f7362f80e31997088b4e4a8d417ebc2243c6b96f81d40ad6148a4f518bf75de1",
+          "mean_gsu_cycles": 1148578.5,
+          "displayed_pose_fps": 15.024696639561
+        },
+        "after": {
+          "payload_bytes": 2733,
+          "payload_sha256": "190ede296cff09403be29aff83fee6d0c7bc0b340cf54a60ce06db51a829fbbb",
+          "mean_gsu_cycles": 944432.640625,
+          "displayed_pose_fps": 20.032937173736
+        },
+        "verification": {
+          "poses": 64,
+          "phase_wrap": true,
+          "pixels_per_pose": 49152,
+          "negative_red_screen": true,
+          "assembly_roundtrip": "byte-exact"
+        },
+        "timing_includes_cpu_dma_presentation": false,
+        "fps_includes_cpu_dma_presentation": true,
+        "rom_bytes": 65536
+      },
+      "interactive_shapes": {
+        "source": "tests/graphics/interactive_shapes/main.dc",
+        "source_sha256": "adf6f6a94444b98555c64460992b8ea0a73a19f53f42ccf52c1bb0a075bc80d5",
+        "profile": "NTSC CLSR=1 GSU=100% normal multiply RAM CACHE cold",
+        "origin": 7372800,
+        "stack_pointer": 61438,
+        "pose": {
+          "yaw": 8,
+          "pitch": 5,
+          "size": 12
+        },
+        "before": {
+          "payload_bytes": 13794,
+          "payload_sha256": "5dbbaf5b1adb9f355a18216edd1fb38aa5440fdda4e8df02c7c8ea353e3b016f",
+          "wire_gsu_cycles": [
+            469556,
+            469556,
+            469556,
+            469556
+          ],
+          "filled_gsu_cycles": [
+            1900815,
+            1901192,
+            1901192,
+            1901192
+          ]
+        },
+        "after": {
+          "payload_bytes": 12978,
+          "payload_sha256": "eadf8c4403925a3dd4ac993a89bd95672802314104398cb0839aa780cbe37dd3",
+          "wire_gsu_cycles": [
+            418768,
+            418768,
+            418768,
+            418768
+          ],
+          "filled_gsu_cycles": [
+            1850153,
+            1850529,
+            1850529,
+            1850529
+          ]
+        },
+        "verification": {
+          "full_obj_framebuffers": 35,
+          "controller_polls": 255,
+          "negative_red_screen": true
+        },
+        "timing_includes_cpu_dma_presentation": false
+      }
+    }
+  ],
+  "limitations": [
+    "Uncommitted working-tree evidence; rebuild and rerun against the final committed release candidate.",
+    "Emulator measurements, not physical-hardware timings.",
+    "Os triangle_fill remains much slower than O2 despite a smaller payload.",
+    "Linux, macOS, DOS and sanitizer suites were not rerun in this pass."
+  ]
+}

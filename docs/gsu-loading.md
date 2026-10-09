@@ -25,7 +25,7 @@ in one accessible GSU program bank.
 
 For the original multi-file example's local `result`, this origin changes calls
 to `$6000 + function offset`, rather than the default `$8000 + function offset`.
-Without static RAM data, the bootstrap adds 12 bytes. Static initialization
+Without static RAM data, the default bootstrap adds 11 bytes. Static initialization
 adds instructions; layout/relocations account for the complete startup size.
 
 These settings can also live in `discoc.toml`: `discc build` compiles its sources
@@ -43,12 +43,20 @@ aligned, valid R10 before entering generated functions.
 With `--init-runtime` and no globals, the linker prepends these instructions:
 
 ```asm
-iwt r0, #0       ; --ram-bank: 0 selects $70, 1 selects $71
+ibt r0, #0       ; --ram-bank: 0 selects $70, 1 selects $71
 ramb            ; ALT2; GETC encoding, uses source-register bit zero
 iwt r10, #$2000 ; --stack-pointer
 iwt r15, #entry ; relocated --entry, default main
 nop             ; required prefetched delay slot
 ```
+
+Startup literals use IBT whenever its sign extension produces exactly the
+required 16-bit value: `$0000-$007F` or `$FF80-$FFFF`. For example,
+`--stack-pointer 0xFFFE` uses `ibt r10, #$FE`, reducing the no-globals startup
+to 10 bytes. `$00FE` and the default `$2000` still require IWT. This selection
+also applies to global initializers, independently of the compiler optimization
+level. The final entry jump remains a three-byte IWT relocation; its address is
+resolved after accounting for the actual startup size and object alignment.
 
 `PBR` selects the instruction bank. `RAMBR` independently selects the RAM bank
 used by loads, stores, and stack accesses. RAMB uses the low bit of its source

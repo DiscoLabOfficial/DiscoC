@@ -1,0 +1,18 @@
+// Runtime seed 3 produces 2019. Keep distinct signed/unsigned generic sites
+// so size selection must account for both private kernels and caller state.
+word signed_pair(word divisor) {
+    return (divisor + 3024) / divisor + (divisor + 3027) / divisor;
+}
+
+u16 unsigned_pair(u16 divisor) {
+    return (divisor + (u16)3024) / divisor + (divisor + (u16)3027) / divisor;
+}
+
+word main() {
+    word seed = *(volatile word*)0x100;
+    word first = signed_pair(seed);
+    u16 second = unsigned_pair((u16)seed);
+    word result = (first + (word)second) >> 1;
+    *(volatile word*)0x120 = result;
+    return result;
+}

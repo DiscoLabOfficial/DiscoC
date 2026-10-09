@@ -1,0 +1,22 @@
+[project]
+name = "scaling-triangle"
+target = "gsu"
+sources = ["triangle.dc"]
+
+[compiler]
+optimization_level = 2
+
+[target.gsu]
+memory_mapping = "lorom"
+execution_memory = "ram"
+origin = 0x706000
+ram_bank = 0
+stack_pointer = 0xFFFE
+
+[runtime]
+initialize = true
+
+[output]
+directory = "../../../build/plot-scaling-triangle"
+binary = "triangle.bin"
+assembly = "triangle.s"

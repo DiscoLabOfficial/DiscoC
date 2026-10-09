@@ -1,0 +1,24 @@
+// Same scanline geometry as the Baseline 0.1 SNES demo; benchmark RAM layout.
+bitmap screen { mode bitmap; size 256x192; depth 4bpp; base 0x6000; }
+
+word main() {
+    use bitmap screen;
+    word left = 128;
+    word right = 128;
+    word count = 0;
+    plot {
+        options;
+        for (word y = 48; y <= 144; y++) {
+            color 1 + ((y - 48) >> 3);
+            at (left, y);
+            word width = right - left + 1;
+            for (word i = 0; i < width; i++) pixel;
+            count += width;
+            left--;
+            right++;
+        }
+        flush;
+    }
+    *(volatile word*)0x0120 = count;
+    return count;
+}

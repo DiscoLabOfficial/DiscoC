@@ -1,0 +1,39 @@
+word main() {
+    unsigned word a = *(volatile unsigned word*)0x100;
+    unsigned word b = *(volatile unsigned word*)0x102;
+    word sa = (word)a;
+    word sb = (word)b;
+
+    *(word*)0x120 = (word)(a < b);
+    *(word*)0x122 = (word)(a <= b);
+    *(word*)0x124 = (word)(a > b);
+    *(word*)0x126 = (word)(a >= b);
+    *(word*)0x128 = (word)(a == b);
+    *(word*)0x12a = (word)(a != b);
+    *(word*)0x12c = (word)(sa < sb);
+    *(word*)0x12e = (word)(sa <= sb);
+    *(word*)0x130 = (word)(sa > sb);
+    *(word*)0x132 = (word)(sa >= sb);
+    *(word*)0x134 = (word)(sa == sb);
+    *(word*)0x136 = (word)(sa != sb);
+
+    // The same comparisons must work when consumed directly by branches,
+    // including signed subtraction overflow and unsigned carry boundaries.
+    word unsigned_bits = 0;
+    if (a < b) unsigned_bits |= 1;
+    if (a <= b) unsigned_bits |= 2;
+    if (a > b) unsigned_bits |= 4;
+    if (a >= b) unsigned_bits |= 8;
+    if (a == b) unsigned_bits |= 16;
+    if (a != b) unsigned_bits |= 32;
+    word signed_bits = 0;
+    if (sa < sb) signed_bits |= 1;
+    if (sa <= sb) signed_bits |= 2;
+    if (sa > sb) signed_bits |= 4;
+    if (sa >= sb) signed_bits |= 8;
+    if (sa == sb) signed_bits |= 16;
+    if (sa != sb) signed_bits |= 32;
+    *(word*)0x138 = unsigned_bits;
+    *(word*)0x13a = signed_bits;
+    return 42;
+}

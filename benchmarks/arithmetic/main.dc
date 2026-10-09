@@ -1,0 +1,13 @@
+word main() {
+    u16 value = *(volatile u16*)0x0100;
+    u16 divisor = *(volatile u16*)0x0102;
+    for (word i = 0; i < 32; i++) {
+        value = (value * 13 + 17) ^ (value >> 3);
+        value = (value << 1) | (value >> 15);
+        u16 quotient = value / divisor;
+        u16 remainder = value % divisor;
+        value = (quotient + (remainder << 4)) ^ (value << 1);
+    }
+    *(volatile u16*)0x0120 = value;
+    return (word)value;
+}

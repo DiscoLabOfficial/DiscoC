@@ -14,18 +14,31 @@ inline RuntimeInitialization makeRuntimeInitialization(std::uint8_t bank, std::u
     if (bank > 1 || initial_image.size() > 65536u - ram_origin || (ram_origin & 1) != 0)
         throw std::runtime_error("Runtime RAM initialization exceeds its aligned bank allocation.");
     RuntimeInitialization result;
+    // Validation bounds the image to 64 KiB. Startup/clear/footer use at most
+    // 26 bytes, each pair needs at most two IWTs + STW (7), and an odd tail
+    // adds one ALT1. Reserve before emitting so append operations never grow
+    // the allocation (also avoids GCC 13's vector-insert overflow warning).
+    result.bytes.reserve(27u + 7u * ((initial_image.size() + 1u) / 2u));
     const auto word = [&](std::uint8_t reg, std::uint16_t value) {
         result.bytes.push_back(static_cast<std::uint8_t>(0xf0 | reg));
         result.bytes.push_back(static_cast<std::uint8_t>(value));
         result.bytes.push_back(static_cast<std::uint8_t>(value >> 8));
     };
-    word(0, bank);
+    const auto literal = [&](std::uint8_t reg, std::uint16_t value) {
+        // IBT always sign-extends. Select it by the resulting 16-bit pattern,
+        // not by source signedness: $FE is $FFFE, never $00FE.
+        if (value <= 0x7f || value >= 0xff80) {
+            result.bytes.push_back(static_cast<std::uint8_t>(0xa0 | reg));
+            result.bytes.push_back(static_cast<std::uint8_t>(value));
+        } else word(reg, value);
+    };
+    literal(0, bank);
     result.bytes.insert(result.bytes.end(), {0x3e, 0xdf});
-    word(10, stack);
+    literal(10, stack);
     if (!initial_image.empty()) {
-        word(0, 0);
-        word(1, ram_origin);
-        word(2, static_cast<std::uint16_t>(initial_image.size()));
+        literal(0, 0);
+        literal(1, ram_origin);
+        literal(2, static_cast<std::uint16_t>(initial_image.size()));
         // A byte loop also handles odd-size objects and exactly 64 KiB
         // (zero count wraps once). No ROM access is needed for RAM execution.
         result.bytes.insert(result.bytes.end(), {0x3d, 0x31, 0xd1, 0xe2, 0x08, 0xfa, 0x01});
@@ -33,13 +46,14 @@ inline RuntimeInitialization makeRuntimeInitialization(std::uint8_t bank, std::u
             const auto low = initial_image[offset];
             const auto high = offset + 1 < initial_image.size() ? initial_image[offset + 1] : 0;
             if (low == 0 && high == 0) continue;
-            word(1, static_cast<std::uint16_t>(ram_origin + offset));
-            word(0, static_cast<std::uint16_t>(low | (high << 8)));
+            literal(1, static_cast<std::uint16_t>(ram_origin + offset));
+            literal(0, static_cast<std::uint16_t>(low | (high << 8)));
             if (offset + 1 == initial_image.size()) result.bytes.push_back(0x3d);
             result.bytes.push_back(0x31);
         }
     }
     result.entry_patch = result.bytes.size() + 1;
+    // The execution address is patched after layout, so it must stay IWT.
     word(15, 0);
     result.bytes.push_back(1);
     return result;

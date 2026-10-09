@@ -1,0 +1,22 @@
+word classify(word key) {
+    word result = 99;
+    switch (key) {
+        case 0: result = 7; break;
+        case 1: result = 10; break;
+        case 2: result = 13; break;
+        case 3: result = 16; break;
+        case 4: result = 19; break;
+        case 5: result = 22; break;
+        case 6: result = 25; break;
+        case 7: result = 28; break;
+        default: break;
+    }
+    return result;
+}
+
+word main() {
+    word result = 0;
+    for (word i = 0; i < 9; i++) result += classify((word)((byte*)0x0400)[i]);
+    *(volatile word*)0x0120 = result;
+    return result;
+}

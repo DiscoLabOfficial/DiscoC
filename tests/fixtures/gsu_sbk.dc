@@ -1,0 +1,34 @@
+word add_one(word value) {
+    return value + 1;
+}
+
+word main() {
+    volatile word* output = (volatile word*)0x100;
+    *output = 10;
+    *output += 2;
+    *output ^= 0x1234;
+
+    word local = 20;
+    local++;
+    local = local + 3;
+    *(word*)0x102 = local;
+
+    volatile word repeated = 1;
+    repeated = 2;
+    repeated = 3;
+    *(word*)0x10c = repeated;
+
+    volatile byte* bytes = (volatile byte*)0x104;
+    *bytes = (byte)7;
+    *bytes += (byte)2;
+
+    volatile word* other = (volatile word*)0x108;
+    *other = 30;
+    *output += *other;
+    *output = add_one(*output);
+
+    for (word i = 0; i < 3; i++) {
+        *output += i;
+    }
+    return 42;
+}

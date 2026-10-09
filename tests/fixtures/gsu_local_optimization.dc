@@ -1,0 +1,39 @@
+void mutate(word* address) { *address = *address + 7; }
+word identity(word x) { return x; }
+
+word main() {
+    word input = *(volatile word*)0x100;
+    word x = input;
+    x = x;
+    *(word*)0x102 = (word)x + x;
+
+    word escaped = input;
+    word snapshot = escaped;
+    mutate(&escaped);
+    *(word*)0x104 = escaped;
+    *(word*)0x106 = snapshot;
+
+    word live = input + 1;
+    word b = input + 2;
+    word c = input + 3;
+    word d = input + 4;
+    word e = input + 5;
+    *(word*)0x108 = live + identity(input) + b + c + d + e;
+
+    word* indirect = &escaped;
+    *indirect = 13;
+    *(word*)0x10a = escaped;
+
+    volatile word observed = 1;
+    observed = observed + 1;
+    *(word*)0x10c = observed + observed;
+
+    word total = 0;
+    for (word i = 0; i < 6; i++) {
+        if (i == 2) continue;
+        word copy = i;
+        total = total + copy + copy;
+    }
+    *(word*)0x10e = total;
+    return 42;
+}

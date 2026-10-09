@@ -11,6 +11,7 @@ include(CMakePrintHelpers)
 option(DISCO_DOS_BUILD "Enable settings for a 16/32-bit DOS cross-compilation" OFF)
 option(DISCO_BUILD_FUZZERS "Build optional Clang libFuzzer targets" OFF)
 option(DISCO_TEST_SNES_INTEGRATION "Run the optional WLA-DX + Mesen complete SNES triangle test" OFF)
+option(DISCO_TEST_MESEN_BENCHMARKS "Run optional WLA-DX + Mesen GSU timing benchmarks and calibration" OFF)
 option(DISCO_MINGW_STATIC "Link MinGW executables without GCC/MinGW runtime DLL dependencies" OFF)
 
 if(NOT DISCO_DOS_BUILD AND CMAKE_VERSION VERSION_LESS 3.20)
@@ -171,6 +172,25 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_executable(disco_language_contract_tests tests/LanguageContractTests.cpp)
     target_link_libraries(disco_language_contract_tests PRIVATE disco_compiler_core)
 
+    add_executable(disco_ir_local_optimizer_tests tests/IRLocalOptimizerTests.cpp)
+    target_link_libraries(disco_ir_local_optimizer_tests PRIVATE disco_compiler_core)
+    add_executable(disco_ir_global_optimizer_tests tests/IRGlobalOptimizerTests.cpp)
+    target_link_libraries(disco_ir_global_optimizer_tests PRIVATE disco_compiler_core)
+    add_executable(disco_ir_value_optimizer_tests tests/IRValueOptimizerTests.cpp)
+    target_link_libraries(disco_ir_value_optimizer_tests PRIVATE disco_compiler_core)
+    add_executable(disco_gsu_cost_tests tests/GSUCostModelTests.cpp)
+    target_link_libraries(disco_gsu_cost_tests PRIVATE disco_compiler_core)
+    add_executable(disco_ir_conditional_optimizer_tests tests/IRConditionalOptimizerTests.cpp)
+    target_link_libraries(disco_ir_conditional_optimizer_tests PRIVATE disco_compiler_core)
+    add_executable(disco_gsu_scheduler_tests tests/GSUMachineSchedulerTests.cpp)
+    target_link_libraries(disco_gsu_scheduler_tests PRIVATE disco_compiler_core disco_assembler_core)
+    add_executable(disco_gsu_checked_proof_tests tests/GSUCheckedProofTests.cpp)
+    target_link_libraries(disco_gsu_checked_proof_tests PRIVATE disco_compiler_core)
+    add_executable(disco_gsu_size_optimization_tests tests/GSUSizeOptimizationTests.cpp)
+    target_link_libraries(disco_gsu_size_optimization_tests PRIVATE disco_compiler_core)
+    add_executable(disco_gsu_compaction_tests tests/GSUCompactionTests.cpp)
+    target_link_libraries(disco_gsu_compaction_tests PRIVATE disco_compiler_core disco_assembler_core)
+
     add_executable(disco_project_manifest_tests tests/ProjectManifestTests.cpp)
     target_link_libraries(disco_project_manifest_tests PRIVATE disco_project_core)
 
@@ -191,8 +211,9 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
             NAME ${name}
             COMMAND ${CMAKE_COMMAND}
                 -DCASE=${case_name}
+                -DOPTIMIZATION=${ARGV2}
                 -DROOT_DIR=${CMAKE_CURRENT_SOURCE_DIR}
-                -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/${case_name}
+                -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/${name}
                 -DDISCC=$<TARGET_FILE:discc>
                 -DDISCAS=$<TARGET_FILE:discas>
                 -DDISCLD=$<TARGET_FILE:discld>
@@ -205,11 +226,40 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
         elseif(case_name MATCHES "^graphics_")
             set_tests_properties(${name} PROPERTIES LABELS "backend;gsu;graphics")
         endif()
+        if(case_name MATCHES "^gsu_(contributor_correctness|optimization|local_optimization|global_optimization|value_optimization|sccp|checked_proofs|size_optimization|selection_optimization|sbk)$" OR ARGV2 MATCHES "^[12]$")
+            set_property(TEST ${name} APPEND PROPERTY LABELS "gsu;optimization;correctness")
+        endif()
     endfunction()
 
+    add_test(NAME build_target_parity COMMAND ${CMAKE_COMMAND}
+        -DROOT_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/BuildTargetParity.cmake)
+    set_tests_properties(build_target_parity PROPERTIES LABELS "build;unit")
+    add_test(NAME build_target_parity_regressions COMMAND ${CMAKE_COMMAND}
+        -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/build_target_parity
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/BuildTargetParityTests.cmake)
+    set_tests_properties(build_target_parity_regressions PROPERTIES LABELS "build;unit")
     add_test(NAME object_file_hardening COMMAND disco_object_tests)
     add_test(NAME linker_hardening COMMAND disco_linker_hardening_tests)
     add_test(NAME ir_verifier COMMAND disco_ir_verifier_tests)
+    add_test(NAME ir_local_optimizer COMMAND disco_ir_local_optimizer_tests)
+    add_test(NAME ir_global_optimizer COMMAND disco_ir_global_optimizer_tests)
+    add_test(NAME ir_value_optimizer COMMAND disco_ir_value_optimizer_tests)
+    add_test(NAME gsu_cost_model COMMAND disco_gsu_cost_tests)
+    set_tests_properties(gsu_cost_model PROPERTIES LABELS "gsu;optimization;unit")
+    set_tests_properties(ir_value_optimizer PROPERTIES LABELS "ir;gsu;optimization;unit")
+    add_test(NAME ir_conditional_optimizer COMMAND disco_ir_conditional_optimizer_tests)
+    set_tests_properties(ir_conditional_optimizer PROPERTIES LABELS "ir;optimization;unit")
+    add_test(NAME gsu_machine_scheduler COMMAND disco_gsu_scheduler_tests)
+    set_tests_properties(gsu_machine_scheduler PROPERTIES LABELS "gsu;optimization;pipeline;unit")
+    add_test(NAME gsu_checked_proofs COMMAND disco_gsu_checked_proof_tests)
+    set_tests_properties(gsu_checked_proofs PROPERTIES LABELS "gsu;optimization;unit")
+    add_test(NAME gsu_size_optimization_unit COMMAND disco_gsu_size_optimization_tests)
+    add_test(NAME gsu_compaction_unit COMMAND disco_gsu_compaction_tests)
+    set_tests_properties(gsu_compaction_unit PROPERTIES LABELS "gsu;ir;optimization;unit")
+    set_tests_properties(gsu_size_optimization_unit PROPERTIES LABELS "gsu;ir;optimization;unit")
+    set_tests_properties(ir_global_optimizer PROPERTIES LABELS "ir;gsu;optimization;unit")
+    set_tests_properties(ir_local_optimizer PROPERTIES LABELS "ir;gsu;optimization;unit")
     add_test(NAME linear_scan_allocator COMMAND disco_linear_scan_tests)
     add_test(NAME target_foundation COMMAND disco_target_foundation_tests)
     add_test(NAME language_contract COMMAND disco_language_contract_tests)
@@ -224,6 +274,7 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     set_tests_properties(linker_hardening PROPERTIES LABELS "linker;object;runtime;unit")
     set_tests_properties(gsu_execution_model PROPERTIES LABELS "backend;gsu;unit")
     include(tests/toolchain-cases.cmake)
+    add_subdirectory(benchmarks)
 
     if(DISCO_TEST_SNES_INTEGRATION)
         find_program(DISCO_WLA_65816 NAMES wla-65816)
@@ -249,6 +300,9 @@ endif()
 
 if(DISCO_TEST_SNES_INTEGRATION AND (NOT BUILD_TESTING OR DISCO_DOS_BUILD))
     message(FATAL_ERROR "SNES integration is a native BUILD_TESTING workflow, not a DOS cross-build.")
+endif()
+if(DISCO_TEST_MESEN_BENCHMARKS AND (NOT BUILD_TESTING OR DISCO_DOS_BUILD))
+    message(FATAL_ERROR "Mesen benchmarks require native BUILD_TESTING, not a DOS cross-build.")
 endif()
 
 # Core libraries carry their include paths and warning policy to the tools and

@@ -31,6 +31,7 @@ void projectUsage() {
         "  --host-initialized-globals | --no-host-initialized-globals\n"
         "  --output-dir <directory> -o <binary> --emit-asm <file> --no-emit-asm\n"
         "  --check (frontend/IR only, no outputs or linking)\n"
+        "  -O | -O1 | -O0 | -O2 | -Os (compiler optimization; CLI overrides manifest defaults)\n"
         "  -Wall | -Werror | -W<category> | -Wno-<category>\n";
 }
 } // namespace
@@ -68,6 +69,7 @@ int buildProject(const std::vector<std::string>& arguments) {
             } else if (link_values.count(flag)) {
                 const auto value = next(); link_flags.insert(link_flags.end(), {flag, value});
             } else if (link_switches.count(flag)) link_flags.push_back(flag);
+            else if (flag == "-O" || flag == "-O0" || flag == "-O1" || flag == "-O2" || flag == "-Os") compile_flags.push_back(flag);
             else if (flag.compare(0, 2, "-W") == 0) compile_flags.push_back(flag);
             else throw std::runtime_error("Unknown project-build option: " + flag);
         }

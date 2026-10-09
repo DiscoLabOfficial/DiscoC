@@ -1,0 +1,465 @@
+{
+  "optimization": "O2",
+  "profile": "NTSC CLSR=1 GSU=100% CFGR.MSO=0 RAM-execution CACHE cold",
+  "payload_bytes": 3114,
+  "rom_bytes": 65536,
+  "payload_sha256": "8497ca720abdb7579b6341096db9ae23e73100e9cccd090f9a69a5f7d92f20d0",
+  "source_sha256": "fb05742c4ec5a189c7f2c986834d2e95054dc4155f406a8e9bbfceb7ec68117f",
+  "samples": [
+    {
+      "phase": 0,
+      "master_clocks_to_stop_entry": 2658088,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 2658089,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 1,
+      "master_clocks_to_stop_entry": 3058385,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3058386,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 2,
+      "master_clocks_to_stop_entry": 3066949,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3066950,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 3,
+      "master_clocks_to_stop_entry": 3077175,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3077176,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 4,
+      "master_clocks_to_stop_entry": 3082795,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3082796,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 5,
+      "master_clocks_to_stop_entry": 3087692,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3087693,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 6,
+      "master_clocks_to_stop_entry": 3074242,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3074243,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 7,
+      "master_clocks_to_stop_entry": 3076865,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3076866,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 8,
+      "master_clocks_to_stop_entry": 3081893,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3081894,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 9,
+      "master_clocks_to_stop_entry": 3070347,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3070348,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 10,
+      "master_clocks_to_stop_entry": 3064053,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3064054,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 11,
+      "master_clocks_to_stop_entry": 3074366,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3074367,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 12,
+      "master_clocks_to_stop_entry": 3041133,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3041134,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 13,
+      "master_clocks_to_stop_entry": 3038523,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3038524,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 14,
+      "master_clocks_to_stop_entry": 3034764,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3034765,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 15,
+      "master_clocks_to_stop_entry": 3033181,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3033182,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 16,
+      "master_clocks_to_stop_entry": 3050444,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3050445,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 17,
+      "master_clocks_to_stop_entry": 3032249,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3032250,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 18,
+      "master_clocks_to_stop_entry": 3032862,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3032863,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 19,
+      "master_clocks_to_stop_entry": 3035415,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3035416,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 20,
+      "master_clocks_to_stop_entry": 3037367,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3037368,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 21,
+      "master_clocks_to_stop_entry": 3070025,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3070026,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 22,
+      "master_clocks_to_stop_entry": 3060063,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3060064,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 23,
+      "master_clocks_to_stop_entry": 3067105,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3067106,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 24,
+      "master_clocks_to_stop_entry": 3079321,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3079322,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 25,
+      "master_clocks_to_stop_entry": 3074607,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3074608,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 26,
+      "master_clocks_to_stop_entry": 3072829,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3072830,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 27,
+      "master_clocks_to_stop_entry": 3086847,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3086848,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 28,
+      "master_clocks_to_stop_entry": 3082675,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3082676,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 29,
+      "master_clocks_to_stop_entry": 3077646,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3077647,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 30,
+      "master_clocks_to_stop_entry": 3068245,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3068246,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 31,
+      "master_clocks_to_stop_entry": 3060092,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3060093,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 32,
+      "master_clocks_to_stop_entry": 2660260,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 2660261,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 33,
+      "master_clocks_to_stop_entry": 3030997,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3030998,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 34,
+      "master_clocks_to_stop_entry": 3039000,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3039001,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 35,
+      "master_clocks_to_stop_entry": 3048481,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3048482,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 36,
+      "master_clocks_to_stop_entry": 3053410,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3053411,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 37,
+      "master_clocks_to_stop_entry": 3057722,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3057723,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 38,
+      "master_clocks_to_stop_entry": 3043454,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3043455,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 39,
+      "master_clocks_to_stop_entry": 3045337,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3045338,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 40,
+      "master_clocks_to_stop_entry": 3049931,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3049932,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 41,
+      "master_clocks_to_stop_entry": 3037725,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3037726,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 42,
+      "master_clocks_to_stop_entry": 3030553,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3030554,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 43,
+      "master_clocks_to_stop_entry": 3039660,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3039661,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 44,
+      "master_clocks_to_stop_entry": 3067307,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3067308,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 45,
+      "master_clocks_to_stop_entry": 3065005,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3065006,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 46,
+      "master_clocks_to_stop_entry": 3062392,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3062393,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 47,
+      "master_clocks_to_stop_entry": 3061514,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3061515,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 48,
+      "master_clocks_to_stop_entry": 3080914,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3080915,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 49,
+      "master_clocks_to_stop_entry": 3062306,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3062307,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 50,
+      "master_clocks_to_stop_entry": 3063929,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3063930,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 51,
+      "master_clocks_to_stop_entry": 3067608,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3067609,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 52,
+      "master_clocks_to_stop_entry": 3070288,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3070289,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 53,
+      "master_clocks_to_stop_entry": 3043961,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3043962,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 54,
+      "master_clocks_to_stop_entry": 3034558,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3034559,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 55,
+      "master_clocks_to_stop_entry": 3040967,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3040968,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 56,
+      "master_clocks_to_stop_entry": 3052503,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3052504,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 57,
+      "master_clocks_to_stop_entry": 3047595,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3047596,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 58,
+      "master_clocks_to_stop_entry": 3044867,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3044868,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 59,
+      "master_clocks_to_stop_entry": 3058567,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3058568,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 60,
+      "master_clocks_to_stop_entry": 3053530,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3053531,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 61,
+      "master_clocks_to_stop_entry": 3048010,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3048011,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 62,
+      "master_clocks_to_stop_entry": 3037704,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3037705,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 63,
+      "master_clocks_to_stop_entry": 3029290,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 3029291,
+      "cache_base_at_stop": 27344
+    },
+    {
+      "phase": 0,
+      "master_clocks_to_stop_entry": 2658088,
+      "stop_fetch_master_clocks": 1,
+      "gsu_cycles": 2658089,
+      "cache_base_at_stop": 27344
+    }
+  ]
+}

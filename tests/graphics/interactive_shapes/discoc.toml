@@ -1,0 +1,22 @@
+[project]
+name = "interactive-shapes"
+target = "gsu"
+sources = ["main.dc"]
+
+[compiler]
+optimization_level = 2
+
+[target.gsu]
+memory_mapping = "lorom"
+execution_memory = "ram"
+origin = 0x708000
+ram_bank = 0
+stack_pointer = 0xEFFE
+
+[runtime]
+initialize = true
+
+[output]
+directory = "../../../build/interactive-shapes"
+binary = "interactive-shapes.bin"
+assembly = "interactive-shapes.s"

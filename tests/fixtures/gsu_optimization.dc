@@ -1,0 +1,40 @@
+ram word counter;
+
+word next() { counter++; return counter; }
+word change(word* value, word replacement) { *value = replacement; return replacement + 1; }
+
+word main() {
+    volatile word* port = (volatile word*)0x100;
+    word before = *port;
+    *port = 7;
+    word after = *port;
+    *(word*)0x104 = before + after;
+
+    word local = 3;
+    word saved = local + change(&local, 20);
+    *(word*)0x108 = saved;
+    *(word*)0x10a = local;
+    // The nested RHS retains more observable results than R5/R7/R8 can hold.
+    *(word*)0x10c = next() + (next() + (next() + (next() + next())));
+    *(word*)0x10e = counter;
+
+    *(unsigned word*)0x200 = 127;
+    *(unsigned word*)0x202 = 128;
+    *(unsigned word*)0x204 = 255;
+    *(unsigned word*)0x206 = 0x8000;
+    *(unsigned word*)0x208 = (unsigned word)(word)-128;
+    *(unsigned word*)0x20a = (unsigned word)(word)-129;
+    *(word*)0x20c = (word)((unsigned word)0x8000 >> 15);
+    *(word*)0x20e = (word)((word)-8 >> 2);
+
+    plot {
+        options; at (10, 20);
+        color 5; color 5;
+        pixel; pixel;
+        *(word*)0x110 = cursor.x;
+        byte c = read_pixel at (10, 20);
+        *(byte*)0x112 = c;
+        read_pixel; flush;
+    }
+    return 42;
+}

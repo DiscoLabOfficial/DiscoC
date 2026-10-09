@@ -1,0 +1,51 @@
+{
+  "measurement": "rotation-mesen-21MHz",
+  "profile": "NTSC CLSR=1 GSU=100% CFGR.MSO=0 RAM execution at 0x706000, two CACHE instructions, cold instruction cache on entry",
+  "measured_window": "first payload opcode entry through normal STOP completion, excluding CPU setup/copy/DMA/display and initial synthetic prefetch",
+  "poses": 64,
+  "additional_wrap_sample": 1,
+  "source": "tests/graphics/rotating_triangle/triangle.dc",
+  "source_sha256": "fb05742c4ec5a189c7f2c986834d2e95054dc4155f406a8e9bbfceb7ec68117f",
+  "host_sha256": "5ecc376a21850fe0f3a34a706d6632f07ec0aa3ce73d7a769ec597ec4ffcb263",
+  "verifier_sha256": "df8310d058d8a23fdb502ccf1abf82b9e9e4fa09253fcc1c1f2691b773d2de6d",
+  "timing_probe_sha256": "6848b09d051f6ca8e5ffc19ea3682bcaa7df1aef0fc5f7e0675fa6551152fc8e",
+  "mesen_sha256": "8ef403d6b9af32075416193914d7993ce8480b347fe1f20a0cfd9815374933e7",
+  "before_discc_sha256": "dc6343a557cf4a88d4c837af2e9808a9f60e24d5c8d3bfd0fce1dc02fdc20fe9",
+  "after_discc_sha256": "22ffc2e05d34cd4bc0f33e4f8f7dac1cd56dae92177f2dce2a59c30b187ee985",
+  "pixel_checks_per_pose": 49152,
+  "screenshot_hashes_compared": 64,
+  "screenshot_mismatches": 0,
+  "cases": [
+    {
+      "label": "O1-local",
+      "report": "benchmarks/results/rotation-O1-local-21MHz.json",
+      "payload_bytes": 4748,
+      "rom_bytes": 65536,
+      "payload_sha256": "166ff54ce7ed0bed9706ee093f6b14322bd86b0140596cf9c6aad9811fd59cba",
+      "phase0_cycles": 2918335,
+      "mean_cycles_64_poses": 3362905.4375,
+      "minimum_cycles": 2904953,
+      "maximum_cycles": 3419944,
+      "total_cycles_64_poses": 215225948,
+      "phase_wrap_cycles": 2918335
+    },
+    {
+      "label": "O1-selection",
+      "report": "benchmarks/results/rotation-O1-selection-21MHz.json",
+      "payload_bytes": 4721,
+      "rom_bytes": 65536,
+      "payload_sha256": "64861dc4292956250f2cfadc6ec36c07315533c5e9c4012ae52ac73c0f62051a",
+      "phase0_cycles": 2853506,
+      "mean_cycles_64_poses": 3300426.375,
+      "minimum_cycles": 2842684,
+      "maximum_cycles": 3356395,
+      "total_cycles_64_poses": 211227288,
+      "phase_wrap_cycles": 2853506
+    }
+  ],
+  "limitations": [
+    "Emulated GSU clock ticks, not physical-hardware timing or FPS.",
+    "This cache-enabled RAM-execution profile is distinct from the nine-workload LoROM benchmark suite.",
+    "The boundary-only timing probe is a local development artifact, not a new portable benchmark target."
+  ]
+}

@@ -65,6 +65,12 @@ The backend selects the instruction; source code does not choose COLOR/GETC.
 - Arithmetic, explicit casts, volatile reads and values copied to local/RAM
   storage retain normal expression evaluation followed by COLOR.
 
+O1 can omit an identical repeated literal COLOR in straight-line code with
+unchanged POR. Calls, GETC, emitted CMODE changes, CFG boundaries and implicit
+hardware-loop boundaries invalidate that knowledge. It never removes
+expression evaluation or a RAM/volatile read.
+See [optimization](optimization.md) for the preserved hardware-state contract.
+
 ```c
 rom const byte palette[] = { 1, 2, 3, 4 };
 // Inside a plot block:

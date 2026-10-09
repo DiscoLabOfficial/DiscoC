@@ -1,0 +1,48 @@
+bitmap screen { mode bitmap; size 256x128; depth 2bpp; base 0x4000; }
+struct Pair { word first; word second; };
+
+word lookup(word seed) {
+    word values[17] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17};
+    word index = seed & 15;
+    if (seed & 16) index = 16 - index;
+    word selected = values[index];
+    word* middle = &values[8];
+    word backwards = middle[(seed & 7) - 7];
+    struct Pair pair;
+    pair.first = 30;
+    pair.second = 12;
+    *(volatile word*)0x0120 = selected;
+    *(volatile word*)0x0122 = backwards;
+    *(volatile word*)0x0124 = pair.first + pair.second;
+    return selected + backwards + pair.first + pair.second;
+}
+
+word step(word* value) { *value += 1; return *value; }
+word nested(word seed) {
+    word value = seed & 31;
+    step(&value);
+    return step(&value);
+}
+
+word main() {
+    use bitmap screen;
+    word seed = *(volatile word*)0x0100;
+    word result = lookup(seed);
+    word repeated = 0;
+    @cache for (word count = 3; count > 0; count--) repeated += nested(seed);
+    *(volatile word*)0x0126 = repeated;
+    *(far word*)0x710200 = 9;
+    plot {
+        options;
+        at (9, 10);
+        color 2;
+        nested(seed);
+        pixel;
+        *(volatile word*)0x0128 = cursor.x;
+        *(volatile word*)0x012a = cursor.y;
+        at (9, 10);
+        *(volatile word*)0x012c = (word)read_pixel;
+        flush;
+    }
+    return result + repeated;
+}

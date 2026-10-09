@@ -1,0 +1,41 @@
+struct Wide { word a; word b; word c; word d; };
+
+word choose(word value) {
+    if ((value & 1) != 0) return value + 7;
+    return value - 3;
+}
+word add(word a, word b) { return a + b; }
+
+word main() {
+    word seed = *(volatile word*)0x0100;
+    volatile word* out = (volatile word*)0x0120;
+    word x = seed;
+    word y = seed + 1;
+    for (word i = 0; i < 5; i++) { word previous = x; x = y; y = previous; }
+    out[0] = x;
+    out[1] = y;
+    word sum = 0;
+    for (word i = 0; i < 8; i++) {
+        if (i == 2) continue;
+        switch (i) { case 5: sum += 9; break; default: sum += choose(i); break; }
+    }
+    out[2] = sum;
+    word escaped = seed;
+    word* pointer = &escaped;
+    *pointer += 4;
+    out[3] = escaped;
+    volatile word observed = seed;
+    observed += 1;
+    observed += 2;
+    out[4] = observed;
+    byte narrow = (byte)seed;
+    for (word i = 0; i < 3; i++) narrow = (byte)((word)narrow - 1);
+    out[5] = (word)narrow;
+    struct Wide items[3];
+    for (u16 i = 0; i < 3; i++) items[i].a = (word)i + 11;
+    sum = 0;
+    for (u16 i = 0; i < 3; i++) sum += items[i].a;
+    out[6] = sum;
+    out[7] = add(12, 30);
+    return 42;
+}

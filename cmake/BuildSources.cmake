@@ -1,4 +1,5 @@
 # Keep the direct compiler scripts and CMake on the same source manifest.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/build-sources.txt")
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/build-sources.txt" source_groups)
 foreach(line IN LISTS source_groups)
     if(line MATCHES "^#" OR line STREQUAL "")

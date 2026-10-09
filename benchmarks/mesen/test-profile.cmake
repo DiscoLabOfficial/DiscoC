@@ -1,0 +1,40 @@
+cmake_minimum_required(VERSION 3.20)
+include("${CMAKE_CURRENT_LIST_DIR}/profile.cmake")
+file(MAKE_DIRECTORY "${OUTPUT_DIR}")
+file(WRITE "${OUTPUT_DIR}/payload.inc" ".DB $01,$00,$01\n")
+mesen_build_host("${OUTPUT_DIR}" -D CALIBRATION=1)
+file(WRITE "${OUTPUT_DIR}/profile-test-config.lua" "return {script=[=[${CMAKE_CURRENT_LIST_DIR}/gsu-profile.lua]=]}\n")
+file(REMOVE "${OUTPUT_DIR}/profile-test-pass.log" "${OUTPUT_DIR}/timing-error.log" "${OUTPUT_DIR}/opcode-profile.json" "${OUTPUT_DIR}/region-profile.json")
+mesen_command("${OUTPUT_DIR}" "${MESEN}" --testrunner --timeout=15 --doNotSaveSettings
+    --debug.scriptWindow.allowIoOsAccess=true "${CMAKE_CURRENT_LIST_DIR}/test-profile.lua" "${OUTPUT_DIR}/host.sfc")
+if(NOT EXISTS "${OUTPUT_DIR}/profile-test-pass.log")
+    message(FATAL_ERROR "GSU Lua profile tests produced no fresh PASS")
+endif()
+foreach(mode IN ITEMS opcode region)
+    file(READ "${OUTPUT_DIR}/${mode}-profile.json" profile LIMIT 16384)
+    gsu_validate_profile("${profile}" 17 4)
+endforeach()
+# Startup failures must leave actionable evidence, not merely time out or
+# allow stale timing data to survive. Exercise both public probe entry points.
+foreach(probe IN ITEMS measure.lua measure-rotation.lua)
+    string(REPLACE ".lua" "" name "${probe}")
+    set(directory "${OUTPUT_DIR}/${name}-invalid-map")
+    file(MAKE_DIRECTORY "${directory}")
+    file(COPY "${OUTPUT_DIR}/host.sfc" DESTINATION "${directory}")
+    file(WRITE "${directory}/timing-config.lua"
+        "return {code_bytes=3,instructions=2,profile_map=[=[${directory}/missing-map.lua]=],profile_script=[=[${CMAKE_CURRENT_LIST_DIR}/gsu-profile.lua]=]}\n")
+    file(WRITE "${directory}/profile-config.lua"
+        "return {map=[=[${directory}/missing-map.lua]=],script=[=[${CMAKE_CURRENT_LIST_DIR}/gsu-profile.lua]=]}\n")
+    file(REMOVE "${directory}/timing-error.log")
+    execute_process(COMMAND "${MESEN}" --testrunner --timeout=15 --doNotSaveSettings
+        --debug.scriptWindow.allowIoOsAccess=true "${CMAKE_CURRENT_LIST_DIR}/${probe}" "${directory}/host.sfc"
+        RESULT_VARIABLE status OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr TIMEOUT 30)
+    if(status STREQUAL "0" OR NOT EXISTS "${directory}/timing-error.log")
+        message(FATAL_ERROR "Invalid profile startup was not reported: ${probe}\n${stdout}\n${stderr}")
+    endif()
+    file(READ "${directory}/timing-error.log" error LIMIT 4096)
+    if(NOT error MATCHES "missing-map.lua")
+        message(FATAL_ERROR "Profile startup failed for the wrong reason: ${error}")
+    endif()
+endforeach()
+message(STATUS "GSU Lua opcode/region profiling tests passed")
