@@ -78,12 +78,15 @@ graphics effects. Smaller code may execute more instructions or cycles.
   induction/recurrence expansion and hot/cold lifetime splitting. It does not
   add automatic loop unrolling.
 - **Choose by real emitted bytes.** For units of at most 64 functions and
-  16,000 input instructions, compare up to eight deterministic candidates:
+  16,000 input instructions, compare up to eight deterministic IR policies:
   compact O2-policy IR/allocation and conservative size-policy IR/allocation,
   each with or without repeated-division pooling and typed compaction/near-pointer
   promotion. Conservative IR alternatives prevent LOOP setup or extra spills
   from forcing a speed-only size increase. Each candidate undergoes
-  verified lowering, bounded branch relaxation and machine emission. Keep the
+  verified lowering, bounded branch relaxation and machine emission. When an
+  automatic CACHE probe is present, also emit its no-auto-CACHE alternative:
+  scheduling a useful delay-slot instruction can beat a CACHE occupying that
+  byte. There are at most sixteen emitted alternatives. Keep the
   smallest actual CODE/DATA result; ties retain the earlier candidate. An O2
   transformation is therefore still allowed when its complete candidate wins
   on bytes. This is a bounded search, not a claim that every individual
@@ -132,9 +135,9 @@ as O2: all 64 images match, mean measured fast-GSU cycles remain
 2,914,672.734375, and completed-pose throughput remains about 6.70 FPS. That
 program has no profitable repeated-kernel pooling opportunity in this search.
 
-### Measured size/cycle tradeoff
+### Historical size/cycle snapshot
 
-These are working-tree O2 versus Os measurements, not v0.1.0 or a released
+These are historical working-tree O2 versus Os measurements, not v0.1.0 or a released
 v0.2.0. The retained [O2 reference](../benchmarks/results/gsu-Os-reference-O2-mesen.json),
 [Os timing report](../benchmarks/results/gsu-Os-mesen.json) and
 [opcode report](../benchmarks/results/gsu-Os.json) use the same nine workloads,
@@ -163,6 +166,206 @@ unchanged. The [rotating demo's 64 image hashes](../benchmarks/results/rotation-
 also match frozen O2; its padded
 SNES ROM stays 65,536 bytes and completed-image throughput stays about 6.70 FPS.
 Emulator timing is not a physical-hardware guarantee or isolated opcode latency.
+
+### Phase 2: investigating extreme Os cycle costs
+
+The following measurements compare frozen tools immediately before and after
+the contributor-fix reconciliation's second phase. All nine official benchmark
+sources are unchanged. These are uncommitted working-tree measurements, not
+release-candidate evidence: reports identify the executable hashes and use
+`toolchain.revision = "unknown"`. A later release pass must rebuild and validate
+the final committed revision.
+
+Three different causes were found:
+
+- `triangle_fill`: the byte-winning candidate spills loop state and repeatedly
+  reconstructs frame addresses. O2 instead keeps the pixel count in R12 and
+  uses LOOP. Neither measured triangle payload executes CACHE; a cache-policy
+  difference does not explain this case.
+- `horizontal_span`: Os used an increasing counter, comparison and two-branch
+  loop tail without CACHE. O2 uses LOOP/CACHE. The source does not observe the
+  counter, so a smaller software countdown can remove much of the overhead.
+- `arithmetic`: both levels use the same fixed 16-step division algorithm, but
+  Os lacked kernel CACHE. RAM traffic and software outer-loop control contribute
+  too; the large timing difference is not explained by opcode counts alone.
+
+Retained improvements preserve the size-first objective:
+
+- Proven, unobserved word induction can become an unsigned software countdown
+  in Os. The original entry guard handles zero trips; signed distance is exact
+  on the taken path, including 65,535 iterations. Observable induction,
+  additional carried PHIs, early exits, calls and potentially wrapping bounds
+  remain conservative. This alternative avoids R12/R13 preservation overhead.
+- An allocated word updated in place by one uses INC/DEC. A following equality
+  or inequality against zero may reuse Z only when the register update is
+  adjacent and no emitted work intervenes. Byte operations, spills and unrelated
+  flag consumers do not inherit this proof.
+- A conditional-exit/BRA-backedge pair can become one inverted conditional
+  branch when both original delay slots are NOPs. Independently reachable or
+  relocated entries are protected, and range failure retains the old sequence.
+- Os can replace the successful zero-divisor guard's existing delay-slot NOP
+  with CACHE, without adding bytes or padding. The prefetched success target
+  establishes the cache window for the bounded kernel. Explicit CACHE ownership
+  suppresses this automatic rebasing; calls still do not preserve a cache base.
+
+| Level / workload | Payload bytes before → after | Fast GSU cycles before → after |
+| --- | ---: | ---: |
+| O2 `triangle_fill` | 274 → 268 | 246,040 → 243,130 |
+| O2 `horizontal_span` | 132 → 132 | 1,473 → 1,473 |
+| O2 `arithmetic` | 292 → 292 | 25,652 → 25,652 |
+| Os `triangle_fill` | 258 → 253 | 1,933,295 → 1,930,870 |
+| Os `horizontal_span` | 108 → 98 | 11,060 → 3,975 |
+| Os `arithmetic` | 273 → 270 | 79,564 → 27,172 |
+
+Os span cycles fall **64.06%**, and arithmetic cycles fall **65.85%**, while
+their payloads also shrink. The triangle's penalty remains: Os saves 15 bytes
+against the new O2 output, but takes about **7.94 times** its cycles. This is
+a remaining performance concern in the current byte-first candidate selection,
+not a claim that the tradeoff is optimal or unavoidable. Use O2 for
+speed-critical drawing. Experiments decoupling the size IR from hot allocation
+and changing equal-size allocation tie handling did not improve these cases
+and were not retained. No benchmark-specific transformation was added.
+
+All nine workloads pass the functional model before/after at O2 and Os; none
+increases payload size or executed opcode count. The three cases above also
+pass independent Mesen result, full-RAM and stack comparisons. The focused
+Release regression suite passes **57/57**, including contributor loops/switches,
+SSA/PHIs, volatile ordering, graphics and byte-exact assembly checks. New cases
+cover signed/unsigned countdown boundaries, wrap and intervening effects,
+division by zero, cache ownership and protected branch entries. Changed
+production implementations pass GCC C++14 warnings-as-errors syntax checks.
+The complete Debug/Release matrix and rotating demo were not rerun in this
+phase.
+
+Timing uses Mesen **2.2.1+20ba206cef5ba207c21203176d02cb9f43dda9fb** on Windows,
+NTSC, fast GSU clock (`CLSR=1`, 100%), LoROM execution at `$00:8000`, RAMBR 0,
+SP `$FFFE`, `CFGR=0`, `SCBR=$18`, and host `SCMR=$39`. Instruction cache, pixel
+cache and ROM buffer start cold. The calibrated window includes STOP completion
+but excludes initial pipeline prefetch and SNES CPU copy/DMA/display time.
+Under this profile master clocks equal fast-GSU cycles. These are emulator
+measurements, not physical-hardware timing, CPU/PPU presentation time or FPS.
+
+Reproduce functional metrics with the native tools and benchmark runner:
+
+```sh
+cmake -DTOOLS_DIR=build/merge-verification-release/bin -DOPTIMIZATION=s -DOUTPUT_DIR=build/phase2-opcodes-Os -P benchmarks/run.cmake
+```
+
+For calibrated timing, supply the installed Mesen and WLA-DX executables:
+
+```sh
+cmake -DTOOLS_DIR=build/merge-verification-release/bin -DOPTIMIZATION=s -DCASE=horizontal_span -DOUTPUT_DIR=build/phase2-mesen-Os/horizontal_span "-DMESEN=/path/to/Mesen.exe" "-DWLA_65816=/path/to/wla-65816.exe" "-DWLALINK=/path/to/wlalink.exe" -P benchmarks/run-mesen.cmake
+```
+
+Use optimization `2` for O2 and separate output directories. Repeat the timing
+command for `triangle_fill` and `arithmetic`. Both runners produce JSON and CSV;
+preserve pre-change executables to reproduce a before/after comparison, and
+use `benchmarks/compare.cmake` to enforce matching workload/model/timing
+fingerprints. Investigation reports remain under the ignored
+`build/os-investigation-phase2/` directory, not versioned release reports.
+
+### Phase 2: loop-state refinements and demo measurements
+
+The following pass adds five guarded backend improvements at O2/Os, without
+rewriting any of the nine benchmark sources, the rotating triangle, or the
+interactive-shapes renderer:
+
+- Discarded adjacent `cursor.x/y` updates by one use INC/DEC on R1/R2. Used
+  prefix/postfix results, intervening effects and PLOT/RPIX retain snapshots.
+  PLOT still performs its own X increment; no extra increment is emitted.
+- Single-use, immediately consumed scalar values can stay in R0 instead of
+  making a temporary spill/reload. Near-RAM addresses require a proof covering
+  the complete access width, revalidated after final frame sizing. Far pairs
+  retain their preservation path; a near address cannot borrow R0 across a
+  far-pair store's materialization.
+- Automatic CACHE selection considers ordinary constant-trip loops as well
+  as scoped hardware loops, using post-relaxation bytes and a conservative
+  cold-fill cost. Windows reserve alignment headroom inside the 512-byte
+  hardware limit. Os also emits an uncached alternative and selects by actual
+  payload size; CACHE is not mandatory merely because a loop exists.
+- Safe backedges bypass a header's explicit CACHE through a private entry
+  immediately after it. External entries still execute the original CACHE at
+  the same address, preserving CBR anchoring. This avoids moving CACHE into a
+  differently aligned preheader. Calls, nested cache owners and other rebasing
+  effects block the bypass; PHI copies and R12/R13 preservation are retained.
+- Initial register choices favor hot PHI edges, without changing interference
+  rules or allocating special GSU registers. Successful near-RAM checks can
+  cover another access to the exact same immutable SSA address and no larger
+  width. CFG entries, PHI copies and calls fence that credit; different values,
+  wider accesses and unproved addresses keep their checks.
+
+The frozen-tool [before/after evidence](../benchmarks/results/loop-state-summary.json)
+identifies executable, source and payload hashes. It is **uncommitted
+working-tree evidence**, not validation of a final release SHA. The full
+[O2 before](../benchmarks/results/gsu-loop-state-O2-before-mesen.json),
+[O2 after](../benchmarks/results/gsu-loop-state-O2-mesen.json),
+[Os before](../benchmarks/results/gsu-loop-state-Os-before-mesen.json) and
+[Os after](../benchmarks/results/gsu-loop-state-Os-mesen.json) reports retain
+functional counters and matching workload/model/harness/emulator fingerprints.
+
+| Workload | O2 payload bytes, before → after | O2 GSU cycles, before → after | Os payload bytes, before → after | Os GSU cycles, before → after |
+| --- | ---: | ---: | ---: | ---: |
+| `triangle_fill` | 268 → 268 | 243,130 → 243,130 | 253 → 231 | 1,930,870 → 1,920,665 |
+| `horizontal_span` | 132 → 132 | 1,473 → 1,473 | 98 → 98 | 3,975 → 3,975 |
+| `rom_palette_plot` | 334 → 334 | 97,645 → 21,549 | 296 → 296 | 103,225 → 23,179 |
+| `ram_palette_plot` | 261 → 253 | 43,070 → 9,254 | 216 → 208 | 48,000 → 42,880 |
+| `memcpy` | 402 → 386 | 88,255 → 78,015 | 372 → 350 | 107,880 → 93,160 |
+| `function_call` | 196 → 196 | 38,800 → 38,800 | 196 → 196 | 38,800 → 38,800 |
+| `switch_dense` | 366 → 366 | 8,025 → 8,025 | 366 → 366 | 8,025 → 8,025 |
+| `switch_sparse` | 373 → 373 | 7,995 → 7,995 | 373 → 373 | 7,995 → 7,995 |
+| `arithmetic` | 292 → 285 | 25,652 → 25,419 | 270 → 264 | 27,172 → 26,820 |
+
+All nine preserve or improve payload bytes and cycles. The ROM-palette speedup
+has the same executed opcode count: CACHE changes fetch cost, not the work
+being computed. `triangle_fill` remains an Os concern: 231 versus 268 bytes
+still costs about **7.90 times** the O2 cycles. This pass does not establish
+that tradeoff as optimal or unavoidable.
+
+The independent RAM-execution demos use NTSC, fast GSU clock (`CLSR=1`, 100%),
+normal multiply and cold CACHE at each entry, with the same host and sources:
+
+| Demo / policy | Payload bytes, before → after | GSU cycles, before → after |
+| --- | ---: | ---: |
+| Rotating triangle, O2 | 2,806 → 2,733 | 1,149,680.375 → 945,534.515625 mean over 64 poses |
+| Rotating triangle, Os | 2,806 → 2,733 | 1,148,578.5 → 944,432.640625 mean over 64 poses |
+| Interactive wireframe, O2 | 13,794 → 12,987 | 469,556 → 407,584 at the fixed test pose |
+| Interactive filled, O2 | 13,794 → 12,987 | 1,901,192 → 1,739,658 at the steady-state test pose |
+| Interactive wireframe, Os | 13,794 → 12,978 | 469,556 → 418,768 at the fixed test pose |
+| Interactive filled, Os | 13,794 → 12,978 | 1,901,192 → 1,850,529 at the steady-state test pose |
+
+Rotation executes at `$70:6000`, SP `$FFFE`; interactive shapes at `$70:8000`,
+SP `$EFFE`, OBJ/4bpp. The shapes pose is yaw 8, pitch 5, size 12. GSU cycles
+exclude host CPU/DMA/display. Separately, the rotation's completed-image
+publication probe improves from about **15.02 to 20.03 poses/s**, including
+host/presentation costs. This is not the SNES refresh rate or a shapes FPS
+measurement. The padded rotation ROM remains 65,536 bytes.
+
+Mesen **2.2.1+20ba206cef5ba207c21203176d02cb9f43dda9fb** verifies all 64
+rotation poses plus wrap, 49,152 pixels per pose, byte-exact assembly, and the
+deliberate red-screen failure path at both levels. Shapes pass 35 complete OBJ
+framebuffers, 255 controller polls, rotation/resize/button-edge checks and the
+negative path. Native Windows verification passes **254 MSVC Release tests**
+(optional Mesen tests enabled) and **246 MSVC Debug tests**. All seven changed
+production implementations pass strict GCC C++14 syntax and
+warnings-as-errors checks. Regression cases cover all 16 cache alignments,
+cursor wrap and used updates, nested CACHE, PHI affinity, volatile ordering,
+byte-to-word access checks, far-pair stores and final-frame proof loss. Direct
+compaction-pass tests also preserve valid SSA for uncontracted body/latch chains.
+Linux, macOS, DOS, sanitizers and physical hardware were not rerun in this pass.
+
+Reproduce all nine cases with the preceding `benchmarks/run-mesen.cmake`
+command, omitting `CASE`, selecting optimization `2` or `s`, and using separate
+output directories. For the same demo verification and timing windows, supply
+Mesen/WLA-DX through PATH or their named CMake options:
+
+```sh
+cmake -DDISCO_TOOLS_DIR=build/release/bin -DOPTIMIZATION=2 -DOUTPUT_DIR=build/loop-state-rotation-O2 -DVERIFY_MESEN=ON -DMEASURE_GSU_TIMING=ON -P tests/graphics/rotating_triangle/build-snes.cmake
+cmake -DDISCO_TOOLS_DIR=build/release/bin -DOPTIMIZATION=2 -DOUTPUT_DIR=build/loop-state-shapes-O2 -DVERIFY_MESEN=ON -DBENCHMARK=ON -P tests/graphics/interactive_shapes/build-snes.cmake
+```
+
+Use `s` and separate directories for Os. Generated timing JSON/CSV and demo
+logs remain beside their payloads. Rebuild and repeat these checks against the
+final committed revision before treating them as release-candidate evidence.
 
 ## What O1 does
 
@@ -312,7 +515,9 @@ bounded machine scheduling. It has no LLVM dependency.
   four-byte slots. Preserve precisely caller-live allocated registers.
   Bounded two-color component swaps improve loop-weighted PHI affinity while
   preserving exact interference; preferred spill slots must also remain
-  noninterfering. This never turns a register allocation into a spill.
+  noninterfering. Initial register choices also rank the summed incoming PHI
+  edge weights, preferring a hot latch over a cold preheader. This never turns
+  a register allocation into a spill.
 - **Hot/cold lifetime partitioning.** Introduce a representation-identical
   `live.split` scalar copy in an existing unique loop preheader, and redirect
   its loop uses to that captured snapshot. The original keeps cold uses; each
@@ -372,6 +577,25 @@ bounded machine scheduling. It has no LLVM dependency.
   scaled magnitude must fit a word. Numeric wrapping never becomes a guessed
   small interval. Unknown loads/calls, recursive pointer PHIs, over-aligned
   locals, far/ROM addresses and scaled-index recurrences retain their checks.
+- **Local successful-check credit.** Within one emitted block, a successful
+  access check of an immutable SSA near-RAM address can justify an equal or
+  narrower access to that same value. Pointer-offset arithmetic must first
+  pass its original carry/borrow, representation and result-span checks.
+  CFG block entries, PHI copies and calls discard the credit; a reloaded pointer or a
+  cast has its own SSA identity. A byte check does not justify a word access.
+- **Adjacent transient values.** A single-use, nonallocated scalar or proved
+  near address can remain in R0 until its immediately consuming operation.
+  No load is repeated, no faulting address computation is deferred, and no
+  intervening operation may overwrite that snapshot. Pointer eligibility is
+  revalidated after final spill/divmod frame sizing; if a preliminary proof
+  disappears, restore pointer spills in one bounded retry. Far pairs and
+  PHIs retain their normal storage. A far-value store cannot consume its near
+  destination this way because pair materialization clobbers the accumulator.
+- **Discarded cursor updates.** Adjacent `cursor.x/y` reads, word addition or
+  subtraction by one, and writes with no separately used result select
+  INC/DEC R1/R2. Used prefix/postfix values and updates separated by PLOT,
+  RPIX, calls or other work retain their required snapshots. PLOT still owns
+  its physical R1 increment; no extra increment is introduced for a pixel.
 - **Stack-check reuse.** Track a lower-bound credit relative to the linker's
   common stack floor. The existing frame guard covers the two saved-register
   pushes; later paired pushes/pops can reuse an established bound. Allocation
@@ -1097,17 +1321,32 @@ the ABI, address spaces or the object format:
 - **Reroll suitable ordinary loops.** Convert straight-line, single-entry/exit
   natural loops with an exact increasing word induction and 8–65,535 constant
   trips into the existing scoped hardware-loop IR. Preserve R12/R13; remove the
-  induction only when the body does not use it. Calls, nested hardware scopes,
+  induction only when the body does not use it. Os can instead retain a proven
+  software countdown when the induction is unobserved and no other PHI is
+  carried, avoiding R12/R13 scope overhead. Calls, nested hardware scopes,
   early exits, exit PHIs and loop-produced SSA values used outside remain
   conservative. Discovery is limited to 256 blocks/4,096 values, 16 conversions
   and a bounded proof budget. This is not arbitrary machine-code outlining.
 - **Select CACHE after emission.** For generated loops, examine actual emitted
   hot-block extents and require at most 496 bytes, reserving 15 bytes for final
   placement alignment within the 512-byte window. A conservative cold-fill
-  proxy must predict a fetch saving; otherwise retain the one-byte NOP
-  placeholder. Uniform initializer loops have a separately known small body.
-  Never introduce a second automatic window in a function with explicit CACHE
-  or `@cache`. O0/O1 do not gain automatic CACHE.
+  proxy must predict a fetch saving. Ordinary constant-trip word loops can
+  reuse an existing entry/backedge delay-slot NOP; scoped hardware loops use
+  their actual natural header, including split PHI-copy edges. If no probe
+  wins, re-emit without optional probe bytes. Uniform initializer loops have
+  a separately known small body. Function `@cache` and enclosing explicit
+  loop windows suppress automatic rebasing inside their scope; a disjoint
+  unhinted loop may use its own window. Calls, division kernels and nested
+  hardware scopes conservatively fence this selection. O0/O1 do not gain
+  automatic CACHE.
+- **Avoid redundant explicit loop CACHE.** When the header begins with CACHE
+  and no body operation can rebase it, internal backedges target a private
+  label immediately after that opcode. Its physical byte and original CBR
+  anchor remain unchanged; external entries still execute CACHE. PHI copies
+  and R12/R13 save/restore are not skipped. Loops with calls, another CACHE,
+  division, initialization kernels or nested hardware scopes retain the
+  original repeated behavior. This is an entry-only execution optimization,
+  not arbitrary motion of CACHE into a differently aligned preheader.
 
 CACHE fills 16-byte lines on demand, not the entire window at once. Thus the
 first iteration pays cold line fills, and already fetched lines can be reused;
@@ -1119,7 +1358,8 @@ measure the complete instruction/memory/pipeline behavior. See the existing
 
 ### Measured compaction tradeoffs
 
-Frozen pre-compaction tools and final tools compile unchanged workloads with the
+This historical snapshot uses frozen pre-compaction and post-compaction tools
+to compile unchanged workloads with the
 same model/harness fingerprints. The nine-workload suite executes from LoROM,
 not RAM. O2 measurements include speed/size tradeoffs:
 
@@ -1138,7 +1378,7 @@ not RAM. O2 measurements include speed/size tradeoffs:
 The O2 span trades 22 additional bytes for 86.58% fewer cycles using LOOP/CACHE.
 Os instead selects a 111-byte software span (11,075 cycles), not the larger
 speed candidate. Its ROM palette is 300 bytes/104,520 cycles versus the frozen
-294/104,530: bounded current candidate selection does not guarantee beating
+294/104,530: bounded candidate selection in that snapshot does not guarantee beating
 every historical compiler output. Retained reports contain all nine cases:
 [O2 before](../benchmarks/results/gsu-O2-compaction-before-mesen.json),
 [O2 after](../benchmarks/results/gsu-O2-compaction-mesen.json),
@@ -1309,7 +1549,8 @@ purpose registers: the allocator still uses R5/R7/R8.
   and temporary identities remain distinct. Ordered call/write trace tests
   check evaluation order; existing div/mod fusion is retained rather than
   duplicated. Post-compaction canonicalization keeps the pipeline stable.
-- O2 can cache the bounded division kernel; Os avoids this speed-only padding.
+- O2 can insert CACHE for the bounded division kernel. Os can now reuse an
+  existing guard delay-slot NOP for CACHE without growing the payload.
   An explicit function CACHE annotation suppresses an additional kernel
   CACHE. Callees may rebase CACHE: the ABI does not preserve the caller's cache
   base, so this is not a promise that caller hot code stays cached.
@@ -1324,16 +1565,16 @@ original and counter-only sources. `TRIANGLE_SOURCE` selects a variant for the
 same complete-SNES build/timing harness. This makes compiler-only gains
 reproducible without attributing an algorithm rewrite to register allocation.
 
-Fresh Mesen measurements use the frozen pre-bottleneck executables and the
+This historical bottleneck snapshot uses the frozen pre-bottleneck executables and the
 same host, timing profile and full-image/FPS harness:
 
 | Workload / toolchain | Payload bytes | Mean fast-GSU cycles, 64 poses | Completed poses/s |
 |---|---:|---:|---:|
 | Frozen original, previous O2 | 2,672 | 2,844,363.546875 | 6.700911412882 |
-| Same original source, current O2 | 2,285 | 1,910,470.984375 | 10.068910245328 |
-| Counter/span rewrite only, current O2 | 2,217 | 1,538,819.671875 | 12.095359151697 |
-| Incremental edges, current O2 | 2,819 | 1,159,469.625 | 15.024708464127 |
-| Incremental edges, current Os | 2,818 | 1,167,535.71875 | 15.024702551842 |
+| Same original source, post-bottleneck O2 | 2,285 | 1,910,470.984375 | 10.068910245328 |
+| Counter/span rewrite only, post-bottleneck O2 | 2,217 | 1,538,819.671875 | 12.095359151697 |
+| Incremental edges, post-bottleneck O2 | 2,819 | 1,159,469.625 | 15.024708464127 |
+| Incremental edges, post-bottleneck Os | 2,818 | 1,167,535.71875 | 15.024702551842 |
 
 Compiler-only gains are **14.484% fewer payload bytes** and **32.833% fewer
 mean cycles**. The complete O2 renderer uses **59.236% fewer mean cycles** and

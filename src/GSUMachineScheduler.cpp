@@ -310,6 +310,26 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
     }
     // Scheduling is size non-increasing. If a boundary somehow loses range,
     // preserve the original object rather than producing unchecked code.
+    // Bcc exit / NOP / BRA body / NOP / exit becomes inverse-Bcc body /
+    // NOP / exit. No useful slot or independently reachable entry is removed;
+    // private, unreferenced labels retain zero-byte anchors for serialization.
+    for (std::size_t n = 0; n + 4 < code.size(); ++n) {
+        if (code[n].bytes.empty()) continue;
+        const auto op = code[n].bytes[0];
+        if (op < 6 || op > 15 || code[n].delay_slot || !oneByte(code[n + 1], 1) ||
+            code[n + 2].bytes.size() != 2 || code[n + 2].bytes[0] != 5 ||
+            !oneByte(code[n + 3], 1) || code[n].target != code[n + 4].old ||
+            code[n + 2].target == Missing) continue;
+        bool protected_entry = false;
+        for (std::size_t p = n + 1; p <= n + 3; ++p)
+            protected_entry = protected_entry || incoming[code[p].old] || external_targets.count(code[p].old);
+        if (protected_entry || !freeRange(code, n, n + 4, relocation_offsets)) continue;
+        code[n].bytes[0] = static_cast<std::uint8_t>(op ^ 1u);
+        code[n].target = code[n + 2].target;
+        code[n + 2].bytes.clear(); code[n + 2].target = Missing;
+        code[n + 3].bytes.clear();
+        ++stats.compact_branches;
+    }
     auto scheduled = object;
     if (!assemble(code, scheduled)) return Statistics{};
     object = std::move(scheduled);

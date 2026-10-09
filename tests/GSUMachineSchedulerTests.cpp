@@ -92,6 +92,31 @@ void conditionSlots() {
             "Unsafe state/PC/ROM-pointer operation filled a delay slot");
     }
 }
+void compactBranches() {
+    for (const unsigned count : {1u, 2u, 127u, 128u, 65535u}) {
+        auto o = object({0xf5, static_cast<std::uint8_t>(count), static_cast<std::uint8_t>(count >> 8),
+            0xe5,9,4,1,5,0xfa,1,0xa0,31,0,1});
+        o.symbol_table.push_back({"\x01" "unused.edge",SymbolSection::CODE,7});
+        const auto before = o;
+        require(GSUMachineScheduler::run(o).compact_branches == 1 && o.code_section.size() + 3 == before.code_section.size(),
+            "Inverse conditional branch did not remove the redundant BRA/NOP");
+        DiscoGSU::Machine a(linked(before),0x008000), b(linked(o),0x008000); a.run(); b.run();
+        require(a.reg(0) == 31 && b.reg(0) == 31 && a.reg(5) == 0 && b.reg(5) == 0 &&
+            a.metrics().taken_branches == count && b.metrics().taken_branches == count - 1,
+            "Compact branch changed the loop's taken/final iteration");
+        Assembler assembler;
+        require(assembler.assemble(AssemblyGenerator(o).generate()).code_section == o.code_section,
+            "Compact branch lost its byte-exact assembly labels");
+    }
+    for (const bool useful_slot : {false,true}) {
+        auto o = object({0xf5,2,0,0xe5,9,4,1,5,0xfa,static_cast<std::uint8_t>(useful_slot ? 0xd0 : 1),0xa0,31,0,1});
+        if (!useful_slot) o.symbol_table.push_back({"alternate_entry",SymbolSection::CODE,7});
+        const auto before = o;
+        require(GSUMachineScheduler::run(o).compact_branches == 0 && o.code_section == before.code_section,
+            "Branch compaction removed a useful slot or independently callable entry");
+    }
+}
+
 void targetPrefixSlots() {
     for (const auto selector : {0x17,0xba}) for (const auto stack : {0x20feu,0x1ffeu}) {
         auto o = object({0xa0,8,0xfa,static_cast<std::uint8_t>(stack),static_cast<std::uint8_t>(stack >> 8),
@@ -131,7 +156,7 @@ void targetPrefixSlots() {
 }
 int main() {
     try {
-        conditionSlots(); targetPrefixSlots();
+        conditionSlots(); targetPrefixSlots(); compactBranches();
         auto bra = object({0xf0,0,0,0xd0,5,2,1,1,0,1}); auto before = bra;
         require(GSUMachineScheduler::run(bra).delay_slots == 1 && bra.code_section.size() == 9,
                 "Safe one-byte BRA delay slot was not filled"); equivalent(before, bra);
@@ -173,6 +198,18 @@ int main() {
         DiscoGSU::Machine plot_loop(linked(pixels),0x008000); plot_loop.run();
         require(plot_loop.reg(1) == 3 && plot_loop.reg(12) == 0 && plot_loop.graphicsState("--plots") == 3,
                 "LOOP's useful PLOT slot lost its final iteration or incremented R1 twice");
+        for (const unsigned counter : {0u, 1u, 65535u}) {
+            auto boundary = before;
+            boundary.code_section[1] = static_cast<std::uint8_t>(counter);
+            boundary.code_section[2] = static_cast<std::uint8_t>(counter >> 8);
+            const auto original = boundary;
+            require(GSUMachineScheduler::run(boundary).delay_slots == 1, "Boundary LOOP lost its useful PLOT slot");
+            equivalent(original, boundary);
+            DiscoGSU::Machine executed(linked(boundary), 0x008000); executed.run();
+            require(executed.graphicsState("--plots") == (counter == 0 ? 65536u : counter) &&
+                    executed.reg(1) == counter && executed.reg(12) == 0,
+                "Scheduled LOOP/PLOT lost the taken/final iteration or raw zero-count wrap");
+        }
         auto alt = object({0x3e,0xd0,0xff,0,0x80,1,0,1}); before = alt;
         require(GSUMachineScheduler::run(alt).delay_slots == 0 && alt.code_section == before.code_section,
                 "Scheduling exposed IWT to a live ALT prefix");

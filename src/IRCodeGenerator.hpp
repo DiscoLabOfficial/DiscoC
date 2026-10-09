@@ -91,7 +91,11 @@ private:
     void emitStoreIndirect(const IRInstruction& instruction);
     void emitHardwareLoop(const IRInstruction& instruction);
     void emitMemoryInitialize(const IRInstruction& instruction);
+    void planLocalValues();
+    int planFrameStorage();
+    void planLoopCaches();
     void selectAutomaticCaches();
+    std::string loopEntrySymbol(IRBlockId target, bool backedge) const;
     void emitRegisterLiteral(std::uint8_t reg, std::uint16_t value);
     void emitWordLiteral(std::uint8_t reg, std::uint16_t value);
     bool optimized() const { return m_config.optimization != OptimizationLevel::Baseline; }
@@ -104,6 +108,7 @@ private:
     void emitNearBank(std::uint8_t reg, AddressSpace space);
     void emitSelectBank(std::uint8_t reg, AddressSpace space);
     void emitAddressCheck(const Type& pointer, int width);
+    void ensureAddressChecked(IRValueId value, int width);
     void emitGuard(std::uint8_t success_branch, std::uint16_t fault);
     void emitAddressFault(std::uint16_t fault);
     void emitCompare(std::uint8_t left, std::uint16_t right);
@@ -161,12 +166,23 @@ private:
     std::size_t m_branch_serial = 0;
     bool m_checked_pointer_mode = false;
     bool m_has_hardware_loop = false;
-    struct AutomaticCache { std::size_t offset; IRBlockId header; std::uint32_t loop_id, trips; };
+    struct AutomaticCache { std::size_t offset; IRBlockId header; std::uint32_t trips; bool entry_slot = false; };
     std::vector<AutomaticCache> m_auto_caches;
+    std::map<std::uint32_t, std::uint32_t> m_cache_trips;
+    std::map<std::uint32_t, IRBlockId> m_hardware_headers;
+    std::set<std::pair<std::uint32_t, std::uint32_t>> m_cached_backedges;
+    std::set<std::uint32_t> m_cached_headers;
     bool m_manual_cache = false;
+    bool m_allow_auto_cache = true, m_selected_auto_cache = false, m_had_cache_probe = false;
+    std::map<std::uint32_t, std::uint8_t> m_cursor_updates;
+    std::set<std::uint32_t> m_cursor_elided_values, m_ephemeral_values;
+    std::map<std::uint32_t, int> m_ephemeral_address_widths;
+    // Successful checks of an immutable SSA near-RAM address, within this
+    // emitted block only. Never evidence about a subsequently reloaded pointer.
+    std::map<std::uint32_t, int> m_checked_addresses;
     IRValueId m_emitting_value;
-    // A strictly adjacent scalar snapshot in R0, never a lexical variable or
-    // pointer-pair alias. Any emitted byte or control-flow entry invalidates it.
+    // A strictly adjacent scalar/near-address snapshot in R0, never a lexical
+    // variable or pointer-pair alias. Emitted bytes and CFG entries fence it.
     IRValueId m_accumulator_value;
     // SBK uses the last physical RAM address, not a register. Only remember
     // checked near-word accesses; stack traffic and control-flow joins fence it.

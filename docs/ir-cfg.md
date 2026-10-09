@@ -99,6 +99,9 @@ serialized for the SNES host. It is not an executable GSU operation. See
 * At O2, `hardware_loop` is a setup terminator with one initial successor and
   a separate R13 `loop_target`; `hardware_loop.end` has backedge and exit
   successors. `hardware_loop.leave` restores the matching saved R12/R13 scope.
+  Inline setup/end pairs preserve the same registers, restoring them only after
+  the final LOOP delay slot. Calls inside either representation preserve the
+  active counter and backedge address independently of optimization level.
   A proven constant-trip ordinary loop can use this same representation;
   `automatic` is an internal emission hint, not new source syntax.
 

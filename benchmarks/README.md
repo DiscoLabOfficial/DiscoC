@@ -83,6 +83,15 @@ are byte-identical; `triangle_fill` drops 334 → 307 bytes but runs about 2.60
 times slower. The separate [signed/unsigned helper probe](size/README.md)
 drops 657 → 536 bytes for 9,535 → 9,735 emulated cycles. Measure the tradeoff
 before choosing Os for a speed-critical loop.
+The [Phase 2 Os investigation](../docs/optimization.md#phase-2-investigating-extreme-os-cycle-costs)
+records newer compiler-only measurements, byte-neutral division caching and
+software countdown compaction. Those measurements supersede the older
+snapshots for that phase; the rotating demo was not rerun in its initial pass.
+The subsequent [loop-state refinements](../docs/optimization.md#phase-2-loop-state-refinements-and-demo-measurements)
+rerun all nine cases and both RAM-execution demos with frozen tools, preserving
+sources and reporting bytes, GSU cycles and rotation publication FPS separately.
+See the [working-tree evidence summary](results/loop-state-summary.json); this
+does not replace validation against a final committed release-candidate SHA.
 The newer [compaction measurements](../docs/optimization.md#measured-compaction-tradeoffs)
 retain fresh frozen-tool comparisons for O2/Os, including automatic LOOP/CACHE
 speed/size tradeoffs and the separate 64-pose RAM-execution triangle check.

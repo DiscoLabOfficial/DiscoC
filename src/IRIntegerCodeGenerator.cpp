@@ -72,6 +72,15 @@ bool IRCodeGenerator::emitAllocatedOperation(const IRInstruction& instruction, s
     if (binary && !constant && (!right || !right->has_register || (!globallyOptimized() && !m_materialized_values.count(instruction.operands[1].value)))) return false;
     const bool immediate = constant && literal >= 0 && literal <= 15 &&
         ((op != "&" && op != "|" && op != "^") || literal != 0);
+    if (constant && literal == 1 && source->physical_register == destination &&
+        (op == "+" || op == "-") && instruction.type.base == BaseType::WORD && instruction.type.sizeInBytes == 2) {
+        // INC/DEC name the register in one byte, without WITH/ALT prefixes.
+        // Only the word value and N/Z matter here; later C/V predicates still
+        // emit their own CMP rather than borrowing arithmetic flags.
+        m_spill_cache.clobber(destination);
+        emitByte(static_cast<std::uint8_t>((op == "+" ? 0xd0 : 0xe0) | destination));
+        return true;
+    }
     // If R0 already holds the input, computing there also leaves a free
     // result snapshot for the next consumer. A direct immediate/unary
     // destination saves no moves and can force an extra Rn -> R0 reload.
@@ -220,6 +229,7 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
     emitMove(1, 0);
     emitRegisterLiteral(6, 0);
     emitByte(0xb3); emitByte(0x3f); emitByte(0x66);
+    const auto division_guard_slot = m_object_file.code_section.size() + 2;
     emitGuard(8, 6);
     const bool signed_operation = !instruction.type.is_unsigned;
     if (signed_operation) {
@@ -246,10 +256,13 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
     emitRegisterLiteral(4, 16);
     const auto loop = localLabel(), subtract = localLabel(), keep = localLabel();
     // Sixteen iterations amortize the cold fetch of this bounded kernel.
-    // Do not rebase an explicitly cached region in this function, and let
-    // Os retain its byte-oriented policy. Calls may still rebase a caller's
-    // cache window; there is no cache-base preservation ABI. The backedge
+    // Os can replace the guard's selector-reset NOP with CACHE without adding
+    // bytes. Its prefetched PC is the taken success target, and this bounded
+    // kernel follows it within one cache window. Explicit cache ownership
+    // still wins; calls have no cache-base preservation ABI. The backedge
     // skips CACHE itself.
+    if (sizeOptimized() && !m_manual_cache)
+        m_object_file.code_section.at(division_guard_slot) = static_cast<std::uint8_t>(OpCode::CACHE);
     if (globallyOptimized() && !sizeOptimized() && !m_manual_cache)
         emitByte(static_cast<std::uint8_t>(OpCode::CACHE));
     bindLabel(loop);

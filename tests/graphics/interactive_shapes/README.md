@@ -108,6 +108,14 @@ visible PPU image, sprites/palette, ABI/STOP, CACHE and VBlank completion. Its
 edge oracle uses a direct rational formula, not the production accumulator.
 A separate deliberately wrong-result ROM must show a solid red backdrop.
 
+The compiler-only [loop-state comparison](../../../docs/optimization.md#phase-2-loop-state-refinements-and-demo-measurements)
+preserves this source and host. At yaw 8, pitch 5, size 12, O2 shrinks the
+payload from 13,794 to 12,987 bytes, reduces wireframe GSU cycles from 469,556
+to 407,584, and steady-state filled cycles from 1,901,192 to 1,739,658.
+Os selects 12,978 bytes with a different speed tradeoff. These are emulator
+GSU timings excluding host/DMA/presentation, not measured interactive FPS or
+final-release evidence. Both policies pass the complete image/control oracle.
+
 Native regressions execute 17 geometric/input cases through direct objects,
 compiler assembly and final linked assembly under O1/O2/Os. They include
 cardinal/diagonal/near-edge-on poses, signed input boundaries, exact PLOT counts,

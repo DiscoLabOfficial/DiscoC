@@ -9,6 +9,7 @@ add_toolchain_regression(multifile multifile)
 add_toolchain_regression(gsu_call_execution gsu_call_execution)
 add_toolchain_regression(gsu_register_moves gsu_register_moves)
 add_toolchain_regression(switch_abi switch_abi)
+add_toolchain_regression(gsu_contributor_correctness gsu_contributor_correctness)
 add_toolchain_regression(backend_equivalence backend_equivalence)
 add_toolchain_regression(data_relocation data_relocation)
 add_toolchain_regression(branch_relaxation branch_relaxation)
@@ -96,7 +97,7 @@ add_toolchain_regression(gsu_value_optimization_execution gsu_value_optimization
 add_toolchain_regression(gsu_sbk gsu_sbk)
 # Reuse the same independent execution assertions, diagnostics and byte-exact
 # assembler round trips under O1/O2/Os. Each case owns a separate output directory.
-foreach(case IN ITEMS gsu_call_execution switch_abi comparison_semantics ir_branch_relaxation ir_switch_relaxation
+foreach(case IN ITEMS gsu_call_execution switch_abi gsu_contributor_correctness comparison_semantics ir_branch_relaxation ir_switch_relaxation
                       pointer_far_abi pointer_nested pointer_arithmetic pointer_rom
                       pointer_guards pointer_multifile pointer_alignment
                       language_qualifiers language_numeric language_operators

@@ -16,6 +16,18 @@ bool integer(const Type& t) {
     return !t.pointer_level && !t.array_size && (t.base == BaseType::WORD || t.base == BaseType::BYTE || t.base == BaseType::BOOL);
 }
 
+void renumberValues(IRFunction& f) {
+    std::vector<IRValueId> ids(static_cast<std::size_t>(f.value_count) + 1);
+    std::uint32_t next = 0;
+    for (const auto& b : f.blocks) for (const auto& i : b.instructions)
+        if (i.result.isValid()) ids.at(i.result.value) = IRValueId{++next};
+    for (auto& b : f.blocks) for (auto& i : b.instructions) {
+        for (auto& v : i.operands) v = ids.at(v.value);
+        if (i.result.isValid()) i.result = ids.at(i.result.value);
+    }
+    f.value_count = next;
+}
+
 void initializers(IRFunction& f, const Analyzer::LocalSymbolTable& locals) {
     const auto d = definitions(f);
     std::set<std::uint32_t> disposable;
@@ -120,7 +132,8 @@ bool countedLoop(IRFunction& f, OptimizationLevel policy) {
         std::vector<std::uint32_t> defining_block(d.size(), IRBlockId::Invalid);
         for (const auto& block : f.blocks) for (const auto& i : block.instructions)
             if (i.result.isValid()) defining_block.at(i.result.value) = block.id.value;
-        if (loop.blocks.count(defining_block.at(bound.result.value))) continue;
+        if (loop.blocks.count(defining_block.at(bound.result.value)) &&
+            !(bound.opcode == IROpcode::Constant && defining_block.at(bound.result.value) == h)) continue;
         const bool inclusive = cmp.operation == "<=";
         const bool constant_count = first.opcode == IROpcode::Constant && bound.opcode == IROpcode::Constant;
         const auto begin = first.opcode == IROpcode::Constant ? ConstantEvaluator::convert(first.immediate, phi.type) : 0;
@@ -155,8 +168,19 @@ bool countedLoop(IRFunction& f, OptimizationLevel policy) {
         bool induction_used = live_out.count(phi.result.value) != 0;
         for (const auto b : loop.blocks) for (const auto& i : f.blocks[b].instructions)
             if (i.result.value != cmp.result.value && i.result.value != next.result.value)
-                for (const auto v : i.operands) if (v.value == phi.result.value) induction_used = true;
+                for (const auto v : i.operands)
+                    if (v.value == phi.result.value || (v.value == next.result.value && i.opcode != IROpcode::Phi))
+                        induction_used = true;
         if (!legal || (policy == OptimizationLevel::Size && (induction_used || body_ops > 16))) continue;
+        const auto& header = f.blocks[h].instructions;
+        const bool software = policy == OptimizationLevel::Size && !induction_used &&
+            std::count_if(header.begin(), header.end(), [](const IRInstruction& i) { return i.opcode == IROpcode::Phi; }) == 1 &&
+            std::none_of(header.begin(), header.end(), [](const IRInstruction& i) { return i.opcode == IROpcode::Cache; });
+        // The countdown replaces the update in the latch. A standalone pass
+        // invocation may see an uncontracted body/latch chain; do not leave
+        // its original body definition alive under the reused SSA result ID.
+        if (software && defining_block.at(next.result.value) != latch) continue;
+        if (loop.blocks.count(defining_block.at(bound.result.value)) && !software) continue;
         std::uint32_t id = 1;
         for (const auto& b : f.blocks) for (const auto& i : b.instructions) id = std::max(id, i.loop_id + 1);
         const auto exit = test.targets[1]; const auto source = test.source;
@@ -182,6 +206,61 @@ bool countedLoop(IRFunction& f, OptimizationLevel policy) {
             one.result = IRValueId{++f.value_count}; setup_block.instructions.push_back(one);
             IRInstruction plus = count; plus.operation = "+"; plus.operands = {count.result, one.result};
             plus.result = IRValueId{++f.value_count}; setup_block.instructions.push_back(plus); count = plus;
+        }
+        // With no observable induction or carried body values, a software
+        // countdown keeps the same proven trip count without borrowing the
+        // ABI's R12/R13 pair. The entry guard still handles zero/negative
+        // distances; the unsigned counter cannot wrap on a taken backedge.
+        // Explicit CACHE in the old condition is not moved or removed here.
+        if (software) {
+            IRInstruction branch; branch.opcode = IROpcode::Branch; branch.targets = {IRBlockId{h}};
+            branch.source = source; branch.in_plot_context = test.in_plot_context;
+            setup_block.instructions.push_back(branch);
+            const auto software_exit = IRBlockId{setup_id.value + 1};
+            IRInstruction guard = cmp; guard.operands[0] = initial; guard.result = IRValueId{++f.value_count};
+            IRInstruction guard_branch = test; guard_branch.operands = {guard.result};
+            guard_branch.targets = {setup_id, software_exit};
+            auto& pre_code = f.blocks[pre].instructions;
+            pre_code.pop_back();
+            for (const auto& i : header) if (i.opcode == IROpcode::Constant) pre_code.push_back(i);
+            pre_code.push_back(guard); pre_code.push_back(guard_branch);
+
+            IRInstruction one = count; one.opcode = IROpcode::Constant; one.operation.clear();
+            one.operands.clear(); one.immediate = 1; one.result = IRValueId{++f.value_count};
+            IRInstruction decrement = next; decrement.type = count_type;
+            decrement.operation = "-"; decrement.operands = {phi.result, one.result};
+            IRInstruction zero = one; zero.immediate = 0; zero.result = IRValueId{++f.value_count};
+            IRInstruction again = cmp; again.operation = "!="; again.operands = {decrement.result, zero.result};
+            again.result = IRValueId{++f.value_count};
+            IRInstruction backedge = test; backedge.operands = {again.result};
+            backedge.targets = {IRBlockId{h}, software_exit};
+
+            const auto induction = phi.result.value, update = next.result.value, condition = cmp.result.value;
+            auto& header_code = f.blocks[h].instructions;
+            for (auto& i : header_code) if (i.result.value == induction) {
+                i.type = count_type;
+                for (std::size_t e = 0; e < i.targets.size(); ++e) if (i.targets[e].value == pre) {
+                    i.targets[e] = setup_id; i.operands[e] = count.result;
+                }
+            }
+            branch.targets = {test.targets[0]}; header_code.back() = branch;
+            header_code.erase(std::remove_if(header_code.begin(), header_code.end(), [&](const IRInstruction& i) {
+                return i.opcode == IROpcode::Constant || (i.result.isValid() && i.result.value == condition);
+            }), header_code.end());
+            auto& latch_code = f.blocks[latch].instructions;
+            latch_code.erase(std::remove_if(latch_code.begin(), latch_code.end(), [&](const IRInstruction& i) {
+                return i.result.isValid() && i.result.value == update;
+            }), latch_code.end());
+            latch_code.pop_back();
+            latch_code.push_back(one); latch_code.push_back(decrement); latch_code.push_back(zero);
+            latch_code.push_back(again); latch_code.push_back(backedge);
+            IRBasicBlock merge; merge.id = software_exit; merge.label = "compact.countdown.exit";
+            branch.targets = {exit}; merge.instructions.push_back(branch);
+            for (auto& i : f.blocks[exit.value].instructions) if (i.opcode == IROpcode::Phi)
+                for (auto& target : i.targets) if (target.value == h) target = software_exit;
+            f.blocks.push_back(std::move(setup_block)); f.blocks.push_back(std::move(merge));
+            renumberValues(f);
+            return true;
         }
         IRInstruction setup; setup.opcode = IROpcode::HardwareLoop; setup.operands = {count.result};
         setup.targets = {IRBlockId{h}}; setup.loop_target = IRBlockId{h}; setup.loop_id = id;
@@ -256,13 +335,7 @@ bool countedLoop(IRFunction& f, OptimizationLevel policy) {
         }
         f.entry = block_ids.at(f.entry.value); f.blocks = std::move(ordered);
         // Renumber value IDs before publishing the verified CFG.
-        std::vector<IRValueId> ids(static_cast<std::size_t>(f.value_count) + 1); std::uint32_t number = 0;
-        for (const auto& b : f.blocks) for (const auto& i : b.instructions) if (i.result.isValid()) ids[i.result.value] = IRValueId{++number};
-        for (auto& b : f.blocks) for (auto& i : b.instructions) {
-            for (auto& v : i.operands) v = ids.at(v.value);
-            if (i.result.isValid()) i.result = ids.at(i.result.value);
-        }
-        f.value_count = number;
+        renumberValues(f);
         return true;
     }
     return false;

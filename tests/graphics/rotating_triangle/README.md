@@ -213,15 +213,15 @@ must match phase 0's boundary timing. All subsequent pose/FPS/negative tests
 remain enabled; measured simulated cycles do not depend on host emulator speed.
 
 The [bottleneck comparison](../../../benchmarks/results/rotation-bottleneck-summary.json)
-separates compiler gains from the renderer changes:
+separates compiler gains from the renderer changes in that historical snapshot:
 
 | Workload / toolchain | Payload bytes | Mean cycles, 64 poses | Completed poses/s |
 |---|---:|---:|---:|
 | Original renderer, frozen previous O2 | 2,672 | 2,844,363.546875 | 6.70 |
-| Same source, current O2 | 2,285 | 1,910,470.984375 | 10.07 |
-| Counter/span rewrite, current O2 | 2,217 | 1,538,819.671875 | 12.10 |
-| Incremental edges, current O2 | 2,819 | 1,159,469.625 | 15.02 |
-| Incremental edges, current Os | 2,818 | 1,167,535.71875 | 15.02 |
+| Same source, post-bottleneck O2 | 2,285 | 1,910,470.984375 | 10.07 |
+| Counter/span rewrite, post-bottleneck O2 | 2,217 | 1,538,819.671875 | 12.10 |
+| Incremental edges, post-bottleneck O2 | 2,819 | 1,159,469.625 | 15.02 |
+| Incremental edges, post-bottleneck Os | 2,818 | 1,167,535.71875 | 15.02 |
 
 The complete O2 renderer removes 59.24% of mean GSU cycles, but adds 147
 payload bytes versus the original: it trades more edge setup/state for less
@@ -230,6 +230,12 @@ runtime work. The compiler-only comparison shrinks the unchanged source by
 bytes. Use `OPTIMIZATION=s` and a separate output directory to compare Os.
 The [frozen staged sources](../../../benchmarks/rotation/README.md) and
 `TRIANGLE_SOURCE` override reproduce the separation with the same host/oracle.
+
+The newer compiler-only [loop-state measurements](../../../docs/optimization.md#phase-2-loop-state-refinements-and-demo-measurements)
+leave this source unchanged: O2 reduces 2,806 to 2,733 payload bytes and mean
+GSU cycles from 1,149,680.375 to 945,534.515625. The separate publication probe
+changes from about 15.02 to 20.03 completed poses/s. These frozen working-tree
+measurements are not validation of a final release revision.
 
 The verifier also checks all 49,152 visible pixels in an owned screen-buffer
 snapshot before capture. [Screenshot decoding is asynchronous](https://github.com/nesdev-org/MesenCE/blob/master/Core/Shared/Video/VideoDecoder.cpp): a two-refresh

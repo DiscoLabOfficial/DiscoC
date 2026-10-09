@@ -11,6 +11,7 @@ public:
         unsigned delay_slots = 0;
         unsigned rom_operations = 0;
         unsigned cache_padding = 0;
+        unsigned compact_branches = 0;
     };
     static Statistics run(ObjectFile& object);
 };

@@ -133,10 +133,11 @@ Analysis analyze(const IRFunction& f, Budget& budget) {
                 if (condition.kind == Kind::Constant) {
                     if (i.opcode == IROpcode::CondBranch) { edge(b, i.targets[condition.value != 0 ? 0 : 1]); continue; }
                     std::size_t selected = i.case_values.size();
-                    const auto& type = instruction(definitions.at(i.operands[0].value)).type;
                     for (std::size_t c = 0; c < i.case_values.size(); ++c) {
                         budget.charge();
-                        if (ConstantEvaluator::convert(i.case_values[c], type) == condition.value) { selected = c; break; }
+                        // Case labels retain their evaluated value. Narrowing
+                        // a label would invent matches (byte zero vs case 256).
+                        if (i.case_values[c] == condition.value) { selected = c; break; }
                     }
                     if (selected < i.targets.size()) { edge(b, i.targets[selected]); continue; }
                     // No default is a partial dispatch; do not invent its
@@ -215,10 +216,6 @@ void rewrite(IRFunction& f, const Analysis& analysis, Budget& budget) {
     // Never leave half of an R12/R13 save/restore scope behind. A future IR
     // shape that prunes only its latch conservatively retains the original CFG.
     const bool prune = coherentHardware(f, analysis.reachable);
-    std::vector<const Type*> types(static_cast<std::size_t>(f.value_count) + 1);
-    for (const auto& b : f.blocks) for (const auto& i : b.instructions) if (i.result.isValid()) types.at(i.result.value) = &i.type;
-    // The type table is borrowed only during branch selection, before any
-    // instruction vector is rebuilt or moved.
     if (prune) for (auto& b : f.blocks) {
         auto& i = b.instructions.back();
         if (i.opcode != IROpcode::CondBranch && i.opcode != IROpcode::Switch) continue;
@@ -229,7 +226,7 @@ void rewrite(IRFunction& f, const Analysis& analysis, Budget& budget) {
             std::size_t selected = i.case_values.size();
             for (std::size_t c = 0; c < i.case_values.size(); ++c) {
                 budget.charge();
-                if (ConstantEvaluator::convert(i.case_values[c], *types.at(i.operands[0].value)) == fact.value) { selected = c; break; }
+                if (i.case_values[c] == fact.value) { selected = c; break; }
             }
             if (selected < i.targets.size()) i = branch(i, i.targets[selected]);
         }

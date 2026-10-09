@@ -131,6 +131,10 @@ int main() {
         source("word f(word x) { word a; if(x) a=-9; else a=-9; return (a >> 1) + a % 4; }", [](const IRModule& m) { returnedConstant(m, -6); });
         source("word f(word x) { bool a; if(x) a=true; else a=true; if(!a) return 5; return 42; }", [](const IRModule& m) { returnedConstant(m, 42); require(count(m, IROpcode::CondBranch)==1, "Bool join did not simplify its branch"); });
         source("enum Mode { A=2, B=3 }; word f(word x) { enum Mode m; if(x) m=A; else m=A; word result=0; switch(m) { case A: result=42; break; default: result=8; break; } return result; }", [](const IRModule& m) { returnedConstant(m, 42); require(count(m,IROpcode::Switch)==0, "Enum constant switch did not simplify"); });
+        source("word f() { switch((byte)0) { case 256: return 11; default: return 22; } }", [](const IRModule& m) { returnedConstant(m, 22); });
+        source("word f(word x) { byte selector; if(x) selector=0; else selector=0; switch(selector) { case 256: return 11; default: return 22; } }", [](const IRModule& m) { returnedConstant(m, 22); });
+        source("word f(word x) { u16 selector; if(x) selector=(u16)65535; else selector=(u16)65535; switch(selector) { case -1: return 11; case 65535: return 22; default: return 33; } }", [](const IRModule& m) { returnedConstant(m, 22); });
+        source("word f(word x) { byte selector; if(x) selector=-1; else selector=-1; switch(selector) { case 255: return 11; case -1: return 22; default: return 33; } }", [](const IRModule& m) { returnedConstant(m, 22); });
         source("word f(word x) { word d; if(x) d=0; else d=0; return 42/d; }", [](const IRModule& m) { require(count(m,IROpcode::Binary)==1, "SCCP erased division-by-zero fail-stop"); });
         source("word f(word x) { word d; if(x) d=16; else d=16; return 1 << d; }", [](const IRModule& m) { require(count(m,IROpcode::Binary)==1, "SCCP erased invalid-shift fail-stop"); });
         source("word f() { word x=*(volatile word*)0x100; if(x) return 1; return 2; }", [](const IRModule& m) { require(count(m,IROpcode::CondBranch)==1 && count(m,IROpcode::LoadIndirect)==1, "Volatile input was speculated"); });

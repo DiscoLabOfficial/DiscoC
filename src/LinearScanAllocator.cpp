@@ -583,12 +583,20 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
     }
     for (const auto value : ordered) {
         auto& location = m_locations.at(value);
-        std::vector<std::uint8_t> choices;
+        std::vector<std::uint8_t> choices = registers;
+        std::map<std::uint8_t, std::uint64_t> scores;
+        for (const auto reg : registers) scores.emplace(reg, 0);
         for (const auto preferred : preferences[value]) {
             const auto& other = m_locations.at(preferred);
-            if (other.has_register && std::find(choices.begin(), choices.end(), other.physical_register) == choices.end()) choices.push_back(other.physical_register);
+            const auto edge = affinity.find(edgeKey(value, preferred));
+            if (other.has_register && edge != affinity.end()) scores[other.physical_register] += edge->second;
         }
-        for (const auto reg : registers) if (std::find(choices.begin(), choices.end(), reg) == choices.end()) choices.push_back(reg);
+        // Incoming backedges are hot; ascending SSA IDs otherwise favor a cold
+        // preheader copy. Ranking changes only choices, never interference.
+        std::sort(choices.begin(), choices.end(), [&](std::uint8_t a, std::uint8_t b) {
+            if (scores.at(a) != scores.at(b)) return scores.at(a) > scores.at(b);
+            return a < b;
+        });
         for (const auto reg : choices) {
             bool occupied = false;
             for (const auto neighbor : interference[value]) {

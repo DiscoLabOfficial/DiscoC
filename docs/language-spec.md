@@ -676,9 +676,14 @@ switch. It is an error outside both. Hardware-loop optimization must preserve
 these source effects and must not erase diagnostics or observable loop values.
 
 Switch labels accept typed integer constant expressions. Duplicate values or
-multiple default labels are errors. The selector is integer. Cases fall through
-in source order unless terminated by break/return/continue; no implicit break is
-added. `fallthrough;` directly before the next label annotates this intent.
+multiple default labels are errors. The selector is integer.
+Case matching compares the selector's typed value with the evaluated label,
+without narrowing or reinterpreting the label as the selector's type. Thus
+`case 256` cannot match a byte selector, and `case -1` cannot match an unsigned
+selector. Such labels remain legal but are never dispatch targets.
+Cases fall through in source order unless terminated by break/return/continue;
+no implicit break is added. `fallthrough;` directly before the next label
+annotates this intent.
 Unannotated nonempty fallthrough emits `-Wimplicit-fallthrough`.
 Constant-selector dispatch is direct. The GSU backend uses a balanced comparison
 tree for dynamic switches with at least four cases and a linear chain for

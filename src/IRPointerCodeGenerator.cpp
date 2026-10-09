@@ -176,6 +176,16 @@ void IRCodeGenerator::emitWordSpillStore(IRValueId value, std::uint8_t source) {
     if (globallyOptimized()) m_accumulator_value = cached;
 }
 
+void IRCodeGenerator::ensureAddressChecked(IRValueId value, int width) {
+    const auto& pointer = producer(value, Token(TokenType::UNKNOWN, "", 0, 0)).type;
+    if (provenAddress(value, pointer, width)) return;
+    const bool near_ram = globallyOptimized() && pointer.space == AddressSpace::RAM && !isFarPointer(pointer);
+    const auto previous = m_checked_addresses.find(value.value);
+    if (near_ram && previous != m_checked_addresses.end() && previous->second >= width) return;
+    emitAddressCheck(pointer, width);
+    if (near_ram && m_checked_addresses.size() < 1024) m_checked_addresses[value.value] = width;
+}
+
 void IRCodeGenerator::emitSpill(IRValueId value, bool load) {
     const auto cached = m_accumulator_value;
     m_last_ram_word_address = IRValueId{};
@@ -250,7 +260,10 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
             emitNearBank(4, AddressSpace::ROM); emitCompare(4, 0x40); emitLocalJump(full, 13);
             emitCompare(0, 0x8000); emitGuard(13, 3); bindLabel(full);
         }
-        emitAddressCheck(pointer, stride); return;
+        emitAddressCheck(pointer, stride);
+        if (globallyOptimized() && pointer.space == AddressSpace::RAM && !isFarPointer(pointer) && m_checked_addresses.size() < 1024)
+            m_checked_addresses[instruction.result.value] = stride;
+        return;
     }
     if (optimized() && !isFarPointer(pointer) && stride && !(stride & (stride - 1))) {
         // Near stepping cannot legally carry into another bank. Check the
@@ -283,6 +296,8 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
         }
         bindLabel(done);
         emitAddressCheck(pointer, stride);
+        if (globallyOptimized() && pointer.space == AddressSpace::RAM && m_checked_addresses.size() < 1024)
+            m_checked_addresses[instruction.result.value] = stride;
         return;
     }
     const auto positive = localLabel(), negative = localLabel(), done = localLabel();
@@ -366,4 +381,6 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
     emit_direction(negative, true);
     bindLabel(done);
     emitAddressCheck(pointer, stride);
+    if (globallyOptimized() && pointer.space == AddressSpace::RAM && !isFarPointer(pointer) && m_checked_addresses.size() < 1024)
+        m_checked_addresses[instruction.result.value] = stride;
 }

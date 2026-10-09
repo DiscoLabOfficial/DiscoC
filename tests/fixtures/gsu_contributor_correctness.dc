@@ -1,0 +1,114 @@
+// Combine exhaustive switch returns with constant propagation, PHI cycles,
+// calls and graphics state. Inputs stay volatile so dispatch is tested at run time.
+word narrow_direct() {
+    switch ((byte)0) { case 256: return 11; default: return 22; }
+}
+
+word narrow_phi(word seed) {
+    byte selector;
+    if (seed) selector = 0; else selector = 0;
+    switch (selector) { case 256: return 11; default: return 22; }
+}
+
+word signed_dispatch(word selector) {
+    switch (selector) {
+        case -32768: return 10;
+        case 65535: return 99;
+        case -1: return 20;
+        case 0: return 30;
+        case 32767: return 40;
+        default: return 50;
+    }
+}
+
+word unsigned_dispatch(u16 selector) {
+    switch (selector) {
+        case -1: return 99;
+        case 0: return 10;
+        case 32767: return 20;
+        case 32768: return 30;
+        case 65535: return 40;
+        default: return 50;
+    }
+}
+
+word signed_byte_dispatch(byte selector) {
+    switch (selector) {
+        case -128: return 10;
+        case -1: return 20;
+        case 0: fallthrough;
+        case 256: return 30;
+        case 127: return 40;
+        default: return 50;
+    }
+}
+
+word unsigned_byte_dispatch(u8 selector) {
+    switch (selector) {
+        case -1: return 99;
+        case 0: return 10;
+        case 127: return 20;
+        case 128: return 30;
+        case 255: return 40;
+        default: return 50;
+    }
+}
+
+word bump(word x) { return x + 1; }
+
+word returning_loop(word selector, word seed) {
+    word a = seed;
+    word b = seed + 1;
+    switch (selector) {
+        case 0: return bump(seed);
+        case 1:
+            a += 5;
+            fallthrough;
+        case 2:
+            for (word n = 3; n > 0; n = n - 1) {
+                word t = a;
+                a = b;
+                b = t;
+                a += 3;
+            }
+            return bump(a) * 2 + b;
+        default:
+            if ((seed & 1) == 0) return seed - 3;
+            else return seed + 7;
+    }
+    *(volatile word*)0x150 = 999;
+    return 999;
+}
+
+word main() {
+    word seed = *(volatile word*)0x100;
+    *(volatile word*)0x120 = narrow_direct();
+    *(volatile word*)0x122 = narrow_phi(seed);
+    *(volatile word*)0x124 = signed_dispatch(seed);
+    *(volatile word*)0x126 = unsigned_dispatch((u16)seed);
+    *(volatile word*)0x128 = signed_byte_dispatch((byte)seed);
+    *(volatile word*)0x12a = unsigned_byte_dispatch((u8)seed);
+
+    word total = 0;
+    for (word i = 0; i < 3; i++) total += returning_loop(i, seed + i);
+    *(volatile word*)0x12c = total;
+    *(volatile word*)0x12e = returning_loop(3, seed);
+
+    word a = seed;
+    word b = seed + 1;
+    for (word n = 3; n > 0; n = n - 1) { word t = a; a = b; b = t; }
+    *(volatile word*)0x130 = a;
+    *(volatile word*)0x132 = b;
+
+    // The source's zero-trip case must not become a raw LOOP count of zero.
+    for (u16 i = 0; i < ((u16)seed & (u16)3); i++) *(volatile word*)0x152 = 7;
+    plot {
+        color 3;
+        at (10, 20);
+        for (word n = 16; n > 0; n = n - 1) pixel;
+        flush;
+        *(volatile word*)0x134 = cursor.x;
+        *(volatile word*)0x136 = cursor.y;
+    }
+    return 42;
+}

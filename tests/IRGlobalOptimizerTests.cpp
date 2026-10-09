@@ -113,10 +113,57 @@ void allocation(const IRFunction& f) {
     try { allocator.runGlobal(f, {1, 5}); } catch (const std::runtime_error&) { reserved_rejected = true; }
     require(reserved_rejected, "Global allocator accepted the plotting cursor register");
 }
+
+void hotPhiAffinity() {
+    IRFunction f; f.name="affinity"; f.return_type=Type{BaseType::WORD,"",2,false};
+    f.entry=IRBlockId{0}; f.value_count=9;
+    for (unsigned n=0;n<6;++n) f.blocks.push_back({IRBlockId{n},"b"+std::to_string(n),{}});
+    const auto value = [&](IROpcode opcode, unsigned id) {
+        IRInstruction i; i.opcode=opcode; i.result=IRValueId{id}; i.type=f.return_type; return i;
+    };
+    auto address=value(IROpcode::Constant,7); address.type=pointerTo(f.return_type,AddressSpace::RAM,false); address.immediate=0x100;
+    auto condition=value(IROpcode::Constant,8); condition.type=Type{BaseType::BOOL,"",1,false}; condition.immediate=1;
+    auto zero=value(IROpcode::Constant,9);
+    const auto load = [&](unsigned id) { auto i=value(IROpcode::LoadIndirect,id); i.operands={IRValueId{7}}; return i; };
+    const auto stores = [&](unsigned block, unsigned id, unsigned count) {
+        for (unsigned n=0;n<count;++n) { IRInstruction i; i.opcode=IROpcode::StoreIndirect; i.type=f.return_type;
+            i.operands={IRValueId{7},IRValueId{id}}; f.blocks[block].instructions.push_back(i); }
+    };
+    const auto branch = [&](unsigned block, std::vector<IRBlockId> targets) {
+        IRInstruction i; i.opcode=targets.size()==1?IROpcode::Branch:IROpcode::CondBranch; i.targets=std::move(targets);
+        if (i.opcode==IROpcode::CondBranch) i.operands={IRValueId{8}};
+        f.blocks[block].instructions.push_back(i);
+    };
+    f.blocks[0].instructions={address,condition,zero,load(1)}; stores(0,1,500); branch(0,{IRBlockId{1}});
+    auto phi=value(IROpcode::Phi,3); phi.operands={IRValueId{1},IRValueId{2}}; phi.targets={IRBlockId{0},IRBlockId{4}};
+    f.blocks[1].instructions={phi,load(4)}; stores(1,3,3);
+    f.blocks[1].instructions.push_back(load(5)); stores(1,4,2); f.blocks[1].instructions.push_back(load(2));
+    branch(1,{IRBlockId{2},IRBlockId{3}}); stores(2,5,1); branch(2,{IRBlockId{4}});
+    f.blocks[3].instructions.push_back(load(6)); stores(3,6,10); stores(3,2,6); branch(3,{IRBlockId{4}});
+    branch(4,{IRBlockId{1},IRBlockId{5}}); IRInstruction ret; ret.opcode=IROpcode::Return; ret.type=f.return_type;
+    ret.operands={IRValueId{9}}; f.blocks[5].instructions.push_back(ret);
+    IRModule module; module.functions.push_back(f); IRVerifier::verify(module); allocation(f);
+    for (const auto policy : {OptimizationLevel::O2,OptimizationLevel::Size}) {
+        LinearScanAllocator a,b; a.runGlobal(f,{5,7,8},policy); b.runGlobal(f,{5,7,8},policy);
+        for (const auto& item:a.locations()) {
+            const auto& other=b.locations().at(item.first);
+            require(item.second.has_register==other.has_register && item.second.physical_register==other.physical_register &&
+                item.second.spill_slot==other.spill_slot, "Weighted PHI ranking is nondeterministic");
+        }
+        if (policy==OptimizationLevel::O2) {
+            // The later recoloring pass may also coalesce the cold input.
+            // What matters is eliminating the repeatedly executed latch copy.
+            const auto* hot=a.find(IRValueId{2}); const auto* p=a.find(IRValueId{3});
+            require(hot->has_register && p->has_register && p->physical_register==hot->physical_register,
+                "Initial PHI coloring favored a cold preheader over its hot backedge");
+        }
+    }
+}
 }
 
 int main() {
     try {
+        hotPhiAffinity();
         check("word f(word x) { word a = x; if (x > 0) a = 2; else a = 3; return a; }", [](const IRModule&, const IRModule& m) {
             require(count(m, IROpcode::Phi) == 1, "Branch join was not promoted to a PHI");
             require(count(m, IROpcode::StoreIndirect) == 0 && count(m, IROpcode::LoadIndirect) == 1, "Promoted scalar still has memory traffic");
