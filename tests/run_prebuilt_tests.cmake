@@ -11,6 +11,8 @@ function(run_checked)
         message(FATAL_ERROR "Test command failed (${result}): ${ARGV}")
     endif()
 endfunction()
+run_checked("${CMAKE_COMMAND}" "-DROOT_DIR=${ROOT_DIR}" -P "${ROOT_DIR}/tests/BuildTargetParity.cmake")
+run_checked("${CMAKE_COMMAND}" "-DTEST_DIR=${BIN_DIR}/test-output/build_target_parity" -P "${ROOT_DIR}/tests/BuildTargetParityTests.cmake")
 foreach(test IN ITEMS disco_object_tests disco_ir_verifier_tests
                       disco_linear_scan_tests disco_target_foundation_tests disco_gsu_mapping_tests
                       disco_assembly_export_tests disco_language_contract_tests disco_project_manifest_tests

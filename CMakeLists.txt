@@ -231,6 +231,14 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
         endif()
     endfunction()
 
+    add_test(NAME build_target_parity COMMAND ${CMAKE_COMMAND}
+        -DROOT_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/BuildTargetParity.cmake)
+    set_tests_properties(build_target_parity PROPERTIES LABELS "build;unit")
+    add_test(NAME build_target_parity_regressions COMMAND ${CMAKE_COMMAND}
+        -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/build_target_parity
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/BuildTargetParityTests.cmake)
+    set_tests_properties(build_target_parity_regressions PROPERTIES LABELS "build;unit")
     add_test(NAME object_file_hardening COMMAND disco_object_tests)
     add_test(NAME linker_hardening COMMAND disco_linker_hardening_tests)
     add_test(NAME ir_verifier COMMAND disco_ir_verifier_tests)

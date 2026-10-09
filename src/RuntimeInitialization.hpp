@@ -14,6 +14,11 @@ inline RuntimeInitialization makeRuntimeInitialization(std::uint8_t bank, std::u
     if (bank > 1 || initial_image.size() > 65536u - ram_origin || (ram_origin & 1) != 0)
         throw std::runtime_error("Runtime RAM initialization exceeds its aligned bank allocation.");
     RuntimeInitialization result;
+    // Validation bounds the image to 64 KiB. Startup/clear/footer use at most
+    // 26 bytes, each pair needs at most two IWTs + STW (7), and an odd tail
+    // adds one ALT1. Reserve before emitting so append operations never grow
+    // the allocation (also avoids GCC 13's vector-insert overflow warning).
+    result.bytes.reserve(27u + 7u * ((initial_image.size() + 1u) / 2u));
     const auto word = [&](std::uint8_t reg, std::uint16_t value) {
         result.bytes.push_back(static_cast<std::uint8_t>(0xf0 | reg));
         result.bytes.push_back(static_cast<std::uint8_t>(value));

@@ -439,7 +439,7 @@ void cacheWindowsAndCheckedAddresses() {
     // erase carry/null/alignment checks or move them before this witness.
     const std::string checked = "word main(){word* p=(word*)*((volatile u16*)0x100);word i=*((volatile word*)0x102);"
         "*((volatile byte*)0x104)=(byte)11;word* q=p+i;word v=*q;*q=v+1;return *q;}";
-    for (const auto input : {std::make_pair(0x200u, 1u), std::make_pair(0x200u, 0xffffu),
+    for (const auto& input : {std::make_pair(0x200u, 1u), std::make_pair(0x200u, 0xffffu),
                             std::make_pair(0xfffeu, 1u), std::make_pair(0u, 1u), std::make_pair(0x201u, 1u)}) {
         const auto baseline = compile(checked, OptimizationLevel::O1, 0x008000);
         for (const auto level : {OptimizationLevel::O2, OptimizationLevel::Size}) {
@@ -525,7 +525,7 @@ void frameProofBoundary() {
     proof.run(function, {}, 65528, true);
     require(!proof.provesAccess(pointer->result, pointer->type, 2), "Final frame did not exhaust the proof cap");
     DiscoGSU::Machine machine(linked(reserved.object), 0x008000, 0xfffe);
-    for (const auto input : {std::make_pair(0x100u, 10u), std::make_pair(0x102u, 20u),
+    for (const auto& input : {std::make_pair(0x100u, 10u), std::make_pair(0x102u, 20u),
                              std::make_pair(0x104u, 30u), std::make_pair(0x106u, 2u)})
         machine.seed(0x700000 + input.first, static_cast<std::uint8_t>(input.second), false);
     machine.run();

@@ -22,7 +22,9 @@ struct IRValueId {
 };
 
 struct IRBlockId {
-    static constexpr std::uint32_t Invalid = std::numeric_limits<std::uint32_t>::max();
+    // A storage-free sentinel also works when a C++14 container binds it by
+    // reference; static constexpr data would require an out-of-line definition.
+    enum : std::uint32_t { Invalid = std::numeric_limits<std::uint32_t>::max() };
     std::uint32_t value = Invalid;
 
     bool isValid() const { return value != Invalid; }

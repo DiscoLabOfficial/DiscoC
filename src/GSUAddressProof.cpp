@@ -70,7 +70,7 @@ void GSUAddressProof::refineControlFlow(
     const auto sameInteger = [&](const Type& a, const Type& b) {
         return IRScalarFold::scalar(a) && IRScalarFold::scalar(b) && a.base == b.base && a.is_unsigned == b.is_unsigned;
     };
-    const auto predecessorThroughEdges = [&](std::uint32_t block) {
+    const auto predecessorThroughEdges = [&](std::uint32_t block) -> std::uint32_t {
         // PHI lowering splits the hardware setup/backedge through empty
         // branch-only blocks. Those copies do not add loop iterations, but
         // no conditional edge, value definition or observable work is skipped.
@@ -270,7 +270,7 @@ GSUAddressProof::Fact GSUAddressProof::transfer(
     const std::vector<const IRInstruction*>& definitions) const {
     const auto full = scalarRange(instruction.type);
     const auto block = instruction.result.isValid() && instruction.result.value < m_definition_blocks.size() ?
-        m_definition_blocks[instruction.result.value] : IRBlockId::Invalid;
+        m_definition_blocks[instruction.result.value] : static_cast<std::uint32_t>(IRBlockId::Invalid);
     const auto operand = [&](std::size_t n) {
         return n < instruction.operands.size() ? get(instruction.operands[n], block) : Fact{};
     };
@@ -468,7 +468,7 @@ bool GSUAddressProof::provesOffset(const IRInstruction& instruction) const {
         instruction.immediate <= 0 || instruction.immediate > 65535 ||
         (instruction.immediate & (instruction.immediate - 1))) return false;
     const auto block = instruction.result.value < m_definition_blocks.size() ?
-        m_definition_blocks[instruction.result.value] : IRBlockId::Invalid;
+        m_definition_blocks[instruction.result.value] : static_cast<std::uint32_t>(IRBlockId::Invalid);
     const auto index = get(instruction.operands[1], block);
     return index.kind == Kind::Scalar && index.low * instruction.immediate >= -65535 &&
         index.high * instruction.immediate <= 65535 &&

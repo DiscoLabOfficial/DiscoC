@@ -249,6 +249,54 @@ void runtimeCases(Cases& cases) {
         {"--ram-origin", "0xfffe", "--init-runtime"}, "crosses a RAM bank boundary");
 }
 
+void runtimeEncodingCases() {
+    const std::vector<std::pair<std::uint16_t, Bytes>> stack_encodings{
+        {std::uint16_t{0x007f}, {0xaa,0x7f}}, {std::uint16_t{0x0080}, {0xfa,0x80,0x00}},
+        {std::uint16_t{0xff7f}, {0xfa,0x7f,0xff}}, {std::uint16_t{0xff80}, {0xaa,0x80}},
+        {std::uint16_t{0xfffe}, {0xaa,0xfe}}
+    };
+    for (const auto bank : {0u,1u}) for (const auto& encoding : stack_encodings) {
+        auto expected = Bytes{0xa0,static_cast<std::uint8_t>(bank),0x3e,0xdf};
+        expected.insert(expected.end(),encoding.second.begin(),encoding.second.end());
+        const auto patch = expected.size() + 1;
+        expected.insert(expected.end(),{0xff,0,0,1});
+        const auto startup = makeRuntimeInitialization(static_cast<std::uint8_t>(bank),encoding.first,0,{});
+        require(startup.bytes == expected && startup.entry_patch == patch,
+            "Runtime startup bytes/entry patch changed at an IBT/IWT boundary");
+    }
+    const auto check = [](std::uint16_t origin, const Bytes& image, const Bytes& expected) {
+        const auto startup = makeRuntimeInitialization(0,0xfffe,origin,image);
+        require(startup.bytes == expected && startup.entry_patch == expected.size()-3,
+            "Runtime RAM initializer differs from its golden encoding");
+    };
+    check(0,{0},{0xa0,0,0x3e,0xdf,0xaa,0xfe,0xa0,0,0xa1,0,0xa2,1,
+        0x3d,0x31,0xd1,0xe2,0x08,0xfa,1,0xff,0,0,1});
+    check(0,{0x80,0,0x95},{0xa0,0,0x3e,0xdf,0xaa,0xfe,0xa0,0,0xa1,0,0xa2,3,
+        0x3d,0x31,0xd1,0xe2,0x08,0xfa,1,
+        0xa1,0,0xf0,0x80,0,0x31,0xa1,2,0xf0,0x95,0,0x3d,0x31,0xff,0,0,1});
+    check(0xfffe,{0xfe,0xff},{0xa0,0,0x3e,0xdf,0xaa,0xfe,0xa0,0,0xa1,0xfe,0xa2,2,
+        0x3d,0x31,0xd1,0xe2,0x08,0xfa,1,0xa1,0xfe,0xa0,0xfe,0x31,0xff,0,0,1});
+
+    for (const auto size : {65535u,65536u}) {
+        const auto startup = makeRuntimeInitialization(1,0xfffe,0,Bytes(size,0x12));
+        const auto bound = 27u + 7u * ((static_cast<std::size_t>(size) + 1u) / 2u);
+        require(startup.bytes.size() <= bound && startup.entry_patch == startup.bytes.size()-3,
+            "Runtime initializer exceeded its validated emission bound");
+        const auto tail = size == 65535u ? Bytes{0xa1,0xfe,0xa0,0x12,0x3d,0x31,0xff,0,0,1}
+                                       : Bytes{0xa1,0xfe,0xf0,0x12,0x12,0x31,0xff,0,0,1};
+        require(startup.bytes.size() >= tail.size(),"Runtime initializer was truncated before the final store");
+        require(Bytes(startup.bytes.end()-static_cast<std::ptrdiff_t>(tail.size()),startup.bytes.end()) == tail,
+            "Runtime initializer misencoded the final byte/word of a full RAM bank");
+    }
+    const auto reject = [](std::uint8_t bank, std::uint16_t origin, const Bytes& image) {
+        bool rejected = false;
+        try { (void)makeRuntimeInitialization(bank,0x2000,origin,image); }
+        catch (const std::runtime_error&) { rejected = true; }
+        require(rejected,"Runtime initializer accepted an invalid bank/allocation");
+    };
+    reject(2,0,{}); reject(0,1,{}); reject(0,0xfffe,{0,0,0}); reject(0,0,Bytes(65537,0));
+}
+
 void runtimeImageCases() {
     const Bytes image{0x7f,0,0x80,0,0xfe,0,0x80,0xff,0xfe,0xff,0x95};
     for (const auto bank : {0u,1u}) for (const auto origin : {0x7eu,0x80u,0xfff4u}) {
@@ -366,7 +414,7 @@ void aggregateBudgetCase(const std::filesystem::path& root) {
 int main() {
     try {
         TestTempDirectory temporary("linker-tests"); Cases cases(temporary.path());
-        relocationCases(cases); runtimeCases(cases); runtimeImageCases(); metadataCases(cases); malformedCases(temporary.path());
+        relocationCases(cases); runtimeCases(cases); runtimeEncodingCases(); runtimeImageCases(); metadataCases(cases); malformedCases(temporary.path());
         aggregateBudgetCase(temporary.path());
         temporary.cleanup();
         return 0;
