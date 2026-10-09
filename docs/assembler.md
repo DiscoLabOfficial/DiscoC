@@ -73,6 +73,7 @@ The assembler recognizes:
 * `.define __DISCO_CODE_START_ADDRESS <24-bit address>`;
 * `.define __DISCO_DATA_ALIGNMENT N` (power of two 1..128);
 * `.define __DISCO_RAM_ALIGNMENT N` (power of two 1..128, default 2);
+* `.define __DISCO_CODE_ALIGNMENT 16` (optional cached-function object alignment hint);
 * `.define __DISCO_BITMAP_SCBR N` and `.define __DISCO_BITMAP_SCMR N` (selected host screen configuration);
 * semicolon comments.
 

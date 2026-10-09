@@ -1,5 +1,7 @@
 # Both CTest and the direct-build test runner consume this registry.
 add_toolchain_regression(ir_and_cfg ir_and_cfg)
+add_toolchain_regression(gsu_local_optimization gsu_local_optimization)
+add_toolchain_regression(gsu_selection_optimization gsu_selection_optimization)
 add_toolchain_regression(shadowing shadowing)
 add_toolchain_regression(diagnostics diagnostics)
 add_toolchain_regression(language_diagnostics language_diagnostics)
@@ -40,6 +42,8 @@ add_toolchain_regression(graphics_colors graphics_colors)
 add_toolchain_regression(graphics_bitmaps graphics_bitmaps)
 add_toolchain_regression(graphics_triangle graphics_triangle)
 add_toolchain_regression(graphics_rotation graphics_rotation)
+add_toolchain_regression(graphics_scaling graphics_scaling)
+add_toolchain_regression(graphics_interactive graphics_interactive)
 add_toolchain_regression(graphics_diagnostics graphics_diagnostics)
 
 # Target-independent language conformance is separate from backend oracles.
@@ -81,3 +85,26 @@ add_toolchain_regression(project_targets project_targets)
 add_toolchain_regression(module_imports module_imports)
 add_toolchain_regression(module_import_paths module_import_paths)
 add_toolchain_regression(module_import_diagnostics module_import_diagnostics)
+
+add_toolchain_regression(gsu_optimization gsu_optimization)
+add_toolchain_regression(gsu_global_optimization gsu_global_optimization)
+add_toolchain_regression(gsu_sccp gsu_sccp)
+add_toolchain_regression(gsu_checked_proofs_execution gsu_checked_proofs)
+add_toolchain_regression(gsu_size_optimization_execution gsu_size_optimization)
+add_toolchain_regression(gsu_size_policy_execution gsu_size_policy)
+add_toolchain_regression(gsu_value_optimization_execution gsu_value_optimization)
+add_toolchain_regression(gsu_sbk gsu_sbk)
+# Reuse the same independent execution assertions, diagnostics and byte-exact
+# assembler round trips under O1/O2/Os. Each case owns a separate output directory.
+foreach(case IN ITEMS gsu_call_execution switch_abi comparison_semantics ir_branch_relaxation ir_switch_relaxation
+                      pointer_far_abi pointer_nested pointer_arithmetic pointer_rom
+                      pointer_guards pointer_multifile pointer_alignment
+                      language_qualifiers language_numeric language_operators
+                      language_globals language_linkage language_extensions_execution
+                      language_control_execution language_arrays_execution
+                      language_modules_execution language_fixed_point language_memory_library
+                      graphics_state graphics_colors graphics_bitmaps graphics_triangle graphics_rotation graphics_scaling graphics_interactive)
+    add_toolchain_regression(optimized_${case} ${case} 1)
+    add_toolchain_regression(o2_${case} ${case} 2)
+    add_toolchain_regression(os_${case} ${case} s)
+endforeach()

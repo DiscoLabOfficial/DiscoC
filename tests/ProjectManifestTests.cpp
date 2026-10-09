@@ -84,6 +84,8 @@ void invalidInput() {
     reject("[compiler]\nimport_paths = [1]", "array of quoted strings");
     reject("[compiler]\nimport_paths = ['']", "Invalid import path");
     reject("[compiler]\nunknown = true", "unsupported manifest key");
+    reject("[compiler]\noptimize = 1", "Expected boolean");
+    reject("[compiler]\noptimize = 'true'", "Expected boolean");
     reject("[runtime]\ninitialize = 'true'", "Expected boolean");
     reject("[runtime]\ninitialize = True", "integer or boolean");
     reject("[target.gsu]\norigin = '0x8000'", "32-bit integer");
@@ -173,6 +175,32 @@ void precedence() {
     require(hasFlag(flag_value, "--import-path", Consumer::Compiler), "Flag-looking output name changed import path precedence");
     const auto link_imports = configurationArguments({"discld"}, Consumer::Linker, &imports);
     require(!hasFlag(link_imports, "--import-path", Consumer::Linker), "Compiler import directories leaked to linker arguments");
+    const auto optimization = Manifest::parse("[compiler]\noptimize = true", absolutePath("optimization.toml"));
+    const auto optimized = configurationArguments({"discc", "-O0"}, Consumer::Compiler, &optimization);
+    require(hasFlag(optimized, "-O1", Consumer::Compiler) && optimized.back() == "-O0",
+            "Explicit O0 must override a manifest O1 default");
+    require(!hasFlag(configurationArguments({"discld"}, Consumer::Linker, &optimization), "-O1", Consumer::Linker),
+            "Optimization must not leak to linker/runtime configuration");
+    const auto baseline = Manifest::parse("[compiler]\noptimize = false", absolutePath("baseline.toml"));
+    require(hasFlag(configurationArguments({"discc"}, Consumer::Compiler, &baseline), "-O0", Consumer::Compiler),
+            "False optimization selects the baseline");
+    for (const auto level : {0, 1, 2}) {
+        const auto level_manifest = Manifest::parse("[compiler]\noptimization_level = " + std::to_string(level), "test.toml");
+        require(hasFlag(configurationArguments({"discc"}, Consumer::Compiler, &level_manifest), "-O" + std::to_string(level), Consumer::Compiler),
+                "Integer optimization level was not forwarded");
+        const auto overridden = configurationArguments({"discc", "-O0"}, Consumer::Compiler, &level_manifest);
+        require(overridden.back() == "-O0", "CLI must win over manifest O2");
+    }
+    reject("[compiler]\noptimization_level = -1", "nonnegative");
+    reject("[compiler]\noptimization_level = 3", "0, 1 or 2");
+    reject("[compiler]\noptimization_level = true", "integer");
+    reject("[compiler]\noptimization_level = \"2\"", "integer");
+    reject("[compiler]\noptimization_level = \"z\"", "integer");
+    reject("[compiler]\noptimization_level = \"size\"", "integer");
+    const auto size_manifest = Manifest::parse("[compiler]\noptimization_level = 's'", "size.toml");
+    const auto size_arguments = configurationArguments({"discc", "-O2"}, Consumer::Compiler, &size_manifest);
+    require(hasFlag(size_arguments, "-Os", Consumer::Compiler) && size_arguments.back() == "-O2", "CLI did not override manifest Os");
+    reject("[compiler]\noptimize = true\noptimization_level = 2", "not both");
 }
 } // namespace
 int main() {

@@ -1,0 +1,84 @@
+bitmap screen { mode bitmap; size 256x128; depth 2bpp; base 0x4000; }
+struct Pair { word a; word b; };
+
+void tick(word value) { *(volatile word*)0x180 = value; }
+
+word increasing(word start, word factor) {
+    word value = start;
+    word sum = 0;
+    for (word count = 0; count < 7; count++) {
+        sum += (value + 3) * factor;
+        value++;
+    }
+    return sum;
+}
+u16 decreasing(u16 start, u16 factor) {
+    u16 value = start;
+    u16 sum = (u16)0;
+    for (word count = 0; count < 7; count++) {
+        sum += value * factor;
+        value -= (u16)2;
+    }
+    return sum;
+}
+word cells(word seed) {
+    struct Pair p = { seed, seed + 1 };
+    word a[3] = { seed, seed + 2, seed + 3 };
+    if (seed & 1) { p.a += 3; p.b += 5; a[1] += 7; }
+    return p.a + p.b + a[0] + a[1] + a[2];
+}
+word escaped(word seed) {
+    word a[2] = { seed, seed + 2 };
+    word* alias = &a[0];
+    *alias += 9;
+    return a[0] + a[1];
+}
+word compare_pointers(word* p, word* q) {
+    if ((word)(p == q) == 1) return 17;
+    return 23;
+}
+word pressure(word seed, word factor) {
+    word a = seed + 1;
+    word b = seed + 3;
+    word c = seed + 5;
+    word d = seed + 7;
+    word sum = 0;
+    for (word i = 0; i < 8; i++) {
+        sum += a * b + c * d + factor;
+        if (i & 1) tick(a);
+        a += i; b -= 2; c = c ^ i; d += 3;
+        *(volatile word*)0x182 = factor;
+    }
+    return sum + factor + a + b + c + d;
+}
+
+word main() {
+    use bitmap screen;
+    word seed = *(volatile word*)0x100;
+    word factor = *(volatile word*)0x102;
+    *(volatile word*)0x120 = increasing(seed, factor);
+    *(volatile word*)0x122 = (word)decreasing((u16)seed, (u16)factor);
+    *(volatile word*)0x124 = cells(seed);
+    *(volatile word*)0x126 = escaped(seed);
+    *(volatile word*)0x128 = pressure(seed, factor);
+    u16 bounded = (u16)seed & (u16)63;
+    *(volatile word*)0x12a = (word)(bounded & (u16)255);
+    *(volatile word*)0x12c = (word)(bounded <= (u16)63);
+    *(volatile word*)0x12e = (word)(((bounded | (u16)256) & (u16)256));
+    word next = seed + 1;
+    *(volatile word*)0x130 = (word)(next > seed);
+    *(volatile word*)0x132 = (word)(byte)seed;
+    word* p = (word*)0x190;
+    *(volatile word*)0x138 = compare_pointers(p, p + (seed & 1));
+    plot {
+        options;
+        at (5, 6);
+        color ((seed & 1) + 1);
+        for (word i = 3; i > 0; i--) pixel;
+        *(volatile word*)0x134 = cursor.x;
+        at (5, 6);
+        *(volatile word*)0x136 = (word)read_pixel;
+        flush;
+    }
+    return 42;
+}

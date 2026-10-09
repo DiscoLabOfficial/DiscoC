@@ -1,0 +1,12 @@
+word main() {
+    word seed = *(volatile word*)0x100;
+    word factor = *(volatile word*)0x102;
+    word value = seed;
+    word sum = 0;
+    for (word i = 0; i < 32; i++) {
+        sum += (value + 3) * factor;
+        value++;
+    }
+    *(volatile word*)0x120 = sum;
+    return 42;
+}

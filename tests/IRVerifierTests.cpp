@@ -78,6 +78,33 @@ void testValidFunction() {
     expectSuccess("valid function", IRModule{{std::move(function)}});
 }
 
+void testBitExtract() {
+    auto function = baseFunction();
+    function.value_count = 2;
+    IRInstruction extract;
+    extract.opcode = IROpcode::BitExtract; extract.type = wordType();
+    extract.result = IRValueId{2}; extract.operands = {IRValueId{1}}; extract.immediate = 9;
+    function.blocks[0].instructions = {constant(1, -1), extract, returnValue(2)};
+    expectSuccess("word bit extraction", IRModule{{function}});
+    function.blocks[0].instructions[1].memory_volatile = true;
+    expectFailure("volatile extraction metadata", IRModule{{function}}, "volatile metadata on a non-memory instruction");
+    function.blocks[0].instructions[1].memory_volatile = false;
+    function.blocks[0].instructions[1].targets = {IRBlockId{0}};
+    expectFailure("extraction with control-flow target", IRModule{{function}}, "bit.extract");
+    function.blocks[0].instructions[1].targets.clear();
+    for (const auto invalid : {-1, 16}) {
+        function.blocks[0].instructions[1].immediate = invalid;
+        expectFailure("invalid extracted bit", IRModule{{function}}, "bit.extract");
+    }
+    function.blocks[0].instructions[1].immediate = 0;
+    function.blocks[0].instructions[1].operands.clear();
+    expectFailure("missing extraction input", IRModule{{function}}, "bit.extract");
+    function.blocks[0].instructions[1].operands = {IRValueId{1}};
+    function.blocks[0].instructions[0].type = pointerTo(wordType(), AddressSpace::RAM);
+    function.blocks[0].instructions[0].immediate = 0x100;
+    expectFailure("pointer bit extraction", IRModule{{function}}, "bit.extract");
+}
+
 void testDuplicateDefinition() {
     auto function = baseFunction();
     function.value_count = 1;
@@ -360,6 +387,7 @@ int main() {
     try {
         testGraphicsEffects();
         testValidFunction();
+        testBitExtract();
         testDuplicateDefinition();
         testUseBeforeDefinition();
         testNonDominatingDefinition();

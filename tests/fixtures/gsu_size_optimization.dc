@@ -1,0 +1,105 @@
+bitmap screen { mode bitmap; size 256x128; depth 2bpp; base 0x4000; }
+
+void tick(word value) { *(volatile word*)0x0180 = value; }
+
+word floor_div(word value, word divisor) {
+    word quotient = value / divisor;
+    if (value % divisor != 0 && (value ^ divisor) < 0) quotient--;
+    return quotient;
+}
+
+word after_call(word a, word b) {
+    word q = a / b;
+    tick(q);
+    // A far access restores the near RAM bank. The hidden second component
+    // must also survive the call and this bank change.
+    *(far word*)0x710200 = 9;
+    return q + a % b;
+}
+
+word child_projection(word a, word b) {
+    word q = a / b;
+    if (a < 0) return q + a % b;
+    return q - a % b;
+}
+
+word hardware_pair(word a, word b) {
+    word sum = 0;
+    for (word i = 3; i > 0; i = i - 1) {
+        word q = a / b;
+        sum += q + a % b;
+    }
+    return sum;
+}
+
+word phi_cycles(word a) {
+    word x = a;
+    word y = a + 1;
+    word z = a + 2;
+    // Parallel three-way backedge copies, with live values across a call.
+    for (word i = 0; i < 7; i++) {
+        word t = x;
+        x = y; y = z; z = t;
+        if (i & 1) tick(x);
+    }
+    *(volatile word*)0x0140 = x;
+    *(volatile word*)0x0142 = y;
+    *(volatile word*)0x0144 = z;
+    word p = a;
+    word q = a + 1;
+    for (word i = 5; i > 0; i = i - 1) { word t = p; p = q; q = t; }
+    *(volatile word*)0x0146 = p;
+    *(volatile word*)0x0148 = q;
+    word v0=a;
+    word v1=a+1;
+    word v2=a+2;
+    word v3=a+3;
+    word v4=a+4;
+    for (word i = 0; i < 7; i++) {
+        word t=v0; v0=v1; v1=v2; v2=v3; v3=v4; v4=t;
+        if (i & 1) tick(v0);
+    }
+    *(volatile word*)0x014a = v0;
+    *(volatile word*)0x014c = v1;
+    *(volatile word*)0x014e = v2;
+    *(volatile word*)0x0150 = v3;
+    *(volatile word*)0x0152 = v4;
+    return x+y+z+p+q+v0+v1+v2+v3+v4;
+}
+
+word main() {
+    use bitmap screen;
+    word a = *(volatile word*)0x0100;
+    word b = *(volatile word*)0x0102;
+    volatile word* out = (volatile word*)0x0120;
+    word q = a / b;
+    out[0] = q;
+    out[1] = a % b;
+    u16 ua = (u16)a;
+    u16 ub = (u16)b;
+    u16 uq = ua / ub;
+    out[2] = (word)uq;
+    out[3] = (word)(ua % ub);
+    word r = a % b;
+    out[4] = a / b;
+    out[5] = r;
+    out[6] = floor_div(a, b);
+    out[7] = after_call(a, b);
+    out[8] = child_projection(a, b);
+    out[9] = hardware_pair(a, b);
+    plot {
+        options;
+        at (5, 6);
+        word plot_q = a / b;
+        out[10] = plot_q + a % b;
+        color 2;
+        pixel; pixel;
+        out[11] = cursor.x;
+        out[12] = cursor.y;
+        at (5, 6);
+        out[13] = (word)read_pixel;
+        flush;
+    }
+    out[14] = phi_cycles(a);
+    return 42;
+}

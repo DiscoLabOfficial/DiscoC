@@ -1,0 +1,69 @@
+// A fixed-base triangle scales through 64 phases. No division, rotation,
+// per-pixel address calculation or manual X increment is needed.
+bitmap main_screen {
+    mode bitmap;
+    size 256x192;
+    depth 4bpp;
+    base 0x0000;
+}
+
+word main() {
+    use bitmap main_screen;
+
+    word phase = *(volatile word*)0xF002 & 63;
+    word amplitude = phase;
+    if (amplitude > 32) amplitude = 64 - amplitude;
+    word height = 24 + amplitude;
+    word rows = height + 1;
+
+    word left = 128;
+    word width = 1;
+    word ink = 0;
+    word color_error = rows;
+    plot {
+        options;
+        // The host clears once, then advances phase by one modulo 64.
+        // Growth overwrites the previous triangle. Shrink removes only its
+        // two old edges (their common apex is harmlessly erased twice).
+        if (phase == 0 || phase > 32) {
+            word erase_left = 128;
+            word erase_right = 128;
+            color 0;
+            cursor.y = 127 - height;
+            @cache for (word row = 0; row < height + 2; row++) {
+                cursor.x = erase_left;
+                pixel;
+                cursor.x = erase_right;
+                pixel;
+                erase_left--;
+                erase_right++;
+                cursor.y++;
+            }
+        }
+        cursor.y = 128 - height;
+        for (word row = 0; row < rows; row++) {
+            // Eight rainbow bands at every size, using an integer accumulator
+            // instead of division. COLOR runs only when the band changes.
+            if (color_error >= rows) {
+                color_error -= rows;
+                ink++;
+                color ink;
+            }
+            cursor.x = left;
+            @cache for (word i = 0; i < width; i++) pixel;
+            left--;
+            width += 2;
+            cursor.y++;
+            color_error += 8;
+        }
+        flush;
+    }
+
+    // Sum of the odd scanline widths is rows squared; compute it only once.
+    word pixels = rows * rows;
+    *(volatile word*)0xF000 = pixels;
+    *(volatile word*)0xF004 = height;
+    *(volatile word*)0xF006 = rows;
+    *(volatile word*)0xF008 = phase;
+    return pixels;
+}

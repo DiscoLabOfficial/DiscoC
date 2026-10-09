@@ -169,8 +169,14 @@ void main() {
     if(NOT expected STREQUAL actual)
         message(FATAL_ERROR "Initialized global payload did not round-trip through final assembly")
     endif()
+    set(insufficient_sp 0x049a)
+    if(OPTIMIZATION MATCHES "^[12s]$")
+        # O1 removes spill slots, so the old 10-byte gap can fit a frame.
+        # A two-byte gap cannot fit even the unchanged four-byte ABI header.
+        set(insufficient_sp 0x0492)
+    endif()
     run_expected_failure_contains("no room for the requested stack frame" "${DISCLD}" "${TEST_DIR}/globals.o"
-        --init-runtime --stack-pointer 0x049a -o "${TEST_DIR}/globals-stack-guard.bin")
+        --init-runtime --stack-pointer ${insufficient_sp} -o "${TEST_DIR}/globals-stack-guard.bin")
     # An individual frame can fit even though recursive call depth exhausts
     # the stack. Keep an execution regression for the runtime R6=2 guard.
     file(WRITE "${TEST_DIR}/recursive-guard.dc" [=[

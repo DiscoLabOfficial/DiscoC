@@ -37,6 +37,9 @@ name = "multifile"
 target = "gsu"
 sources = ["main.dc", "math.dc"]
 
+[compiler]
+optimize = true
+
 [target.gsu]
 memory_mapping = "lorom"
 execution_memory = "ram"
@@ -106,7 +109,7 @@ discc --config discoc.toml math.dc -o math.o
 discld main.o math.o --config discoc.toml
 ```
 
-Ordinary `discc --config` uses target/placement/import-path defaults, not `project.sources`
+Ordinary `discc --config` uses compiler/target/placement/import-path defaults, not `project.sources`
 or linked output names. Its input and `-o` still name one compilation unit.
 `discld --config` uses target, placement, runtime, and output defaults but does
 not compile sources. It checks that target/mapping agree with the objects;
@@ -165,6 +168,43 @@ automatically compile a matching implementation file. See
 [language module rules](language-spec.md#13-modules-and-interfaces) and the
 [source-import example](../examples/source_imports/README.md).
 
+## GSU optimization
+
+`[compiler] optimize = true` selects `-O1`; `false` or omitted settings retain
+the `-O0` baseline. `-O` is an alias for `-O1`. Explicit CLI flags override
+the manifest, regardless of the position of `--config`; the last CLI level wins.
+
+Use `optimization_level = 2` **instead of** `optimize` to select O2:
+
+```toml
+[compiler]
+optimization_level = 2
+```
+
+For size-oriented code use `optimization_level = "s"`, selecting `-Os`.
+The setting accepts integers 0/1/2 or the string `"s"`. Both keys together,
+booleans, other strings and unsupported levels are errors. The legacy boolean
+retains its meaning; `optimize = true` does not silently become O2.
+
+```sh
+discc build -O
+discc build --config discoc.toml -O0
+discc -O1 --config discoc.toml main.dc -o main.o
+discc build -O2
+discc build -Os
+```
+
+Project builds apply the level to every root and discovered `.dc` dependency.
+Ordinary one-source compilation emits only its selected unit. The setting is
+not passed to the linker or stored in object ABI/placement metadata. O0/O1/O2/Os
+objects can be linked together; final assembly remains byte-exact.
+The new policy affects GSU machine emission, not language semantics or
+SPC700 frontend-only checks. See [optimization](optimization.md) for the
+instruction-selection, register, safety and measurement contracts.
+`--check -O2` and `--check -Os` verify optimized SSA without creating outputs.
+Os selects bounded emitted-code candidates by bytes, not cycle estimates;
+see the [size policy](optimization.md#size-policy--os) for its tradeoffs.
+
 ## Schema
 
 All keys are optional except a nonempty `project.sources` for project builds.
@@ -176,6 +216,8 @@ Unknown tables/keys and duplicate definitions are errors.
 | `project` | `target` | `gsu`; `superfx` alias, or `spc700` |
 | `project` | `sources` | Ordered nonempty array of up to 128 `.dc` roots; imports discover additional sources |
 | `compiler` | `import_paths` | `[]`; ordered array of up to 64 manifest-relative search directories |
+| `compiler` | `optimize` | `false`; boolean selecting baseline O0 or optimized GSU O1 emission |
+| `compiler` | `optimization_level` | `0`; integer 0/1/2 or string `"s"` (Os); mutually exclusive with `optimize` |
 | `target.gsu` | `memory_mapping` | `lorom`; explicit `hirom` retained |
 | `target.gsu` | `execution_memory` | Inferred from origin; optional `rom` or `ram` constraint |
 | `target.gsu` | `origin` | `$00:8000`; `$40:8000` for HiROM, `$70:8000` for explicit RAM execution |
@@ -240,6 +282,6 @@ This is a full rebuild, not an incremental build system or a file-write
 transaction: successful earlier objects may remain when a later unit fails,
 and an I/O failure during final writing can leave incomplete output. It does
 not run arbitrary commands, expand shell variables/globs, download packages,
-provide optimization profiles, or support section/region linker scripts.
+provide named optimization profiles, or support section/region linker scripts.
 Future detailed memory layouts and SPC700 runtime settings need separate
 contracts; unknown future settings are errors today.

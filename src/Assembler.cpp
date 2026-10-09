@@ -1,4 +1,5 @@
 #include "Assembler.hpp"
+#include "GSUCodeLayout.hpp"
 
 #include "CompilerError.hpp"
 #include <algorithm>
@@ -169,6 +170,7 @@ private:
     CompilerConfig m_config;
     std::uint8_t m_data_alignment = 1;
     std::uint8_t m_ram_alignment = 2;
+    bool m_cache_alignment = false;
     std::set<std::string> m_config_definitions;
     std::size_t m_code_size = 0;
     std::size_t m_data_size = 0;
@@ -202,14 +204,17 @@ private:
             fail(".define expects one reserved configuration name and value.", line_number);
         }
         if (name != "__DISCO_MEMORY_MAPPING" && name != "__DISCO_CODE_START_ADDRESS" &&
-            name != "__DISCO_DATA_ALIGNMENT" && name != "__DISCO_RAM_ALIGNMENT" &&
+            name != "__DISCO_DATA_ALIGNMENT" && name != "__DISCO_RAM_ALIGNMENT" && name != "__DISCO_CODE_ALIGNMENT" &&
             name != "__DISCO_BITMAP_SCBR" && name != "__DISCO_BITMAP_SCMR") {
             fail("unsupported .define name '" + name + "'.", line_number);
         }
         if (!m_config_definitions.insert(name).second) {
             fail("duplicate configuration definition '" + name + "'.", line_number);
         }
-        if (name == "__DISCO_BITMAP_SCBR" || name == "__DISCO_BITMAP_SCMR") {
+        if (name == "__DISCO_CODE_ALIGNMENT") {
+            if (value != "16") fail("GSU CODE alignment hint must be 16.", line_number);
+            m_cache_alignment = true;
+        } else if (name == "__DISCO_BITMAP_SCBR" || name == "__DISCO_BITMAP_SCMR") {
             std::int64_t number = 0;
             if (!parseNumber(value, number) || number < 0 || number > 255) fail("Invalid bitmap register value.", line_number);
             m_config.bitmap.enabled = true;
@@ -381,6 +386,7 @@ private:
         m_object.config = m_config;
         m_object.data_alignment = m_data_alignment;
         m_object.ram_alignment = m_ram_alignment;
+        if (m_cache_alignment) m_object.symbol_table.push_back({GSUCodeLayout::CacheAlignmentSymbol, SymbolSection::CODE, 0});
         m_object.code_section.reserve(m_code_size);
         m_object.data_section.reserve(m_data_size);
         m_object.ram_section.reserve(m_ram_size);
@@ -610,7 +616,7 @@ private:
         static const std::map<std::string, uint8_t> implied = {
             {"stop", 0x00}, {"nop", 0x01}, {"cache", 0x02}, {"lsr", 0x03}, {"rol", 0x04}, {"loop", 0x3c},
             {"plot", 0x4c}, {"color", 0x4e}, {"swap", 0x4d}, {"not", 0x4f}, {"merge", 0x70},
-            {"msbk", 0x90}, {"sex", 0x95}, {"asr", 0x96}, {"ror", 0x97}, {"lob", 0x9e},
+            {"msbk", 0x90}, {"sex", 0x95}, {"asr", 0x96}, {"ror", 0x97}, {"lob", 0x9e}, {"hib", 0xc0},
             {"getc", 0xdf}, {"getb", 0xef}
         };
         const auto implied_op = implied.find(op);

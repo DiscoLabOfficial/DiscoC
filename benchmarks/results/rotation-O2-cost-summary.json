@@ -1,0 +1,135 @@
+{
+  "measurement": "rotation-mesen-21MHz-and-completed-pose-fps",
+  "comparison": "Frozen O2 before cost-aware allocation versus working-tree O2, not v0.1.0 or a published release",
+  "profile": "NTSC CLSR=1 GSU=100% CFGR.MSO=0 RAM-execution CACHE cold",
+  "gsu_window": "First real opcode entry through normal STOP completion, excluding synthetic prefetch and CPU setup/copy/poll/DMA/display",
+  "fps_window": "64 complete-pose publication intervals after VRAM DMA; excludes boot/first render, includes subsequent CPU/GSU/DMA/presentation and repeated refreshes",
+  "source": "tests/graphics/rotating_triangle/triangle.dc",
+  "source_sha256": "fb05742c4ec5a189c7f2c986834d2e95054dc4155f406a8e9bbfceb7ec68117f",
+  "verifier_sha256": "39e4f1418f08244528dae26958736719330564bcf4011ec3edf01ffca6824caa",
+  "fps_probe_sha256": "66ecdcc88a2ae6fff95965b95813de6c9d8ce7e57b3093f40b81128948676704",
+  "before_discc_sha256": "245817788bb11886de1e31636c260d9fd22521f6d610cc4281cbc15dd6a97fa4",
+  "map_builder_sha256": "7f736b817a4d0636f9b6d03cbd78ae00f589e79cd30ed366b108cd4372990c6b",
+  "profiler_sha256": "dc08590b61cef0ce30b3ad95ab99463b4175053d3672dab7d497ca31c15dc2fd",
+  "wla_65816_sha256": "75cbd4d2f7145984fc19e051c2dda90b7b89105cd10278e14adb487c36dcb59d",
+  "builder_sha256": "a1e0df49631c82a76e40955691231600a9ec3b55ca0f0db2d70ea35ec4b4c78e",
+  "host_sha256": "6eaf1ddc62f04d65272cf782d788aa3522351e83ece20e0712cb4974d6ad5401",
+  "after_discc_sha256": "4cd868c50f3dc752f3e457521110157fb658c4fc46408e7ab5068332a18472c4",
+  "wlalink_sha256": "bdafcb2dc13ab57ceb6610e71c22b705e96b40963df15f02f066f6ba1364a095",
+  "discld_sha256": "5c3bb7d29318660e30bcbda192a1684e8c622dc7f6e0774af7656ef00fd6b09e",
+  "mesen_sha256": "8ef403d6b9af32075416193914d7993ce8480b347fe1f20a0cfd9815374933e7",
+  "timing_probe_sha256": "02aa62f85ec5f5dfee4f59fb9088930fb9c984aaf4e6969bafbe46ce3e1adf78",
+  "discas_sha256": "59b04ace098bbfd5e3acd4558ad421006581707f3c27a590edd5cf96beb708e9",
+  "poses": 64,
+  "additional_wrap_sample": 1,
+  "pixel_checks_per_pose": 49152,
+  "screenshot_hashes_compared": 64,
+  "screenshot_mismatches": 0,
+  "normal_and_negative_oracles": "PASS for both snapshots; each normal run verifies 64 poses plus wrap and 588 SNES frames",
+  "cases": [
+    {
+      "label": "Pre-cost O2",
+      "timing_report": "benchmarks/results/rotation-O2-cost-before-21MHz.json",
+      "fps_report": "benchmarks/results/rotation-O2-cost-before-fps.json",
+      "payload_bytes": 3114,
+      "rom_bytes": 65536,
+      "payload_sha256": "8497ca720abdb7579b6341096db9ae23e73100e9cccd090f9a69a5f7d92f20d0",
+      "rom_sha256": "8858acc23f287e6b5ab2cdece921105196792b2bcdb7825e764079ed8f6da281",
+      "phase0_cycles": 2658089,
+      "mean_cycles_64_poses": 3044338.3125,
+      "minimum_cycles": 2658089,
+      "maximum_cycles": 3087693,
+      "total_cycles_64_poses": 194837652,
+      "phase_wrap_cycles": 2658089,
+      "displayed_pose_fps": 6.700912262223,
+      "fps_interval_master_clocks": 205128082,
+      "fps_interval_snes_refreshes": 574,
+      "repeated_refreshes": 510,
+      "profile_phase0": {
+        "measurement": "gsu-entry-interval-profile-v1",
+        "granularity": "machine_label_regions",
+        "instructions": 1005449,
+        "master_clocks": 2658089,
+        "functions": [
+          {
+            "function": "floor_div",
+            "instructions": 105008,
+            "master_clocks": 627320
+          },
+          {
+            "function": "main",
+            "instructions": 899655,
+            "master_clocks": 2025759
+          },
+          {
+            "function": "sine_q6",
+            "instructions": 780,
+            "master_clocks": 4950
+          },
+          {
+            "function": "startup",
+            "instructions": 6,
+            "master_clocks": 60
+          }
+        ]
+      }
+    },
+    {
+      "label": "Cost-aware allocation",
+      "timing_report": "benchmarks/results/rotation-O2-cost-after-21MHz.json",
+      "fps_report": "benchmarks/results/rotation-O2-cost-after-fps.json",
+      "payload_bytes": 3008,
+      "rom_bytes": 65536,
+      "payload_sha256": "0a32c3e53e3cedce44bca0bcf3c25b82f30d079e914d6ebe62e4b11a4cac6b37",
+      "rom_sha256": "566f9e83f463893ed7dc7741f306545eedf900aef266710f5eeb6c3b3b3a5159",
+      "phase0_cycles": 2562178,
+      "mean_cycles_64_poses": 2914672.734375,
+      "minimum_cycles": 2562178,
+      "maximum_cycles": 2949360,
+      "total_cycles_64_poses": 186539055,
+      "phase_wrap_cycles": 2562178,
+      "displayed_pose_fps": 6.700912980896,
+      "fps_interval_master_clocks": 205128060,
+      "fps_interval_snes_refreshes": 574,
+      "repeated_refreshes": 510,
+      "profile_phase0": {
+        "measurement": "gsu-entry-interval-profile-v1",
+        "granularity": "machine_label_regions",
+        "instructions": 992259,
+        "master_clocks": 2562178,
+        "functions": [
+          {
+            "function": "floor_div",
+            "instructions": 105008,
+            "master_clocks": 627320
+          },
+          {
+            "function": "main",
+            "instructions": 886465,
+            "master_clocks": 1929848
+          },
+          {
+            "function": "sine_q6",
+            "instructions": 780,
+            "master_clocks": 4950
+          },
+          {
+            "function": "startup",
+            "instructions": 6,
+            "master_clocks": 60
+          }
+        ]
+      }
+    }
+  ],
+  "payload_reduction_percent": 3.4039820166987798,
+  "mean_gsu_cycle_reduction_percent": 4.259236813221297,
+  "limitations": [
+    "Emulated fast GSU ticks/completed-pose throughput, not physical hardware or GIF playback speed.",
+    "Profile clocks are opcode-entry/region intervals including prefetch/cache waits, not isolated instruction latencies.",
+    "Only phase 0 is profiled; the observer is removed after the first completed pose. All 65 boundary/FPS samples are verified.",
+    "VBlank quantization leaves the same 574 refreshes and effectively unchanged 6.70 completed-pose FPS; fewer GSU cycles do not imply an observed FPS gain.",
+    "Authoritative frame-backed allocation plus bounded intrablock spill copies; not general split-location allocation or PGO.",
+    "Full per-PC profiling data are produced in local build output, not duplicated in this summary."
+  ]
+}

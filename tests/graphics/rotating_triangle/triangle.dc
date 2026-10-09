@@ -33,7 +33,6 @@ word main() {
     word cosine = sine_q6(phase + 16);
     word pixels = 0;
     word white = 0;
-    word black = 0;
 
     // Clear only the 14x14 tile area that can contain any rotated pose.
     // The previous invocation flushed its pixel caches before STOP.
@@ -48,6 +47,38 @@ word main() {
     word horizontal[3] = { -sine, cosine + cosine + sine, -cosine - cosine + sine };
     word vertical[3] = { cosine, sine + sine - cosine, -sine - sine - cosine };
     word boundary[3] = { 2048, 3072, 3072 };
+    word divisor[3];
+    word edge_quotient[3];
+    word edge_remainder[3];
+    word quotient_step[3];
+    word remainder_step[3];
+    // b(y) = boundary - (y-96)*vertical. Split its initial value and
+    // one-row delta into Euclidean q/r once per edge, not every scanline.
+    // With d>0, 0<=r<d and 0<=s<d: each row needs at most one carry.
+    // These bounded Q6 half-planes never overflow a signed word.
+    for (word edge = 0; edge < 3; edge++) {
+        word a = horizontal[edge];
+        word d = a;
+        if (d < 0) { d = -d; }
+        divisor[edge] = d;
+        word initial = boundary[edge] + 56 * vertical[edge];
+        word delta = -vertical[edge];
+        if (d != 0) {
+            word q = floor_div(initial, d);
+            word k = floor_div(delta, d);
+            edge_quotient[edge] = q;
+            edge_remainder[edge] = initial - q * d;
+            quotient_step[edge] = k;
+            remainder_step[edge] = delta - k * d;
+        } else {
+            // A horizontal half-plane has no quotient; retain b itself.
+            // This also avoids ever entering division with a zero divisor.
+            edge_quotient[edge] = initial;
+            edge_remainder[edge] = 0;
+            quotient_step[edge] = delta;
+            remainder_step[edge] = 0;
+        }
+    }
     plot {
         options;
         for (word y = 40; y < 152; y++) {
@@ -56,16 +87,25 @@ word main() {
             word right = 55;
             for (word edge = 0; edge < 3; edge++) {
                 word a = horizontal[edge];
-                word b = boundary[edge] - dy * vertical[edge];
+                word q = edge_quotient[edge];
                 if (a > 0) {
-                    word limit = floor_div(b, a);
-                    if (limit < right) { right = limit; }
+                    if (q < right) { right = q; }
                 } else if (a < 0) {
-                    word limit = -floor_div(b, -a);
+                    word limit = -q;
                     if (limit > left) { left = limit; }
-                } else if (b < 0) {
+                } else if (q < 0) {
                     left = 1; right = 0;
                 }
+                // Advance even empty rows so the next row has the same
+                // exact floor quotient as recomputing b/d from scratch.
+                q += quotient_step[edge];
+                word d = divisor[edge];
+                if (d != 0) {
+                    word r = edge_remainder[edge] + remainder_step[edge];
+                    if (r >= d) { r -= d; q++; }
+                    edge_remainder[edge] = r;
+                }
+                edge_quotient[edge] = q;
             }
             if (left <= right) {
                 // Inverse rotation about (128,96). Keep six fractional bits;
@@ -73,17 +113,17 @@ word main() {
                 // instead of testing all three edges again for every pixel.
                 word u = left * cosine + dy * sine;
                 word v = -left * sine + dy * cosine;
+                word span_width = right - left + 1;
+                pixels += span_width;
                 at (128 + left, y);
                 @cache
-                for (word x = left; x <= right; x++) {
+                for (word i = 0; i < span_width; i++) {
                     // Bit 9 of Q6 is an eight-pixel checker cell. Sampling
                     // local u/v rotates the pattern with the geometry.
-                    word shade = 1 + (((u ^ v) & 512) >> 9);
-                    color shade;
-                    white += shade - 1;
-                    black += 2 - shade;
+                    word white_pixel = ((u ^ v) & 512) >> 9;
+                    color 1 + white_pixel;
+                    white += white_pixel;
                     pixel; // PLOT alone advances the hardware X cursor.
-                    pixels++;
                     u += cosine;
                     v -= sine;
                 }
@@ -95,7 +135,7 @@ word main() {
     // Mailbox and diagnostics sit outside framebuffer, payload and stack.
     *(volatile word*)0xF000 = pixels;
     *(volatile word*)0xF004 = white;
-    *(volatile word*)0xF006 = black;
+    *(volatile word*)0xF006 = pixels - white;
     *(volatile word*)0xF008 = phase;
     return pixels;
 }

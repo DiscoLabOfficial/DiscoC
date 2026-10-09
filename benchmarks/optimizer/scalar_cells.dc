@@ -1,0 +1,9 @@
+struct Pair { word a; word b; };
+word main() {
+    word seed = *(volatile word*)0x100;
+    struct Pair p = { seed, seed + 1 };
+    word a[3] = { seed, seed + 2, seed + 3 };
+    if (seed & 1) { p.a += 3; p.b += 5; a[1] += 7; }
+    *(volatile word*)0x120 = p.a + p.b + a[0] + a[1] + a[2];
+    return 42;
+}

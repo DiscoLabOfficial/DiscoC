@@ -57,7 +57,7 @@
 .DEFINE GSU_WHITE $70F004
 .DEFINE GSU_BLACK $70F006
 .DEFINE GSU_DONE_PHASE $70F008
-.DEFINE TEST_STATUS $7E0000 ; 0=rendering, 1=displayed/holding, 2=wrong, 3=timeout
+.DEFINE TEST_STATUS $7E0000 ; 0=rendering, 1=completed-frame publication, 2=wrong, 3=timeout
 .DEFINE TEST_RESULT $7E0002
 .DEFINE TEST_SP $7E0004
 .DEFINE TEST_PBR $7E0006
@@ -73,7 +73,6 @@
 .DEFINE DMA_DESTINATION $7E0018
 .DEFINE LAST_DMA_LINE $7E001A
 .DEFINE TEST_CBR $7E001C
-.DEFINE HOLD_VBLANKS 6
 
 .BANK 0 SLOT 0
 .ORG 0
@@ -225,13 +224,9 @@ GsuStopped:
   lda #$01
   sta.l TEST_STATUS
 
-  ; Keep the completed RAM and VRAM frame stable while displayed. The GSU
-  ; does not touch RAM again until the host begins the next render.
-  ldy #HOLD_VBLANKS
-HoldDisplayedFrame:
-  jsr wait_next_vblank
-  dey
-  bne HoldDisplayedFrame
+  ; Start the next render immediately. VRAM retains the completed image while
+  ; the GSU reuses cartridge RAM. Missed refreshes repeat that image; only a
+  ; complete, checked pose is uploaded at the next VBlank, never partial work.
   rep #$20
   .ACCU 16
   lda.l CURRENT_PHASE

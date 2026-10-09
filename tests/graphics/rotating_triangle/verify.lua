@@ -1,6 +1,7 @@
 -- Independent full-frame reference, not the compiler's clipped-span algorithm.
-local frames, lastFrame, readyFrames, verified = 0, -1, 0, 0
+local frames, lastFrame, verified = 0, 0, 0
 local visited = {}
+local pending = {}
 local quarter = { 0, 6, 12, 19, 24, 30, 36, 41, 45, 49, 53, 56, 59, 61, 63, 64, 64 }
 local folder = emu.getRomInfo().path:match("^(.*[/\\])") or ""
 local function sine(phase)
@@ -17,18 +18,18 @@ local function finish(code, message)
 end
 local function fail(message) finish(1, "FAIL rotating triangle: " .. message) end
 
-emu.addEventCallback(function()
-    frames = frames + 1
-    if frames > 10000 then fail("animation timed out") return end
-    local status = emu.read(0, emu.memType.snesWorkRam)
+-- The host immediately resumes rendering after publication. Validate RAM,
+-- VRAM and the mailbox synchronously before the GSU reuses that RAM; status=1
+-- is deliberately not required to survive until an end-of-frame callback.
+emu.addMemoryCallback(function(_, status)
     if status >= 2 then fail("host status=" .. status) return end
-    if status ~= 1 then readyFrames = 0 return end
+    if status ~= 1 or lastFrame >= 65 then return end
     local frame = emu.read16(0x12, emu.memType.snesWorkRam)
-    if frame ~= lastFrame then lastFrame = frame; readyFrames = 0 end
-    readyFrames = readyFrames + 1
-    if readyFrames ~= 5 then return end
     local phase = emu.read16(0xC, emu.memType.snesWorkRam)
-    if phase ~= (frame - 1) % 64 then fail("phase/frame sequence mismatch") return end
+    if frame ~= lastFrame + 1 or phase ~= (frame - 1) % 64 then
+        fail("phase/frame sequence mismatch") return
+    end
+    lastFrame = frame
     if emu.read16(4, emu.memType.snesWorkRam) ~= 0xFFFA or
        emu.read(6, emu.memType.snesWorkRam) ~= 0x70 or
        emu.read(7, emu.memType.snesWorkRam) ~= 0 or
@@ -89,6 +90,27 @@ emu.addEventCallback(function()
     for address = 0x3000, 0x300F do
         if emu.read(address, emu.memType.snesVideoRam) ~= 0 then fail("nonblank padding tile") return end
     end
+
+    -- Mesen's endFrame hook runs before SendFrame updates its screenshot/pixel
+    -- buffer. After this VBlank's DMA, allow a full scanout and that API's
+    -- one-frame lag plus asynchronous decoding. The next UpdateFrame fences
+    -- the previous decode; three refreshes prevent a stale screenshot buffer.
+    -- The decoder can still expose the preceding pose, so the
+    -- capture callback also checks the full visible reference before saving.
+    -- Two publications may await capture at one pose/refresh;
+    -- their RAM/VRAM checks above have already completed synchronously.
+    pending[#pending + 1] = {phase=phase, frame=frame, visibleAfter=frames + 3}
+    if #pending > 2 then fail("more than one publication per refresh") return end
+end, emu.callbackType.write, 0x7e0000, 0x7e0000, emu.cpuType.snes, emu.memType.snesMemory)
+
+emu.addEventCallback(function()
+    frames = frames + 1
+    if frames > 10000 then fail("animation timed out") return end
+    local status = emu.read(0, emu.memType.snesWorkRam)
+    if status >= 2 then fail("host status=" .. status) return end
+    if not pending[1] or pending[1].visibleAfter > frames then return end
+    local displayed = pending[1]
+    local phase, frame = displayed.phase, displayed.frame
     -- Compare against a visible backdrop pixel, not the black overscan border:
     -- black is a valid foreground checker color, so (0,0) is not a reference.
     if emu.read16(0, emu.memType.snesCgRam) ~= 0x0842 or
@@ -101,6 +123,44 @@ emu.addEventCallback(function()
             phase, frame, emu.read16(0, emu.memType.snesCgRam), emu.read16(2, emu.memType.snesCgRam),
             emu.read16(4, emu.memType.snesCgRam), emu.getPixel(128, 96), emu.getPixel(0, 96))) return
     end
+    -- Screenshot publication is asynchronous relative to endFrame. A fixed
+    -- delay alone occasionally saved phase N-1 under phase N's filename even
+    -- for byte-identical ROMs. Do not weaken the synchronous RAM/VRAM oracle:
+    -- wait separately for all visible pixels to match this queued pose.
+    local s, c = sine(phase), sine(phase + 16)
+    local screen = emu.getScreenBuffer()
+    local screenSize = emu.getScreenSize()
+    -- This fixed NTSC host/API exposes seven top-border rows in the raw
+    -- 239-line buffer; takeScreenshot crops them to its 224-line PNG.
+    if screenSize.width ~= 256 or screenSize.height ~= 239 or #screen ~= 256 * 239 then
+        fail("unsupported screen buffer dimensions for the NTSC pixel oracle") return
+    end
+    local backdrop = emu.getPixel(0, 96) & 0xFFFFFF
+    local visible = true
+    local mismatch
+    for y = 0, 191 do
+        if not visible then break end
+        for x = 0, 255 do
+            local u, v = (x - 128) * c + (y - 96) * s, -(x - 128) * s + (y - 96) * c
+            local expected = backdrop
+            if v <= 2048 and 2 * u <= v + 3072 and -2 * u <= v + 3072 then
+                expected = (((u ~ v) & 512) == 0) and 0 or 0xFFFFFF
+            end
+            local actual = screen[(y + 7) * screenSize.width + x + 1] & 0xFFFFFF
+            if actual ~= expected then
+                visible = false
+                mismatch = string.format("pixel=(%d,%d) expected=$%06X actual=$%06X", x, y, expected, actual)
+                break
+            end
+        end
+    end
+    if not visible then
+        if frames > displayed.visibleAfter + 3 then
+            fail(string.format("phase=%d never presented its complete visible reference: %s", phase, mismatch))
+        end
+        return
+    end
+    table.remove(pending, 1)
     if not visited[phase] then
         local file = io.open(folder .. string.format("rotating-frame-%02d.png", phase), "wb")
         if not file then fail("cannot write screenshot") return end

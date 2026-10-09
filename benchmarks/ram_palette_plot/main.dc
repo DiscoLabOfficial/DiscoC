@@ -1,0 +1,20 @@
+// Initializers are copied to static RAM by --init-runtime, included in counts.
+byte palette[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+bitmap screen { mode bitmap; size 256x192; depth 4bpp; base 0x6000; }
+
+word main() {
+    use bitmap screen;
+    word end_x = 0;
+    plot {
+        options;
+        at (32, 40);
+        for (word i = 0; i < 128; i++) {
+            color palette[i & 7];
+            pixel;
+        }
+        end_x = cursor.x;
+        flush;
+    }
+    *(volatile word*)0x0120 = end_x;
+    return end_x;
+}

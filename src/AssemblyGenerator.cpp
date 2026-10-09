@@ -1,4 +1,5 @@
 #include "AssemblyGenerator.hpp"
+#include "GSUCodeLayout.hpp"
 #include <iomanip>
 #include <map>
 #include <set>
@@ -27,7 +28,7 @@ Instruction decode(const std::vector<std::uint8_t>& code, std::size_t offset) {
         {0,"stop"},{1,"nop"},{2,"cache"},{3,"lsr"},{4,"rol"},
         {0x3c,"loop"},{0x3d,"alt1"},{0x3e,"alt2"},{0x3f,"alt3"},
         {0x4c,"plot"},{0x4d,"swap"},{0x4e,"color"},{0x4f,"not"},{0x70,"merge"},
-        {0x90,"msbk"},{0x95,"sex"},{0x96,"asr"},{0x97,"ror"},{0x9e,"lob"},
+        {0x90,"msbk"},{0x95,"sex"},{0x96,"asr"},{0x97,"ror"},{0x9e,"lob"},{0xc0,"hib"},
         {0xdf,"getc"},{0xef,"getb"}};
     const auto found = implied.find(op);
     if (found != implied.end()) result.text = found->second;
@@ -86,6 +87,7 @@ std::string AssemblyGenerator::generate() const {
         << "\n.define __DISCO_CODE_START_ADDRESS " << hex(m_object.config.code_start_address, 6)
         << "\n.define __DISCO_DATA_ALIGNMENT " << static_cast<unsigned>(m_object.data_alignment)
         << "\n.define __DISCO_RAM_ALIGNMENT " << static_cast<unsigned>(m_object.ram_alignment) << '\n';
+    if (GSUCodeLayout::alignment(m_object) == 16) out << ".define __DISCO_CODE_ALIGNMENT 16\n";
     m_object.config.bitmap.validate();
     if (m_object.config.bitmap.enabled) {
         out << "; SNES host writes SCBR and SCMR before starting GSU; OR SCMR with bus ownership bits.\n"
@@ -105,6 +107,7 @@ std::string AssemblyGenerator::generate() const {
     };
     for (const auto& symbol : m_object.symbol_table) {
         if (symbol.name.empty()) throw std::runtime_error("Assembly export: empty symbol name.");
+        if (symbol.name == GSUCodeLayout::CacheAlignmentSymbol) continue;
         const bool local = symbol.name.front() == '\x01';
         const auto name = local ? uniqueName() : symbol.name;
         renamed.emplace(symbol.name, name);

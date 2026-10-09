@@ -1,6 +1,9 @@
 #include "ABI.hpp"
 #include "LinkerDriver.hpp"
 #include "ObjectFile.hpp"
+#include "GSUCodeLayout.hpp"
+#include "GSUInstructionModel.hpp"
+#include "RuntimeInitialization.hpp"
 #include "TestTempDirectory.hpp"
 
 #include <filesystem>
@@ -98,6 +101,28 @@ private:
 };
 
 void relocationCases(Cases& cases) {
+    ObjectFile caller;
+    caller.code_section = {0xff,0,0,1,0,1};
+    caller.symbol_table = {{"main",SymbolSection::CODE,0}};
+    caller.relocation_table = {{"hot",SymbolSection::CODE,0,RelocationType::ADDR16_JAL}};
+    ObjectFile hot;
+    hot.code_section.assign(15,1); hot.code_section.insert(hot.code_section.end(),{2,0xf0,149,0,0,1});
+    hot.symbol_table = {{GSUCodeLayout::CacheAlignmentSymbol,SymbolSection::CODE,0},{"hot",SymbolSection::CODE,15},
+        {"\x01" "local",SymbolSection::CODE,16}};
+    hot.relocation_table = {{"\x01" "local",SymbolSection::CODE,16,RelocationType::ADDR16_IWT}};
+    for (const auto origin : {0x700900u,0x700903u,0x70090fu}) {
+        const auto payload = cases.link("cache-origin-" + std::to_string(origin),{caller,hot},
+            {"--origin",std::to_string(origin),"--init-runtime","--stack-pointer","0x2000"});
+        const auto caller_base = 11u;
+        const auto hot_base = ((origin + caller_base + caller.code_section.size() + 15u) & ~15u) - origin;
+        const auto entry = origin + hot_base + 15u;
+        require(payload.at(caller_base + 1) == (entry & 255) && payload.at(caller_base + 2) == ((entry >> 8) & 255) &&
+                payload.at(hot_base + 15) == 2 && ((entry + 1) & 15) == 0,
+                "Final origin/startup/multifile CACHE alignment or public relocation is incorrect");
+        require(payload.at(hot_base + 17) == ((entry + 1) & 255) &&
+                payload.at(hot_base + 18) == (((entry + 1) >> 8) & 255),
+                "Aligned object local relocation uses the wrong CODE base");
+    }
     // Independent expected bytes cover CODE, per-object aligned DATA and RAM
     // bases. Operand offsets must not be based on the first object's DATA.
     ObjectFile first;
@@ -155,9 +180,27 @@ void runtimeCases(Cases& cases) {
     for (const auto bank : {0u, 1u}) {
         const auto bytes = cases.link("startup-bank-" + std::to_string(bank), {main},
             {"--origin", "0x700900", "--init-runtime", "--ram-bank", std::to_string(bank), "--stack-pointer", "0x3000"});
-        const Bytes expected{0xf0, static_cast<std::uint8_t>(bank), 0, 0x3e, 0xdf, 0xfa, 0, 0x30,
-            0xff, 0x0c, 0x09, 1, 0, 1};
+        const Bytes expected{0xa0, static_cast<std::uint8_t>(bank), 0x3e, 0xdf, 0xfa, 0, 0x30,
+            0xff, 0x0b, 0x09, 1, 0, 1};
         require(bytes == expected, "runtime startup differs from independent opcode fixture");
+        DiscoGSU::Machine runtime(bytes,0x700900,0x7777,static_cast<std::uint8_t>(1-bank)); runtime.run();
+        require(runtime.ramBank() == bank && runtime.reg(10) == 0x3000, "Compact startup did not restore poisoned RAMBR/R10");
+        const auto short_bytes = cases.link("startup-signed-stack-" + std::to_string(bank), {main},
+            {"--origin", "0x700900", "--init-runtime", "--ram-bank", std::to_string(bank), "--stack-pointer", "0xfffe"});
+        const Bytes short_expected{0xa0,static_cast<std::uint8_t>(bank),0x3e,0xdf,0xaa,0xfe,0xff,0x0a,0x09,1,0,1};
+        require(short_bytes == short_expected, "Sign-extended stack startup has wrong bytes/entry relocation");
+        DiscoGSU::Machine short_runtime(short_bytes,0x700900,0x7777,static_cast<std::uint8_t>(1-bank)); short_runtime.run();
+        require(short_runtime.ramBank() == bank && short_runtime.reg(10) == 0xfffe,
+            "IBT stack startup lost sign extension or bank initialization");
+    }
+    for (const auto stack : {0x7eu,0x80u,0xfeu,0xff80u,0xfffeu}) {
+        const auto bytes = cases.link("startup-literal-boundary-" + std::to_string(stack),{main},
+            {"--init-runtime","--stack-pointer",std::to_string(stack)});
+        const bool small = stack <= 0x7f || stack >= 0xff80;
+        require(bytes.at(4) == (small ? 0xaa : 0xfa) && bytes.size() == (small ? 12u : 13u),
+            "Runtime materialization confused a zero-extended byte with a signed byte");
+        DiscoGSU::Machine runtime(bytes,0x008000); runtime.run();
+        require(runtime.reg(10) == stack, "Runtime literal boundary produced a different 16-bit value");
     }
     for (const auto& invalid : std::vector<std::pair<std::string, std::string>>{
             {"0", "Initial stack pointer must be even"}, {"7", "Initial stack pointer must be even"},
@@ -180,7 +223,7 @@ void runtimeCases(Cases& cases) {
     auto guarded = entry(); guarded.code_section = {0xf3, 0, 0, 0, 1};
     guarded.relocation_table = {{std::string(GSUAbi::StackLimitPrefix) + "4", SymbolSection::CODE, 0, RelocationType::ADDR16_RAM}};
     const auto floor = cases.link("ram-code-stack-floor", {guarded}, {"--origin", "0x701000", "--init-runtime"});
-    require(floor[13] == 0x15 && floor[14] == 0x10, "stack guard must reserve RAM payload below R10");
+    require(floor[12] == 0x14 && floor[13] == 0x10, "stack guard must reserve RAM payload below R10");
     cases.link("ram-code-no-frame-space", {guarded},
         {"--origin", "0x701000", "--init-runtime", "--stack-pointer", "0x1012"}, "no room for the requested stack frame");
     guarded.relocation_table.front().target_symbol_name = std::string(GSUAbi::StackLimitPrefix) + "65535";
@@ -204,6 +247,40 @@ void runtimeCases(Cases& cases) {
     cases.link("static-payload-overlap", {globals}, {"--origin", "0x700400", "--init-runtime"}, "Static RAM overlaps");
     cases.link("static-bank-crossing", {globals, globals},
         {"--ram-origin", "0xfffe", "--init-runtime"}, "crosses a RAM bank boundary");
+}
+
+void runtimeImageCases() {
+    const Bytes image{0x7f,0,0x80,0,0xfe,0,0x80,0xff,0xfe,0xff,0x95};
+    for (const auto bank : {0u,1u}) for (const auto origin : {0x7eu,0x80u,0xfff4u}) {
+        auto startup = makeRuntimeInitialization(static_cast<std::uint8_t>(bank),0xfffe,
+            static_cast<std::uint16_t>(origin),image);
+        const auto destination = 0x8000u + startup.bytes.size();
+        require(startup.bytes.at(startup.entry_patch-1) == 0xff, "Runtime entry patch was shortened to IBT");
+        startup.bytes.at(startup.entry_patch) = static_cast<std::uint8_t>(destination);
+        startup.bytes.at(startup.entry_patch+1) = static_cast<std::uint8_t>(destination >> 8);
+        startup.bytes.insert(startup.bytes.end(),{0,1});
+        DiscoGSU::Machine runtime(startup.bytes,0x008000,0x7777,static_cast<std::uint8_t>(1-bank));
+        for (unsigned offset = 0; offset < 65536; ++offset) runtime.seed(0x700000 + bank*65536 + offset,0xa5,false);
+        runtime.run();
+        require(runtime.reg(10) == 0xfffe && runtime.ramBank() == bank, "Global initialization changed stack/bank setup");
+        for (unsigned offset = 0; offset < 65536; ++offset) {
+            const auto expected = offset >= origin && offset-origin < image.size() ? image[offset-origin] : 0xa5;
+            require(runtime.byte(0x700000+bank*65536+offset) == expected,
+                "Compact global initializer changed a value or a byte outside the allocation");
+            require(runtime.byte(0x700000+(1-bank)*65536+offset) == 0, "Global initializer wrote the other RAM bank");
+        }
+    }
+    // Count 0 represents exactly 64 KiB: it must wrap once, not skip clearing.
+    auto startup = makeRuntimeInitialization(0,0x2000,0,Bytes(65536,0));
+    const auto destination = 0x8000u + startup.bytes.size();
+    startup.bytes.at(startup.entry_patch) = static_cast<std::uint8_t>(destination);
+    startup.bytes.at(startup.entry_patch+1) = static_cast<std::uint8_t>(destination >> 8);
+    startup.bytes.insert(startup.bytes.end(),{0,1});
+    DiscoGSU::Machine runtime(startup.bytes,0x008000);
+    for (unsigned offset = 0; offset < 65536; ++offset) runtime.seed(0x700000+offset,0xa5,false);
+    runtime.run();
+    for (unsigned offset = 0; offset < 65536; ++offset)
+        require(runtime.byte(0x700000+offset) == 0, "Compact 64 KiB clearing loop ended early");
 }
 
 void metadataCases(Cases& cases) {
@@ -289,7 +366,7 @@ void aggregateBudgetCase(const std::filesystem::path& root) {
 int main() {
     try {
         TestTempDirectory temporary("linker-tests"); Cases cases(temporary.path());
-        relocationCases(cases); runtimeCases(cases); metadataCases(cases); malformedCases(temporary.path());
+        relocationCases(cases); runtimeCases(cases); runtimeImageCases(); metadataCases(cases); malformedCases(temporary.path());
         aggregateBudgetCase(temporary.path());
         temporary.cleanup();
         return 0;

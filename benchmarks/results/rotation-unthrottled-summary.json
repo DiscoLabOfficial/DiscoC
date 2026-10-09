@@ -1,0 +1,79 @@
+{
+  "measurement": "completed-image presentation throughput in MesenCE",
+  "profile": "NTSC CLSR=1 GSU=100% CFGR.MSO=0 CACHE RAM execution at 0x706000; no artificial post-presentation hold",
+  "master_clock_hz": 21477270,
+  "runtime": { "ram_bank": 0, "stack_pointer": "0xFFFE" },
+  "measurement_window": "65 publications after completed VRAM DMA, covering 64 intervals and phase wrap; excludes boot and first render, includes GSU, CPU setup, VBlank waits and DMA",
+  "host_policy": "Start the next render immediately after publication. Upload complete checked poses during VBlank. Repeat the last completed image on missed refreshes; do not skip angular poses.",
+  "source": "tests/graphics/rotating_triangle/triangle.dc",
+  "source_sha256": "fb05742c4ec5a189c7f2c986834d2e95054dc4155f406a8e9bbfceb7ec68117f",
+  "host_sha256": "6eaf1ddc62f04d65272cf782d788aa3522351e83ece20e0712cb4974d6ad5401",
+  "verifier_sha256": "39e4f1418f08244528dae26958736719330564bcf4011ec3edf01ffca6824caa",
+  "fps_probe_sha256": "66ecdcc88a2ae6fff95965b95813de6c9d8ce7e57b3093f40b81128948676704",
+  "mesen_sha256": "8ef403d6b9af32075416193914d7993ce8480b347fe1f20a0cfd9815374933e7",
+  "before_discc_sha256": "520b078ec69141fda416ad3e1f5f97879c14ce67f1ca386011cc048d101e9e78",
+  "after_discc_sha256": "77b8c1ebca573630e2403d23a394230c4ed1d763b339a4d20b7c6cecf4ef271f",
+  "after_discas_sha256": "59b04ace098bbfd5e3acd4558ad421006581707f3c27a590edd5cf96beb708e9",
+  "after_discld_sha256": "5c3bb7d29318660e30bcbda192a1684e8c622dc7f6e0774af7656ef00fd6b09e",
+  "cases": [
+    {
+      "label": "O2 proven checks, before divmod/shared-code optimization",
+      "report": "benchmarks/results/rotation-unthrottled-before-fps.json",
+      "payload_bytes": 3453,
+      "rom_bytes": 65536,
+      "payload_sha256": "e73ec032db94b5963fbd7476ca0f317f601834b229e82dd943bbcfa1a5ef3a29",
+      "rom_sha256": "d953ede7a76a790363df1c1edc6f9210a228314b418c3cb7ce5fde5f226140f3",
+      "intervals": 64,
+      "elapsed_master_clocks": 219065390,
+      "elapsed_seconds": 10.199871305804,
+      "displayed_pose_fps": 6.274588970900,
+      "refreshes": 613,
+      "repeated_refreshes": 549,
+      "interval_refresh_distribution": [
+        { "refreshes": 8, "intervals": 2 },
+        { "refreshes": 9, "intervals": 23 },
+        { "refreshes": 10, "intervals": 39 }
+      ],
+      "verification": "PASS 64 poses plus phase wrap and deliberate-failure red backdrop"
+    },
+    {
+      "label": "O2 divmod/shared code, current compiler",
+      "report": "benchmarks/results/rotation-unthrottled-after-fps.json",
+      "payload_bytes": 3126,
+      "rom_bytes": 65536,
+      "payload_sha256": "5c96ba59149d20b09d0d0bc30b64331a75df2ac1a1c1212027154bb97fb84137",
+      "rom_sha256": "a9205fe3adc79b2a540ab72dc79dbd6d2bf1674b04475bfccc49234799de3a0b",
+      "intervals": 64,
+      "elapsed_master_clocks": 205128082,
+      "elapsed_seconds": 9.550938364140,
+      "displayed_pose_fps": 6.700912262223,
+      "refreshes": 574,
+      "repeated_refreshes": 510,
+      "interval_refresh_distribution": [
+        { "refreshes": 8, "intervals": 2 },
+        { "refreshes": 9, "intervals": 62 }
+      ],
+      "verification": "PASS 64 poses plus phase wrap and deliberate-failure red backdrop"
+    }
+  ],
+  "compiler_optimization_fps_gain_percent_same_host": 6.794441728377465,
+  "validation": {
+    "pixel_checks_per_pose": 49152,
+    "screenshot_hashes_compared_per_variant": 64,
+    "screenshot_mismatches_against_previous_baseline": 0,
+    "native_graphics_rotation": "PASS ten input vectors through direct, compiler-assembly and final-assembly paths",
+    "public_O2_build": "Payload, ROM and complete FPS sample report exactly match the frozen-current-payload comparison",
+    "assembly_roundtrips": "PASS compiler and final linked assembly reproduce the payload byte for byte",
+    "manifest_optimization_override": "PASS O2 project build matches standalone and both assembly paths for the public SNES triangle",
+    "scheduling_stress": "PASS at GSU=1000%, 65 poses in 71 SNES frames including boot and capture lag; all 64 screenshots unchanged. Scheduling test only, not the measured performance profile.",
+    "invalid_fps_profile": "PASS FPS probe rejects GSU=1000% instead of labeling overclocked results as GSU=100%"
+  },
+  "reproduction": "cmake -DOPTIMIZATION=2 -DVERIFY_MESEN=ON -P tests/graphics/rotating_triangle/build-snes.cmake; discc/discas/discld, WLA-DX and Mesen must be available",
+  "limitations": [
+    "These are emulated completed-pose FPS, not physical-hardware measurements or GIF playback speed.",
+    "Presentation remains VBlank-safe; intervals are quantized to display refreshes and include host costs. GSU-only timing is a separate measurement.",
+    "Both compiler variants use identical revised host code and unchanged frozen payloads from the preceding optimization comparison. Removing the old presentation hold is not a compiler optimization.",
+    "The 64-interval steady-state window includes poses 1..63 and the return to pose 0; it excludes the initial pose 0 render.",
+    "Repeated refreshes are intentional: a slow render keeps the last complete image visible without advancing the pose or presenting partial work."
+  ]
+}

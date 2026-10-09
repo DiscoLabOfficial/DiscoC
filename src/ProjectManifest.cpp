@@ -70,21 +70,25 @@ void Manifest::validate() const {
         {"target.gsu.ram_origin", 0xffff}, {"target.gsu.stack_pointer", 0xfffe}, {"target.spc700.origin", 0xffff}};
     for (const auto& item : values) {
         const auto& key = item.first; const auto& value = item.second;
-        const bool path = key == "output.directory" || key == "output.binary" || key == "output.assembly";
+        const bool output_path = key == "output.directory" || key == "output.binary" || key == "output.assembly";
         if (key == "project.sources" || key == "compiler.import_paths") {
             if (value.kind != Value::Kind::Strings) error(*this, key, "Expected array of quoted paths.");
             if (key == "compiler.import_paths" && value.strings.size() > 64)
                 error(*this, key, "Import path count exceeds 64.");
             for (const auto& name : value.strings)
                 if (!validPath(name)) error(*this, key, key == "project.sources" ? "Invalid source path." : "Invalid import path.");
-        } else if (path || key == "project.name" || key == "project.target" || key == "runtime.entry") {
+        } else if (output_path || key == "project.name" || key == "project.target" || key == "runtime.entry") {
             const auto text = string(key);
             if (!validPath(text)) error(*this, key, "Empty string or invalid control character.");
             if (key == "project.name" && (text.size() > 64 || std::any_of(text.begin(), text.end(), [](char c) {
                 return !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_');
             }))) error(*this, key, "Name must contain 1..64 ASCII letters, digits, '_' or '-'.");
-        } else if (key == "runtime.initialize" || key == "runtime.host_initialized_globals" || key == "target.gsu.initialize_runtime") {
+        } else if (key == "compiler.optimize" || key == "runtime.initialize" || key == "runtime.host_initialized_globals" || key == "target.gsu.initialize_runtime") {
             (void)boolean(key);
+        } else if (key == "compiler.optimization_level") {
+            if (value.kind == Value::Kind::String) {
+                if (value.text != "s") error(*this, key, "Optimization level must be an integer 0, 1 or 2, or the string 's'.");
+            } else if (number(key, 0) > 2) error(*this, key, "Optimization level must be 0, 1 or 2, or the string 's'.");
         } else if (key == "target.gsu.memory_mapping" || key == "target.gsu.execution_memory") {
             const auto text = string(key);
             if (key == "target.gsu.memory_mapping" ? text != "lorom" && text != "hirom" : text != "rom" && text != "ram")
@@ -98,6 +102,8 @@ void Manifest::validate() const {
     try { (void)target(); } catch (const std::exception& exception) { error(*this, "project.target", exception.what()); }
     if (find("runtime.initialize") && find("target.gsu.initialize_runtime"))
         error(*this, "runtime.initialize", "Use only one initialization key, not both aliases.");
+    if (find("compiler.optimize") && find("compiler.optimization_level"))
+        error(*this, "compiler.optimization_level", "Use optimization_level or optimize, not both.");
 }
 
 std::unique_ptr<Manifest> commandManifest(const std::vector<std::string>& arguments, Consumer consumer) {
@@ -131,6 +137,10 @@ std::vector<std::string> configurationArguments(const std::vector<std::string>& 
     }
     const std::string prefix = target == TargetKind::GSU ? "target.gsu." : "target.spc700.";
     std::vector<std::string> result{arguments.front(), "--target", target == TargetKind::GSU ? "gsu" : "spc700"};
+    if (consumer == Consumer::Compiler && manifest.find("compiler.optimize"))
+        result.push_back(manifest.boolean("compiler.optimize") ? "-O1" : "-O0");
+    if (consumer == Consumer::Compiler) if (const auto* level = manifest.find("compiler.optimization_level"))
+        result.push_back(level->kind == Value::Kind::String ? "-Os" : "-O" + std::to_string(manifest.number("compiler.optimization_level", 0)));
     if (consumer == Consumer::Compiler && !explicit_import_paths)
         if (const auto* paths = manifest.find("compiler.import_paths"))
             for (const auto& directory : paths->strings)

@@ -252,3 +252,12 @@ The format has no checksum, per-symbol alignment table, or section flags. The
 version byte is validated by `ObjectFile::read`. Changes to the
 serialization order or enum values require coordinated changes to
 `ObjectFile::write`, `ObjectFile::read`, `discld`, and `discas`.
+
+O2 cached function entries can request 16-byte CODE object alignment using the
+private symbol `\x01__disco_cache_align16` at CODE offset zero. This version-7
+performance hint is not an addressable/exported symbol; malformed hints and
+relocations to it are rejected. Older linkers may ignore it without changing
+program semantics. The current linker inserts explicit NOP padding at the final
+origin and uses the resulting per-object base for all local/global references.
+The compiler assembly path carries `.define __DISCO_CODE_ALIGNMENT 16`; linked
+assembly already contains its final padding and does not request realignment.

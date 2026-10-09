@@ -1,4 +1,5 @@
 #include "ObjectFile.hpp"
+#include "GSUCodeLayout.hpp"
 #include <algorithm>
 #include <limits>
 #include <new>
@@ -100,6 +101,7 @@ void ObjectFile::read_vec(std::istream& in, std::vector<T>& vec,
 // Main I/O Methods
 
 void ObjectFile::validate() const {
+    GSUCodeLayout::alignment(*this);
     if (static_cast<std::uint8_t>(config.target) > static_cast<std::uint8_t>(TargetKind::SPC700) ||
         static_cast<std::uint8_t>(config.mapping) > static_cast<std::uint8_t>(MemoryMapping::HiROM))
         throw std::runtime_error("Object file: invalid target configuration.");
@@ -151,6 +153,8 @@ void ObjectFile::validate() const {
         std::vector<Span> spans;
         spans.reserve(relocation_table.size());
         for (const auto& relocation : relocation_table) {
+            if (relocation.target_symbol_name == GSUCodeLayout::CacheAlignmentSymbol)
+                throw std::runtime_error("Object file: CACHE layout hint is not an addressable symbol.");
             valid_name(relocation.target_symbol_name);
             validate_relocation(relocation, *this);
             charge(10u + relocation.target_symbol_name.size());

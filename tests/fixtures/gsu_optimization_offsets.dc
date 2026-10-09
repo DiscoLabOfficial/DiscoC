@@ -1,0 +1,25 @@
+byte* byte_add(byte* p, word n) { return p + n; }
+byte* byte_sub(byte* p, word n) { return p - n; }
+word* word_add(word* p, word n) { return p + n; }
+word* word_sub(word* p, word n) { return p - n; }
+rom byte* rom_add(rom byte* p, word n) { return p + n; }
+rom byte* rom_sub(rom byte* p, word n) { return p - n; }
+byte* unsigned_add(byte* p, unsigned word n) { return p + n; }
+word* unsigned_word_add(word* p, unsigned word n) { return p + n; }
+
+word main() {
+    unsigned word start = *(volatile unsigned word*)0x100;
+    unsigned word count = *(volatile unsigned word*)0x102;
+    word mode = *(volatile word*)0x106;
+    unsigned word result = 0;
+    if (mode == 0) result = (unsigned word)byte_add((byte*)start, (word)count);
+    if (mode == 1) result = (unsigned word)byte_sub((byte*)start, (word)count);
+    if (mode == 2) result = (unsigned word)word_add((word*)start, (word)count);
+    if (mode == 3) result = (unsigned word)word_sub((word*)start, (word)count);
+    if (mode == 4) result = (unsigned word)rom_add((rom byte*)start, (word)count);
+    if (mode == 5) result = (unsigned word)rom_sub((rom byte*)start, (word)count);
+    if (mode == 6) result = (unsigned word)unsigned_add((byte*)start, count);
+    if (mode == 7) result = (unsigned word)unsigned_word_add((word*)start, count);
+    *(unsigned word*)0x104 = result;
+    return 42;
+}

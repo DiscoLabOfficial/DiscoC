@@ -117,23 +117,102 @@ foundation-only target at present: `--emit-ir` can inspect programs selected
 for SPC-700, while object and assembly emission reject that target until its
 lowering and assembler stages exist.
 
-Before emission, `IRCodeGenerator` runs a linear-scan allocation over the
-verified `IRValueId` live intervals. Reused values may reside in `R5`, `R7`, or
-`R8`; `R0` remains the expression accumulator and `R1`/`R3` remain backend
-temporaries. Pure values can be materialized/rematerialized at their use site.
-All loads/calls/RPIX results are evaluated at their IR definition and retained in aligned
-frame slots, regardless of use count. Potentially faulting division/shifts are
-also evaluated there. This preserves observable order and unused volatile
-accesses. Calls preserve allocated live values; scalar argument layout is
-unchanged. Const/volatile flags qualify accesses, not register-save categories.
+`IRCodeGenerator` supports baseline O0 (default), local O1 and global O2. All reserve
+hardware/ABI registers and use R5/R7/R8 for scalar allocation. R0 is the
+expression accumulator; plotting reserves R1/R2 and uses R3 as scratch.
+Observable loads/calls/RPIX and faulting arithmetic retain definition-time
+evaluation across policies, except proven private-local memory eliminated by
+SSA. Const/volatile qualifiers describe memory
+accesses, not register-save categories; calls preserve caller-live values.
 
-Functions that manipulate pointer values, volatile memory, or plotting use a
-conservative checked path. Far values are register pairs, not single-register intervals. Observable
-loads/calls and checked casts, member addresses, and pointer offsets execute at
-their IR definition and are retained in aligned frame spill slots (four bytes
-for far values). Pure scalar expressions and fixed frame addresses may still
-be rematerialized. This path currently bypasses the R5/R7/R8 allocator rather
-than splitting a far value into unrelated scalar live ranges.
+O0 retains the v0.1.0 materializer and aligned observable-result spills. Its
+checked-pointer/volatile/plot path bypasses scalar allocation and retains
+checked values in frame slots. O1 instead emits nontrivial definitions eagerly
+and allocates single-use/reused block-local scalar results, spilling only when
+required. Only constants/plain addresses can be rematerialized. Far pairs,
+cross-block results and functions with implicit hardware-loop backedges remain
+conservative frame values. Far slots are four bytes; no ABI is changed.
+Before O1 allocation, `IRLocalOptimizer` rewrites an owned copy of verified IR:
+scalar constant/cast folding, identity-copy elimination, and basic-block
+forwarding for nonvolatile, nonescaping scalar locals identified by SymbolId.
+It excludes pointer-valued locals, arrays, aggregates and globals; calls,
+unknown writes, volatile accesses, framebuffer effects and implicit loop
+boundaries fence memory facts. It compacts value IDs and verifies the result
+before emission. Frontend AST/IR inspection still shows the language IR, not
+this backend-local copy. Individual local/CFG branches widen only when needed,
+with a bounded long-form fallback; O0's emission policy is unchanged.
+See [optimization](optimization.md) for instruction selection and boundaries.
+
+O2 first runs `IRGlobalOptimizer` on the owned copy: explicit hardware-loop
+CFG edges, pruned scalar-local SSA/PHIs, bounded same-unit leaf inlining and
+constant specialization, safe LICM and checked scaled-index induction.
+`IRConditionalOptimizer` performs bounded SCCP/CFG cleanup after SSA promotion,
+again after inlining and after loop transforms. Its scalar evaluator is shared
+with the local pass. Executable edges, not merely structural predecessors,
+determine PHI constants; hardware counters and unknown memory are not inferred.
+`IRControlFlow` owns dominator/frontier/natural-loop/liveness snapshots.
+Small nonescaping local aggregate cells use `(SymbolId, byte offset)` as
+independent SSA identities; storage types, alignment and definite assignment
+remain explicit. A bounded promotion/constant-folding fixed point discovers
+static indices exposed by earlier cells. `IRValueOptimizer` owns pure scalar
+dominator-scoped GVN, conservative bits/intervals, modular numeric recurrences
+and late hot/cold lifetime partitioning. It never numbers memory or graphics
+state, infers pointer-address intervals, or speculates checked arithmetic.
+The allocator colors exact CFG interference rather than physical block-order
+interval hulls, favors hot loop uses, reuses noninterfering scalar spill slots
+and preserves CFG-live values at calls. PHI edge blocks schedule simultaneous
+copies directly between allocated registers; register-only cycles use volatile
+R6 scratch, while mixed register/spill cycles retain guarded stack snapshots.
+Loop-weighted, bounded two-color recoloring and spill-slot preferences preserve
+the exact interference graph. Explicit hardware scopes
+save/restore R12/R13, including nested loops and loop-using callees.
+Types, IDs, predecessor coverage, dominance and hardware scope stacks are
+verified after transformations. O0/O1 policies and object/call ABI remain
+unchanged. `--emit-ir -O2` and `--check -O2` expose/verify this optimized IR.
+An internal `live.split` representation-identical scalar Cast separates a
+loop snapshot from cold uses. The verifier validates its type/dominance, and
+cleanup preserves its marker. Each SSA part is still assigned one location;
+this is bounded IR lifetime partitioning, not arbitrary instruction-position
+location changes or an ABI/object-format extension.
+
+`GSUCostModel` counts selection/allocation-related fetch bytes, RAM transfer
+bytes and caller preservation under capped static loop weights. O2 compares
+the previous interference coloring with one bounded cost-priority candidate;
+the candidate must reduce the warm-CACHE pressure score without increasing
+the uncached score. This is a heuristic, not exact cycle simulation or PGO.
+`GSUSpillCache` tracks borrowed SSA snapshots, never owning memory or changing
+an SSA value's authoritative location. Exact point liveness excludes operands,
+destinations and PHI-edge/backedge values from its spare-register set. A copy
+in R5/R7/R8 may replace another load of the private spill, but the frame store
+remains; calls, CFG/helper labels, bank changes and physical writes invalidate
+copies. Ordinary memory/volatile reads still execute once per distinct IR load.
+The optional Mesen profiler uses labels from the byte-exact final assembly,
+not IR offsets predating machine scheduling/relocation. See the
+[cost/profiling contract](optimization.md#profiling-cost-model-and-allocation).
+
+`IRDivModFusion` matches resolved word operands using dominance after scalar
+cleanup. Internal `divmod`/`divmod.result` keep the first operation's fault point
+and share its sixteen-step helper. The backend reserves an aligned secondary
+frame word per pair; the verifier checks type, component and dominance.
+Final local cleanup compacts IDs after layout. Emission also shares identical
+in-range terminal faults and function-local epilogues, using existing branch
+relaxation and retaining per-path loop/plot cleanup and R0/R4 return values.
+
+After the complete local/spill frame is known, `GSUAddressProof` owns bounded
+scalar-range and near-RAM address facts keyed by IR IDs. It can prove member
+and masked/PHI-index accesses inside the validated ABI frame or known absolute
+RAM spans; unknown/far/ROM accesses remain checked. It changes selection, not
+IR or alias semantics. `GSUStackCheckCredit` separately reuses established
+lower bounds at guarded pushes without moving failures ahead of effects.
+CFG/helper entries and calls fence the credit. See the
+[proof contract](optimization.md#what-o2-adds) for limits and exclusions.
+
+Natural-loop layout keeps hot blocks and their PHI backedge copies together
+before allocation. After relaxation, `GSUMachineScheduler` makes bounded,
+proven one-byte slot and ROM-read scheduling changes and remaps CODE references.
+Cached function alignment is honored at final link time through a private
+version-7-compatible hint. Compiler and linked assembly remain byte-exact.
+Machine scheduling is not part of the frontend's printed SSA or `--check` path.
 
 The analyzer records every pointer layer's reach/address space and each
 l-value's storage-address type. IR carries these types and an explicit
@@ -154,8 +233,9 @@ byte, configuring ROMB/R14 and restoring a temporary far bank. Other colors
 evaluate normally and use COLOR. Bitmap configuration is owned module/object
 metadata for host SCMR/SCBR setup, not a stream of GSU writes.
 
-Comparisons are materialized as `0` or `1` values before they are consumed by
-control flow. Signed relations use the GSU signed branch conditions and
+Comparisons produce `0` or `1` values. O1/O2 may fuse an adjacent single-use
+comparison/conditional branch without materializing its boolean. Signed
+relations use the GSU signed branch conditions and
 unsigned relations use carry conditions, so `>`, `>=`, `<`, and `<=` remain
 distinct at equality and sign-bit boundaries. This also makes nested
 comparisons ordinary expressions in direct and assembly workflows.
@@ -350,9 +430,11 @@ reads, mismatched expectations, and instruction-limit exhaustion fail tests.
 This model does not emulate a complete SNES, cache timing, bus ownership,
 PPU display, or interrupts; emulator and hardware validation remain necessary.
 
-The project is pre-release compiler infrastructure. Register allocation is
-still conservative: scalar-only functions rematerialize under register pressure,
-while checked-pointer functions use explicit aligned spill slots. Far code
+The project is pre-1.0 compiler infrastructure. O1 allocation remains block-local
+with real pressure spills; far pairs and cross-block values retain aligned
+frame slots. O2 extends scalar SSA allocation across CFG/loop edges but keeps
+far pairs, aggregates, escapes and volatile storage conservative. O0 preserves
+the baseline policy. Far code
 calls and multi-bank code placement are not implemented. Assembly output uses DiscoC's
 assembler dialect, not WLA-DX. Fixed-origin linked exports cannot be moved to an
 arbitrary execution offset without relinking; native WLA-DX export and

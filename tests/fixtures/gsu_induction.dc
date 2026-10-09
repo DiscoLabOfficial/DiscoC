@@ -1,0 +1,34 @@
+struct Wide { word a; word b; word c; word d; };
+
+word forward(u16 start, u16 trips) {
+    struct Wide* data = (struct Wide*)0x0200;
+    word sum = 0;
+    for (u16 i = start; i != start + trips; i++) sum += (data + i)->a;
+    return sum;
+}
+
+word backward(u16 start) {
+    struct Wide* data = (struct Wide*)0x0200;
+    word sum = 0;
+    for (u16 i = start; i != 0; i--) sum += (data - i)->a;
+    return sum;
+}
+
+word rom_backward(u16 start) {
+    rom const struct Wide* data = (rom const struct Wide*)0x9000;
+    word sum = 0;
+    for (u16 i = start; i != 0; i--) sum += (data - i)->a;
+    return sum;
+}
+
+word main() {
+    u16 start = *(volatile u16*)0x0100;
+    u16 trips = *(volatile u16*)0x0102;
+    u16 mode = *(volatile u16*)0x0104;
+    word result = 0;
+    if (mode == 0) result = forward(start, trips);
+    else if (mode == 1) result = backward(start);
+    else result = rom_backward(start);
+    *(volatile word*)0x0120 = result;
+    return result;
+}

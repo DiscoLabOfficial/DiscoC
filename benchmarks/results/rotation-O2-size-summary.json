@@ -1,0 +1,62 @@
+{
+  "measurement": "rotation-mesen-21MHz",
+  "profile": "NTSC CLSR=1 GSU=100% CFGR.MSO=0 RAM execution at 0x706000, two CACHE instructions, cold instruction cache on entry",
+  "measured_window": "first payload opcode entry through normal STOP completion, excluding CPU setup/copy/DMA/display and initial synthetic prefetch",
+  "poses": 64,
+  "additional_wrap_sample": 1,
+  "source": "tests/graphics/rotating_triangle/triangle.dc",
+  "source_sha256": "fb05742c4ec5a189c7f2c986834d2e95054dc4155f406a8e9bbfceb7ec68117f",
+  "host_sha256": "5ecc376a21850fe0f3a34a706d6632f07ec0aa3ce73d7a769ec597ec4ffcb263",
+  "verifier_sha256": "df8310d058d8a23fdb502ccf1abf82b9e9e4fa09253fcc1c1f2691b773d2de6d",
+  "timing_probe_sha256": "6848b09d051f6ca8e5ffc19ea3682bcaa7df1aef0fc5f7e0675fa6551152fc8e",
+  "mesen_sha256": "8ef403d6b9af32075416193914d7993ce8480b347fe1f20a0cfd9815374933e7",
+  "before_discc_sha256": "520b078ec69141fda416ad3e1f5f97879c14ce67f1ca386011cc048d101e9e78",
+  "after_discc_sha256": "77b8c1ebca573630e2403d23a394230c4ed1d763b339a4d20b7c6cecf4ef271f",
+  "after_discas_sha256": "59b04ace098bbfd5e3acd4558ad421006581707f3c27a590edd5cf96beb708e9",
+  "after_discld_sha256": "5c3bb7d29318660e30bcbda192a1684e8c622dc7f6e0774af7656ef00fd6b09e",
+  "pixel_checks_per_pose": 49152,
+  "screenshot_hashes_compared": 64,
+  "screenshot_mismatches": 0,
+  "cases": [
+    {
+      "label": "O2 proven checks",
+      "report": "benchmarks/results/rotation-O2-guards-21MHz.json",
+      "payload_bytes": 3453,
+      "rom_bytes": 65536,
+      "payload_sha256": "e73ec032db94b5963fbd7476ca0f317f601834b229e82dd943bbcfa1a5ef3a29",
+      "rom_sha256": "2d8d7a96913eea305e54fbd456bd011c8903ead800c204e9aa1fc41cedc06d52",
+      "phase0_cycles": 2697248,
+      "mean_cycles_64_poses": 3158312.75,
+      "minimum_cycles": 2695552,
+      "maximum_cycles": 3222660,
+      "total_cycles_64_poses": 202132016,
+      "phase_wrap_cycles": 2697248
+    },
+    {
+      "label": "O2 divmod/shared code",
+      "report": "benchmarks/results/rotation-O2-size-21MHz.json",
+      "payload_bytes": 3126,
+      "rom_bytes": 65536,
+      "payload_sha256": "5c96ba59149d20b09d0d0bc30b64331a75df2ac1a1c1212027154bb97fb84137",
+      "rom_sha256": "b715835b4ad5ba0cd5b1b38d892f0bae980a125727f8e674fc63273636629a90",
+      "phase0_cycles": 2659799,
+      "mean_cycles_64_poses": 3045929.8125,
+      "minimum_cycles": 2659799,
+      "maximum_cycles": 3089307,
+      "total_cycles_64_poses": 194939508,
+      "phase_wrap_cycles": 2659799
+    }
+  ],
+  "code_bytes_by_function": [
+    { "name": "sine_q6", "before": 482, "after": 473 },
+    { "name": "floor_div", "before": 478, "after": 324 },
+    { "name": "main", "before": 2481, "after": 2317 }
+  ],
+  "limitations": [
+    "Emulated GSU clock ticks, not physical-hardware timing or FPS.",
+    "The payload shrinks by 327 bytes (9.47%) and mean cycles improve by 3.56%; the padded SNES ROM remains 65536 bytes.",
+    "This cache-enabled RAM-execution profile is distinct from the nine-workload LoROM benchmark suite.",
+    "The boundary-only timing probe is a local development artifact, not a new portable benchmark target.",
+    "Sharing is limited to function-local terminal fault islands within signed byte-branch reach and common epilogues; it is not arbitrary cross-function tail merging."
+  ]
+}

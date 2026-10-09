@@ -18,6 +18,7 @@ constexpr std::uint32_t MaxIRValuesPerFunction = 1'000'000;
 
 bool isValueOpcode(IROpcode opcode) {
     switch (opcode) {
+        case IROpcode::Phi:
         case IROpcode::Rpix:
         case IROpcode::PlotCoordinateRead:
         case IROpcode::Constant:
@@ -27,6 +28,9 @@ bool isValueOpcode(IROpcode opcode) {
         case IROpcode::Load:
         case IROpcode::LoadIndirect:
         case IROpcode::Binary:
+        case IROpcode::DivMod:
+        case IROpcode::DivModResult:
+        case IROpcode::BitExtract:
         case IROpcode::Unary:
         case IROpcode::Cast:
         case IROpcode::Call:
@@ -52,6 +56,7 @@ bool isTerminatorOpcode(IROpcode opcode) {
 
 std::string opcodeName(IROpcode opcode) {
     switch (opcode) {
+        case IROpcode::Phi: return "phi";
         case IROpcode::Constant: return "const";
         case IROpcode::Address: return "address";
         case IROpcode::PointerOffset: return "pointer.offset";
@@ -60,7 +65,11 @@ std::string opcodeName(IROpcode opcode) {
         case IROpcode::LoadIndirect: return "load.indirect";
         case IROpcode::Store: return "store";
         case IROpcode::StoreIndirect: return "store.indirect";
+        case IROpcode::MemoryInitialize: return "memory.initialize";
         case IROpcode::Binary: return "binary";
+        case IROpcode::DivMod: return "divmod";
+        case IROpcode::DivModResult: return "divmod.result";
+        case IROpcode::BitExtract: return "bit.extract";
         case IROpcode::Unary: return "unary";
         case IROpcode::Cast: return "cast";
         case IROpcode::Call: return "call";
@@ -75,6 +84,7 @@ std::string opcodeName(IROpcode opcode) {
         case IROpcode::Cache: return "cache";
         case IROpcode::HardwareLoop: return "hardware_loop";
         case IROpcode::HardwareLoopEnd: return "hardware_loop.end";
+        case IROpcode::HardwareLoopLeave: return "hardware_loop.leave";
         case IROpcode::Branch: return "br";
         case IROpcode::CondBranch: return "condbr";
         case IROpcode::Switch: return "switch";
@@ -128,7 +138,8 @@ bool sameValueType(const Type& left, const Type& right) {
 } // namespace
 
 bool IRInstruction::isTerminator() const {
-    return isTerminatorOpcode(opcode);
+    return isTerminatorOpcode(opcode) ||
+        ((opcode == IROpcode::HardwareLoop || opcode == IROpcode::HardwareLoopEnd) && !targets.empty());
 }
 
 bool IRInstruction::producesValue() const {
@@ -164,7 +175,7 @@ void IRVerifier::verify(const IRModule& module) {
                 fail("IR verifier: target lacks graphics capability.", instruction.source);
             if (opcode == IROpcode::Cache && !supportsCapability(module.target, TargetCapability::InstructionCache))
                 fail("IR verifier: target lacks instruction-cache capability.", instruction.source);
-            if ((opcode == IROpcode::HardwareLoop || opcode == IROpcode::HardwareLoopEnd) &&
+            if ((opcode == IROpcode::HardwareLoop || opcode == IROpcode::HardwareLoopEnd || opcode == IROpcode::HardwareLoopLeave) &&
                 !supportsCapability(module.target, TargetCapability::HardwareLoops))
                 fail("IR verifier: target lacks hardware-loops capability.", instruction.source);
         }
@@ -211,6 +222,14 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
     std::map<std::uint32_t, Definition> definitions;
     std::vector<std::vector<std::size_t>> successors(function.blocks.size());
     std::vector<std::vector<std::size_t>> predecessors(function.blocks.size());
+    struct HardwareScope {
+        const IRInstruction* setup = nullptr;
+        const IRInstruction* end = nullptr;
+        const IRInstruction* leave = nullptr;
+        std::size_t setup_block = 0, end_block = 0, leave_block = 0;
+    };
+    // Borrowed only during this read-only verification; no IR is mutated.
+    std::map<std::uint32_t, HardwareScope> hardware_scopes;
 
     for (std::size_t index = 0; index < function.blocks.size(); ++index) {
         const auto& block = function.blocks[index];
@@ -227,6 +246,25 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
              instruction_index < block.instructions.size(); ++instruction_index) {
             const auto& instruction = block.instructions[instruction_index];
             const auto& type = instruction.type;
+            if (!instruction.initialization_values.empty() && instruction.opcode != IROpcode::MemoryInitialize)
+                fail("IR verifier: initializer values belong to memory.initialize only.", instruction.source);
+            if (instruction.compiler_generated_loop && instruction.opcode != IROpcode::HardwareLoop)
+                fail("IR verifier: generated-loop metadata belongs to setup only.", instruction.source);
+            if (instruction.loop_id && instruction.opcode != IROpcode::HardwareLoop &&
+                instruction.opcode != IROpcode::HardwareLoopEnd && instruction.opcode != IROpcode::HardwareLoopLeave)
+                fail("IR verifier: loop ID belongs to hardware-loop operations only.", instruction.source);
+            if (instruction.loop_target.isValid()) {
+                if (instruction.opcode != IROpcode::HardwareLoop || instruction.targets.size() != 1)
+                    fail("IR verifier: loop target belongs to explicit hardware-loop setup only.", instruction.source);
+                verifyTarget(function, instruction.loop_target, instruction.source);
+            }
+            if (instruction.opcode == IROpcode::Phi) {
+                if (instruction_index != 0 && block.instructions[instruction_index - 1].opcode != IROpcode::Phi)
+                    fail("IR verifier: phi instructions must precede ordinary instructions.", instruction.source);
+                if (instruction.operands.empty() || instruction.operands.size() != instruction.targets.size() ||
+                    type.array_size != 0 || (!isIntegerType(type) && !(type.pointer_level > 0 && !isFarPointer(type))) || !instruction.operation.empty())
+                    fail("IR verifier: invalid phi incoming values.", instruction.source);
+            }
             if (instruction.memory_volatile && instruction.opcode != IROpcode::LoadIndirect &&
                 instruction.opcode != IROpcode::StoreIndirect)
                 fail("IR verifier: volatile metadata on a non-memory instruction.", instruction.source);
@@ -271,6 +309,34 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
             }
 
             switch (instruction.opcode) {
+                case IROpcode::HardwareLoop:
+                    if (instruction.operands.size() != 1 || instruction.targets.size() > 1 ||
+                        (!instruction.targets.empty() && !instruction.loop_target.isValid()) ||
+                        !instruction.loop_id || !instruction.operation.empty())
+                        fail("IR verifier: invalid hardware-loop setup.", instruction.source);
+                    if (hardware_scopes[instruction.loop_id].setup)
+                        fail("IR verifier: duplicate hardware-loop setup ID.", instruction.source);
+                    hardware_scopes[instruction.loop_id].setup = &instruction;
+                    hardware_scopes[instruction.loop_id].setup_block = index;
+                    break;
+                case IROpcode::HardwareLoopEnd:
+                    if (!instruction.operands.empty() || (!instruction.targets.empty() && instruction.targets.size() != 2) ||
+                        !instruction.loop_id || !instruction.operation.empty())
+                        fail("IR verifier: hardware-loop end requires backedge and exit.", instruction.source);
+                    if (hardware_scopes[instruction.loop_id].end)
+                        fail("IR verifier: duplicate hardware-loop end ID.", instruction.source);
+                    hardware_scopes[instruction.loop_id].end = &instruction;
+                    hardware_scopes[instruction.loop_id].end_block = index;
+                    break;
+                case IROpcode::HardwareLoopLeave:
+                    if (!instruction.operands.empty() || !instruction.targets.empty() ||
+                        !instruction.loop_id || !instruction.operation.empty())
+                        fail("IR verifier: invalid hardware-loop leave.", instruction.source);
+                    if (hardware_scopes[instruction.loop_id].leave)
+                        fail("IR verifier: duplicate hardware-loop leave ID.", instruction.source);
+                    hardware_scopes[instruction.loop_id].leave = &instruction;
+                    hardware_scopes[instruction.loop_id].leave_block = index;
+                    break;
                 case IROpcode::Branch:
                     if (!instruction.operands.empty() || instruction.targets.size() != 1) {
                         fail("IR verifier: branch must have one target and no operands.", instruction.source);
@@ -317,8 +383,10 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
             }
             for (const auto target : instruction.targets) {
                 verifyTarget(function, target, instruction.source);
-                successors[index].push_back(target.value);
-                predecessors[target.value].push_back(index);
+                if (instruction.opcode != IROpcode::Phi) {
+                    successors[index].push_back(target.value);
+                    predecessors[target.value].push_back(index);
+                }
             }
         }
 
@@ -414,6 +482,56 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
         }
     }
 
+    for (const auto& item : hardware_scopes) {
+        const auto& scope = item.second;
+        if (!scope.setup || !scope.end || scope.setup->targets.empty() != scope.end->targets.empty() ||
+            (scope.setup->targets.empty() ? scope.leave != nullptr : scope.leave == nullptr))
+            fail("IR verifier: unmatched hardware-loop setup/end/leave.", Token(TokenType::UNKNOWN, "", 0, 0));
+        if (!scope.setup->targets.empty() &&
+            (scope.setup->loop_target.value != scope.end->targets[0].value ||
+             !has_dominator(dominators[scope.end_block], scope.setup_block) ||
+             !has_dominator(dominators[scope.leave_block], scope.end_block)))
+            fail("IR verifier: hardware-loop backedge or exit does not match its setup.", scope.setup->source);
+    }
+    if (!hardware_scopes.empty()) {
+        // Every join must agree on the exact active R12/R13 save stack. This
+        // catches bypassed restores, incorrectly nested loops and backedges
+        // into setup, even when ordinary value dominance would accept them.
+        std::vector<std::vector<std::uint32_t>> scopes(function.blocks.size());
+        std::vector<bool> assigned(function.blocks.size(), false);
+        std::queue<std::size_t> pending;
+        assigned[function.entry.value] = true; pending.push(function.entry.value);
+        std::size_t entries = 0;
+        while (!pending.empty()) {
+            const auto b = pending.front(); pending.pop();
+            auto active = scopes[b];
+            for (const auto& instruction : function.blocks[b].instructions) {
+                if (instruction.opcode == IROpcode::HardwareLoop) {
+                    if (active.size() >= 256)
+                        fail("IR verifier: hardware-loop nesting limit exceeded.", instruction.source);
+                    active.push_back(instruction.loop_id);
+                } else if (instruction.opcode == IROpcode::HardwareLoopEnd || instruction.opcode == IROpcode::HardwareLoopLeave) {
+                    if (active.empty() || active.back() != instruction.loop_id)
+                        fail("IR verifier: mismatched hardware-loop scope stack.", instruction.source);
+                    if (instruction.opcode == IROpcode::HardwareLoopLeave || instruction.targets.empty()) active.pop_back();
+                }
+            }
+            if (successors[b].empty() && !active.empty())
+                fail("IR verifier: function exits with an active hardware-loop scope.", function.blocks[b].instructions.back().source);
+            for (const auto s : successors[b]) {
+                if (assigned[s]) {
+                    if (scopes[s] != active)
+                        fail("IR verifier: inconsistent hardware-loop scopes at CFG join.", function.blocks[s].instructions.front().source);
+                } else {
+                    entries += active.size();
+                    if (entries > 1000000)
+                        fail("IR verifier: hardware-loop scope analysis limit exceeded.", function.blocks[b].instructions.back().source);
+                    scopes[s] = active; assigned[s] = true; pending.push(s);
+                }
+            }
+        }
+    }
+
     auto definitionType = [&](IRValueId value, const Token& source) -> const Type& {
         const auto definition = definitions.find(value.value);
         if (definition == definitions.end()) {
@@ -429,7 +547,23 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
              instruction_index < block.instructions.size(); ++instruction_index) {
             const auto& instruction = block.instructions[instruction_index];
 
+            if (instruction.opcode == IROpcode::Phi) {
+                std::set<std::size_t> incoming;
+                const std::set<std::size_t> expected(predecessors[block_index].begin(), predecessors[block_index].end());
+                for (std::size_t i = 0; i < instruction.operands.size(); ++i) {
+                    const auto edge = instruction.targets[i].value;
+                    const auto definition = definitions.at(instruction.operands[i].value);
+                    if (!incoming.insert(edge).second || !expected.count(edge) || !reachable[edge] ||
+                        !has_dominator(dominators[edge], definition.block) ||
+                        !sameValueType(instruction.type, definitionType(instruction.operands[i], instruction.source)) ||
+                        instruction.type.enum_name != definitionType(instruction.operands[i], instruction.source).enum_name)
+                        fail("IR verifier: phi value must match its type and dominate its predecessor edge.", instruction.source);
+                }
+                if (incoming != expected || block_index == function.entry.value)
+                    fail("IR verifier: phi must cover every predecessor exactly once.", instruction.source);
+            }
             for (const auto operand : instruction.operands) {
+                if (instruction.opcode == IROpcode::Phi) continue;
                 const auto definition = definitions.at(operand.value);
                 if (definition.block == block_index) {
                     if (definition.instruction >= instruction_index) {
@@ -443,7 +577,34 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                 }
             }
 
+            if (instruction.is_live_range_split &&
+                (instruction.opcode != IROpcode::Cast || instruction.operands.size() != 1 ||
+                 !isIntegerType(instruction.type) || instruction.type.array_size != 0 || !instruction.operation.empty() ||
+                 !sameValueType(instruction.type, definitionType(instruction.operands.front(), instruction.source)) ||
+                 instruction.type.enum_name != definitionType(instruction.operands.front(), instruction.source).enum_name))
+                fail("IR verifier: live-range split requires a representation-identical scalar copy.", instruction.source);
+
             switch (instruction.opcode) {
+                case IROpcode::MemoryInitialize: {
+                    const auto& type = instruction.type;
+                    if (instruction.operands.size() != 1 || instruction.initialization_values.size() < 4 ||
+                        instruction.initialization_values.size() > 256 || !instruction.targets.empty() ||
+                        !isIntegerType(type) || (type.sizeInBytes != 1 && type.sizeInBytes != 2) || type.array_size || type.is_volatile || instruction.memory_volatile ||
+                        instruction.operation != "declare" || instruction.immediate <= 0 ||
+                        instruction.immediate > function.total_local_alloc_size ||
+                        instruction.initialization_values.size() > static_cast<std::size_t>(instruction.immediate / type.sizeInBytes))
+                        fail("IR verifier: invalid bounded memory initializer.", instruction.source);
+                    const auto& origin = definitions.at(instruction.operands[0].value);
+                    const auto& address = function.blocks.at(origin.block).instructions.at(origin.instruction);
+                    if (address.opcode != IROpcode::Address || !address.operation.empty() || !address.symbol_id.isValid() ||
+                        address.type.pointer_level != 1 || isFarPointer(address.type) || address.type.space != AddressSpace::RAM ||
+                        !sameValueType(type, pointeeType(address.type)) || pointeeType(address.type).is_volatile)
+                        fail("IR verifier: memory initializer requires a local near RAM address.", instruction.source);
+                    for (const auto value : instruction.initialization_values)
+                        if ((usesByteStorage(type) && value > 255) || (type.base == BaseType::BOOL && value > 1))
+                            fail("IR verifier: initializer value exceeds its storage width.", instruction.source);
+                    break;
+                }
                 case IROpcode::Cache:
                     if (!instruction.operands.empty() || !instruction.targets.empty()) fail("IR verifier: cache has no operands or targets.", instruction.source);
                     break;
@@ -504,13 +665,19 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                         fail("IR verifier: incompatible pointer comparison.", instruction.source);
                     break;
                 case IROpcode::PointerOffset:
-                    if (instruction.operands.size() != 2 || instruction.immediate <= 0 ||
+                    if (instruction.operands.size() != ((instruction.operation == "scaled+" || instruction.operation == "scaled-") ? 3u : 2u) || instruction.immediate <= 0 ||
                         instruction.immediate > 65528 ||
                         definitionType(instruction.operands[0], instruction.source).pointer_level == 0 ||
                         !sameValueType(instruction.type, definitionType(instruction.operands[0], instruction.source)) ||
                         !isIntegerType(definitionType(instruction.operands[1], instruction.source)) ||
-                        (instruction.operation != "+" && instruction.operation != "-"))
+                        (instruction.operation != "+" && instruction.operation != "-" && instruction.operation != "scaled+" && instruction.operation != "scaled-"))
                         fail("IR verifier: pointer.offset has incompatible operands or stride.", instruction.source);
+                    if (instruction.operands.size() == 3 &&
+                        (isFarPointer(instruction.type) || instruction.immediate < 4 ||
+                         definitionType(instruction.operands[1], instruction.source).base != BaseType::WORD ||
+                         !definitionType(instruction.operands[1], instruction.source).is_unsigned ||
+                         !sameValueType(definitionType(instruction.operands[1], instruction.source), definitionType(instruction.operands[2], instruction.source))))
+                        fail("IR verifier: scaled offset requires matching unsigned words and a near address.", instruction.source);
                     if ((instruction.type.base != BaseType::STRUCT || instruction.type.pointer_level > 1) &&
                         instruction.immediate != pointeeType(instruction.type).sizeInBytes)
                         fail("IR verifier: pointer.offset stride does not match the pointee.", instruction.source);
@@ -539,6 +706,28 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                     if (pointeeType(definitionType(instruction.operands.front(), instruction.source)).is_const && instruction.operation != "declare")
                         fail("IR verifier: store through a const-qualified address.", instruction.source);
                     break;
+                case IROpcode::DivMod:
+                    if (instruction.operands.size() != 2 || !instruction.targets.empty() ||
+                        (instruction.operation != "/" && instruction.operation != "%") ||
+                        instruction.type.base != BaseType::WORD || instruction.type.sizeInBytes != 2 ||
+                        instruction.type.pointer_level != 0 || instruction.type.array_size != 0 ||
+                        !sameValueType(instruction.type, definitionType(instruction.operands[0], instruction.source)) ||
+                        !sameValueType(instruction.type, definitionType(instruction.operands[1], instruction.source)) ||
+                        instruction.type.enum_name != definitionType(instruction.operands[0], instruction.source).enum_name ||
+                        instruction.type.enum_name != definitionType(instruction.operands[1], instruction.source).enum_name)
+                        fail("IR verifier: divmod requires two matching words and a primary component.", instruction.source);
+                    break;
+                case IROpcode::DivModResult: {
+                    if (instruction.operands.size() != 1 || !instruction.targets.empty() ||
+                        (instruction.operation != "/" && instruction.operation != "%"))
+                        fail("IR verifier: divmod.result requires one pair and the other component.", instruction.source);
+                    const auto& origin = definitions.at(instruction.operands[0].value);
+                    const auto& pair = function.blocks.at(origin.block).instructions.at(origin.instruction);
+                    if (pair.opcode != IROpcode::DivMod || pair.operation == instruction.operation ||
+                        !sameValueType(instruction.type, pair.type) || instruction.type.enum_name != pair.type.enum_name)
+                        fail("IR verifier: divmod.result must select the matching pair's other component.", instruction.source);
+                    break;
+                }
                 case IROpcode::Binary:
                     if (instruction.operands.size() != 2 || instruction.operation.empty() ||
                         isVoidType(definitionType(instruction.operands[0], instruction.source)) ||
@@ -552,6 +741,19 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                         !isIntegerType(instruction.type)) {
                         fail("IR verifier: binary instruction has invalid operands.", instruction.source);
                     }
+                    break;
+                case IROpcode::BitExtract:
+                    if (instruction.operands.size() != 1 || instruction.immediate < 0 || instruction.immediate > 15 ||
+                        !instruction.operation.empty() || !instruction.targets.empty() || instruction.memory_volatile ||
+                        instruction.type.pointer_level != 0 ||
+                        instruction.type.array_size != 0 || instruction.type.base != BaseType::WORD ||
+                        !sameValueType(instruction.type, definitionType(instruction.operands.front(), instruction.source))) {
+                        fail("IR verifier: bit.extract requires one matching word and a bit in 0..15.", instruction.source);
+                    }
+                    break;
+                case IROpcode::HardwareLoop:
+                    if (!isIntegerType(definitionType(instruction.operands.front(), instruction.source)))
+                        fail("IR verifier: hardware-loop count must be an integer.", instruction.source);
                     break;
                 case IROpcode::Unary:
                 case IROpcode::Cast:
@@ -766,6 +968,7 @@ void IRLowerer::lowerStatementList(const std::vector<std::unique_ptr<Stmt>>& sta
 
 IRModule IRLowerer::lower(const std::vector<std::unique_ptr<Stmt>>& program) {
     m_module = IRModule{};
+    m_next_hardware_loop = 0;
     m_module.target = m_target;
     m_current_block = IRBlockId{};
     m_last_value = IRValueId{};
@@ -1243,6 +1446,8 @@ void IRLowerer::visit(HardwareLoopStmt& stmt) {
     requireFunction(stmt.token);
     IRInstruction instruction;
     instruction.opcode = IROpcode::HardwareLoop;
+    const auto loop_id = ++m_next_hardware_loop;
+    instruction.loop_id = loop_id;
     instruction.operands = {lowerExpression(*stmt.count)};
     instruction.source = stmt.token;
     emitInstruction(std::move(instruction));
@@ -1253,6 +1458,7 @@ void IRLowerer::visit(HardwareLoopStmt& stmt) {
     }
     IRInstruction end;
     end.opcode = IROpcode::HardwareLoopEnd;
+    end.loop_id = loop_id;
     end.source = stmt.token;
     emitInstruction(std::move(end));
 }
@@ -1365,6 +1571,16 @@ std::string dumpIR(const IRModule& module) {
                 }
                 output << opcodeName(instruction.opcode);
                 if (instruction.memory_volatile) output << " volatile";
+                if (instruction.is_live_range_split) output << " live.split";
+                if (instruction.compiler_generated_loop) output << " automatic";
+                if (!instruction.initialization_values.empty()) {
+                    output << " [";
+                    for (std::size_t n = 0; n < instruction.initialization_values.size(); ++n) {
+                        if (n) output << ",";
+                        output << instruction.initialization_values[n];
+                    }
+                    output << "]";
+                }
                 if (!instruction.operation.empty()) {
                     output << " " << instruction.operation;
                 }
@@ -1375,7 +1591,7 @@ std::string dumpIR(const IRModule& module) {
                     }
                 }
                 if (instruction.opcode == IROpcode::Rpix && !instruction.result.isValid()) output << " discard";
-                if (instruction.opcode == IROpcode::Constant || instruction.opcode == IROpcode::CMode ||
+                if (instruction.opcode == IROpcode::Constant || instruction.opcode == IROpcode::BitExtract || instruction.opcode == IROpcode::CMode ||
                     instruction.opcode == IROpcode::PlotCoordinateRead || instruction.opcode == IROpcode::PlotCoordinateWrite) {
                     output << " " << instruction.immediate;
                 }

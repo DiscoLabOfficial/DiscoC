@@ -1,0 +1,27 @@
+word add_one(word value) { return value + 1; }
+
+word main() {
+    word input = *(volatile word*)0x100;
+    word a = input + 3;
+    word b = input + 5;
+    word first = a ^ b;
+    word second = a ^ b;
+    *(word*)0x102 = first + second;
+    *(word*)0x104 = (a + b) - (a - b);
+    *(word*)0x106 = ~a;
+    *(word*)0x108 = -b;
+
+    word overwritten = 3;
+    overwritten = 4;
+    *(word*)0x10a = overwritten;
+
+    word captured = input + 9;
+    word total = captured + add_one(input) + a + b + first;
+    *(word*)0x10c = total;
+
+    volatile word observed = 3;
+    observed = 4;
+    *(word*)0x10e = observed;
+
+    return 42;
+}

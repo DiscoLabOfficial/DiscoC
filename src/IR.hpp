@@ -29,6 +29,9 @@ struct IRBlockId {
 };
 
 enum class IROpcode {
+    // Parallel edge selection, not an eagerly evaluated expression. Operands
+    // and targets are paired incoming values and predecessor block IDs.
+    Phi,
     Constant,
     Address,
     PointerOffset,
@@ -37,7 +40,18 @@ enum class IROpcode {
     LoadIndirect,
     Store,
     StoreIndirect,
+    // Ordered constant initialization of a proven, contiguous local RAM array.
+    // Not memcpy: no source memory read, alias substitution, or volatile access.
+    MemoryInitialize,
     Binary,
+    // O2 internal pair: result selects operation ("/" or "%"), while
+    // DivModResult selects its other component. Both components have type
+    // word; the pair is owned by this function, not source-addressable memory.
+    DivMod,
+    DivModResult,
+    // Backend-local fusion: unsigned extraction of one raw word bit (0/1),
+    // independent of the source word's signedness. Not a source operator.
+    BitExtract,
     Unary,
     Cast,
     Call,
@@ -52,6 +66,7 @@ enum class IROpcode {
     Cache,
     HardwareLoop,
     HardwareLoopEnd,
+    HardwareLoopLeave,
     Branch,
     CondBranch,
     Switch,
@@ -75,6 +90,10 @@ struct IRInstruction {
     IRValueId result;
     std::vector<IRValueId> operands;
     std::vector<IRBlockId> targets;
+    // Explicit O2 hardware-loop setup records the LOOP destination separately
+    // from its initial successor. This is not another setup CFG edge.
+    IRBlockId loop_target;
+    std::uint32_t loop_id = 0;
     std::vector<std::int64_t> case_values;
     bool has_default_target = false;
     std::int64_t immediate = 0;
@@ -83,6 +102,11 @@ struct IRInstruction {
     SymbolId symbol_id;
     bool memory_volatile = false;
     bool in_plot_context = false;
+    // A representation-identical O2 copy at a loop preheader. Keeping a
+    // distinct SSA lifetime permits a hot register and a cold spill location.
+    bool is_live_range_split = false;
+    std::vector<std::uint16_t> initialization_values;
+    bool compiler_generated_loop = false;
     Token source = {TokenType::UNKNOWN, "", 0, 0};
 
     bool isTerminator() const;
@@ -103,6 +127,10 @@ struct IRInstruction {
                 if (operation == "rom.byte") { e.rom_buffer = true; e.writes_registers = 1u << 14; }
                 break;
             case IROpcode::CMode: e.writes_por = true; break;
+            case IROpcode::HardwareLoop:
+            case IROpcode::HardwareLoopEnd:
+            case IROpcode::HardwareLoopLeave:
+                e.reads_registers = e.writes_registers = (1u << 12) | (1u << 13); break;
             default: break;
         }
         return e;
@@ -224,6 +252,7 @@ private:
 
     TargetKind m_target;
     IRModule m_module;
+    std::uint32_t m_next_hardware_loop = 0;
     std::size_t m_current_function = 0;
     IRBlockId m_current_block;
     IRValueId m_last_value;
