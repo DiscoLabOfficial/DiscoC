@@ -1327,6 +1327,22 @@ void IRLowerer::lowerSwitchBody(SwitchStmt& stmt, IRValueId condition, IRBlockId
     }
     m_break_targets.pop_back();
     m_current_block = end_block;
+    // When every arm returns, nothing branches to the end block. Mark it so
+    // statements after the switch are skipped like those after if/else.
+    bool end_reachable = false;
+    for (const auto& block : currentFunction().blocks) {
+        for (const auto& instruction : block.instructions) {
+            for (const auto target : instruction.targets) {
+                end_reachable = end_reachable || target.value == end_block.value;
+            }
+        }
+    }
+    if (!end_reachable) {
+        IRInstruction instruction;
+        instruction.opcode = IROpcode::Unreachable;
+        instruction.source = stmt.token;
+        emitInstruction(std::move(instruction));
+    }
 }
 
 void IRLowerer::visit(SwitchStmt& stmt) {

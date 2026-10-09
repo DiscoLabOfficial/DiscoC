@@ -593,7 +593,10 @@ can share a unit. Extern ROM objects are not implemented. Cross-unit data types
 are not encoded/checked by the object format; shared declarations must agree.
 
 Non-void functions must return a compatible value on all paths accepted by the
-conservative return analysis. A void function may use `return;` or fall through.
+conservative return analysis. An `if/else` whose branches both return is such a
+path, as is a switch with a `default` label, no `break` that leaves it, and a
+final arm that cannot complete. Loops are always treated as able to complete.
+A void function may use `return;` or fall through.
 No implicit numeric zero return is inserted. Recursion uses the configured
 stack and has no compiler-proved maximum depth. GSU `main` ends with STOP rather
 than returning to a SNES CPU caller; registers/local variables after STOP are

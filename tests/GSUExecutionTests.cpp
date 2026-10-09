@@ -180,6 +180,12 @@ private:
             ram_.at(address) = static_cast<std::uint8_t>(value);
             if (!alt1_) ram_.at(address ^ 1u) = static_cast<std::uint8_t>(value >> 8);
             resetSelectors();
+        } else if (opcode == 0x3c) {
+            // LOOP: decrement R12, then branch to R13 while it is nonzero.
+            // Like other branches, the following opcode is a delay slot.
+            setZeroSign(--registers_[12]);
+            if (!zero_) write(15, registers_[13]);
+            resetSelectors();
         } else if (opcode >= 0x3d && opcode <= 0x3f) {
             if (opcode != 0x3e) alt1_ = true;
             if (opcode != 0x3d) alt2_ = true;
@@ -379,6 +385,10 @@ void selfTest() {
     Machine delay({0xf0, 0, 0, 0x05, 3, 0xd0, 0xd0, 0xd0, 0, 1}, 0x8000);
     delay.run();
     require(delay.reg(0) == 1, "taken branch did not execute exactly one delay slot");
+    Machine loop({0xf0, 0, 0, 0xfc, 3, 0, 0x2f, 0x1d, 0xd0, 0x3c, 0xd1, 0, 1}, 0x8000);
+    loop.run();
+    require(loop.reg(13) == 0x8008 && loop.reg(12) == 0 && loop.reg(0) == 3 && loop.reg(1) == 3,
+            "MOVE R13,R15 / LOOP did not repeat the body with one delay slot");
     Machine bank({0xf0, 1, 0, 0x3e, 0xdf, 0xf0, 0, 1, 0xf1, 149, 0, 0x21, 0x30, 0, 1}, 0x706000);
     bank.run();
     require(bank.word(0x710100) == 149 && bank.word(0x700100) == 0,
