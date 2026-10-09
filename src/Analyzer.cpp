@@ -1589,6 +1589,25 @@ bool Analyzer::blockCanFallThrough(const std::vector<std::unique_ptr<Stmt>>& sta
     return true;
 }
 
+namespace {
+
+// True when a break inside this statement leaves the enclosing switch.
+// Breaks in nested loops or switches target those constructs instead.
+bool breaksEnclosingSwitch(const Stmt& stmt) {
+    if (dynamic_cast<const BreakStmt*>(&stmt)) return true;
+    if (const auto* block = dynamic_cast<const BlockStmt*>(&stmt)) {
+        for (const auto& child : block->statements) if (breaksEnclosingSwitch(*child)) return true;
+        return false;
+    }
+    if (const auto* plot = dynamic_cast<const PlotBlockStmt*>(&stmt)) return breaksEnclosingSwitch(*plot->body);
+    if (const auto* conditional = dynamic_cast<const IfStmt*>(&stmt))
+        return breaksEnclosingSwitch(*conditional->thenBranch) ||
+               (conditional->elseBranch && breaksEnclosingSwitch(*conditional->elseBranch));
+    return false;
+}
+
+} // namespace
+
 bool Analyzer::canFallThrough(const Stmt& stmt) const {
     if (dynamic_cast<const ReturnStmt*>(&stmt) || dynamic_cast<const BreakStmt*>(&stmt) || dynamic_cast<const ContinueStmt*>(&stmt)) {
         return false;
@@ -1608,6 +1627,26 @@ bool Analyzer::canFallThrough(const Stmt& stmt) const {
         }
         return canFallThrough(*conditional->thenBranch) ||
                canFallThrough(*conditional->elseBranch);
+    }
+
+    if (const auto* selection = dynamic_cast<const SwitchStmt*>(&stmt)) {
+        // A switch completes when no label matches, when a break targets it,
+        // or when control runs off its final arm. Earlier arms can only
+        // return, leave through an enclosing construct, or reach that arm.
+        const auto& statements = selection->body->statements;
+        bool has_default = false;
+        std::size_t final_arm = 0;
+        for (std::size_t index = 0; index < statements.size(); ++index) {
+            const bool is_default = dynamic_cast<const DefaultStmt*>(statements[index].get()) != nullptr;
+            if (is_default || dynamic_cast<const CaseStmt*>(statements[index].get())) final_arm = index + 1;
+            has_default = has_default || is_default;
+            if (breaksEnclosingSwitch(*statements[index])) return true;
+        }
+        if (!has_default) return true;
+        for (std::size_t index = final_arm; index < statements.size(); ++index) {
+            if (!canFallThrough(*statements[index])) return false;
+        }
+        return true;
     }
 
     // A loop is conservatively considered fall-through.  Proving that a

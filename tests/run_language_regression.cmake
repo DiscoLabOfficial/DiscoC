@@ -26,6 +26,39 @@ void main() {
     language_fixture(induction [=[
 void main() { for (volatile word i = 3; i > 0; i = i - 1) {} }
 ]=] --register 6 0)
+    language_fixture(hardware_loop [=[
+word total = 0;
+void main() {
+    word sum = 0;
+    for (word n = 10; n > 0; n = n - 1) { sum += 3; if (sum == 15) { total += 100; } }
+    *(word*)0x100 = sum;
+    for (word once = 1; once > 0; once = once - 1) { total += 1; }
+    *(word*)0x102 = total;
+    plot {
+        options; color 3; at (10, 20);
+        for (word n = 16; n > 0; n = n - 1) { pixel; }
+        *(word*)0x104 = cursor.x;
+        flush;
+    }
+}
+]=] --word 0x700100 30 --word 0x700102 101 --word 0x700104 26 --plots 0 16 --register 6 0)
+    file(READ "${TEST_DIR}/hardware_loop.s" assembly)
+    string(REGEX MATCHALL "\n    loop" loops "${assembly}")
+    list(LENGTH loops loop_count)
+    if(NOT loop_count EQUAL 3)
+        message(FATAL_ERROR "Countdown loops were not lowered to three hardware LOOP instructions:\n${assembly}")
+    endif()
+    if(OPTIMIZATION MATCHES "^[2s]$")
+        # Exposed CFG loops need the relocated backedge block address, not
+        # the PC of the first physically emitted block (which may differ).
+        string(REGEX MATCHALL "\n    iwt r13, #__disco_local_[0-9]+" loop_setups "${assembly}")
+        list(LENGTH loop_setups setup_count)
+        if(NOT setup_count EQUAL 3)
+            message(FATAL_ERROR "CFG hardware loops did not initialize all three R13 targets:\n${assembly}")
+        endif()
+    elseif(NOT assembly MATCHES "with r15[^\n]*\n    to r13")
+        message(FATAL_ERROR "Countdown loops were not lowered to MOVE R13,R15 / LOOP:\n${assembly}")
+    endif()
 elseif(CASE STREQUAL "language_numeric")
     language_fixture(numeric [=[
 word twice(word a) { return a * 2; }

@@ -10,7 +10,7 @@ elseif(CASE STREQUAL "language_control_execution")
             --word 0x100 13 --word 0x102 15 --word 0x104 195 --word 0x106 1
             --word 0x108 1 --word 0x10a 1 --word 0x10c 1 --word 0x10e 149
             --word 0x110 2 --word 0x112 15 --word 0x114 65408 --word 0x116 127
-            --word 0x118 1 --word 0x11a 1 --reads 0x700110 2 --writes 0x700110 3 --register 6 0)
+            --word 0x118 1 --word 0x11a 1 --word 0x11c 80 --reads 0x700110 2 --writes 0x700110 3 --register 6 0)
     endforeach()
 elseif(CASE STREQUAL "language_arrays_execution")
     check_round_trip(arrays "${ROOT_DIR}/tests/fixtures/language_arrays.dc" --init-runtime)

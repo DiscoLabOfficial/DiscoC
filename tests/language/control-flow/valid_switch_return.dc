@@ -1,0 +1,4 @@
+word arms(word x) { switch (x) { case 0: return 1; case 1: fallthrough; case 2: return 2; default: return 3; } }
+word nested(word x) { switch (x) { case 0: while (true) { break; } return 1; default: if (x == 1) { return 2; } else { return 3; } } }
+word trailing(word x) { switch (x) { case 0: return 1; default: return 2; } return 3; }
+void main() { word n = arms(1) + nested(1) + trailing(1); }

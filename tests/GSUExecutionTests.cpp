@@ -175,6 +175,10 @@ void selfTest() {
         require(boundaryLoop.reg(0) == count && boundaryLoop.reg(1) == count && boundaryLoop.reg(12) == 0,
                 "Hardware LOOP zero/one/65535 counter or delay-slot boundary changed");
     }
+    Machine contributorLoop({0xf0, 0, 0, 0xfc, 3, 0, 0x2f, 0x1d, 0xd0, 0x3c, 0xd1, 0, 1}, 0x8000);
+    contributorLoop.run();
+    require(contributorLoop.reg(13) == 0x8008 && contributorLoop.reg(12) == 0 && contributorLoop.reg(0) == 3 && contributorLoop.reg(1) == 3,
+            "MOVE R13,R15 / LOOP did not repeat the body with one delay slot");
     Machine bank({0xf0, 1, 0, 0x3e, 0xdf, 0xf0, 0, 1, 0xf1, 149, 0, 0x21, 0x30, 0, 1}, 0x706000);
     bank.run();
     require(bank.word(0x710100) == 149 && bank.word(0x700100) == 0,
