@@ -11,7 +11,7 @@ The toolchain is written in C++23, with a C++14-compatible experimental DOS
 cross-build. The executable backend targets the SNES SuperFX (GSU); SPC700
 currently provides a frontend and IR foundation.
 
-> **Status: v0.1.0 baseline / Experimental**
+> **Status: v0.2.0-rc.1 preparation / Experimental**
 > Correctness and explicit language contracts take priority over speed. GSU
 > compilation, assembly, linking, and runtime regressions are implemented, but
 > this is not a production-ready compiler. The current language is frozen as
@@ -23,6 +23,20 @@ The [0.1 stabilization contract](docs/baseline-0.1.md) and
 [release-readiness record](docs/release-readiness-0.1.md) define baseline
 acceptance and compatibility limits. The first baseline release does not depend
 on further optimization or executable SPC700 support.
+
+## DiscoC 0.2.0 release candidate preparation
+
+The next candidate is **v0.2.0-rc.1**, focused on SuperFX correctness,
+explicit `-O0`/`-O1`/`-O2`/`-Os` policies and reproducible measurements.
+CMake records numeric version `0.2.0` and prerelease `rc.1`; the language
+remains **Baseline 0.1** and the object format remains **v7**.
+
+See the [validation record](docs/releases/v0.2.0/validation.md),
+[optimization results](docs/releases/v0.2.0/optimization-results.md) and
+[draft release notes](docs/releases/v0.2.0/release-notes.md). These measurements
+identify their exact tested source SHA. This preparation does **not** publish
+a tag, release or binary package; the final post-merge revision still requires
+validation and explicit publication approval.
 
 ## DiscoC 0.1.0
 
@@ -640,6 +654,18 @@ Optional sanitizer and fuzzing configurations are documented in
 [Testing](docs/testing.md).
 
 ### Measuring backend optimization
+
+The [frozen v0.2.0 candidate validation](docs/releases/v0.2.0/validation.md)
+records fresh Release/Debug tests, post-merge CI and all four optimization
+levels on source `d967c3ef45a948ff457d81052448732da3bd73dc`.
+See the [current bytes/cycles and RAM-demo results](docs/releases/v0.2.0/optimization-results.md),
+[JSON](docs/releases/v0.2.0/benchmark-results.json),
+[CSV](docs/releases/v0.2.0/benchmark-results.csv) and
+[draft release notes](docs/releases/v0.2.0/release-notes.md).
+No v0.2.0 tag/release is published by that record. The optimization snapshots
+below describe earlier development stages, not replacement measurements of
+the frozen candidate. Os remains size-oriented: its smaller triangle takes
+7.90 times O2's cycles under the measured profile.
 
 Nine [GSU workloads](benchmarks/README.md) measure code/payload size, executed
 opcodes, loads/stores, stack accesses, graphics instructions and control flow.

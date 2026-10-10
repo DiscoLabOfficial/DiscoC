@@ -1,0 +1,130 @@
+{
+  "os": "Microsoft Windows NT 10.0.26200.0",
+  "cmake": "cmake version 4.4.3",
+  "source_revision": "d967c3ef45a948ff457d81052448732da3bd73dc",
+  "source_tree": "1435ea92f18ff8229b4051fa8e35e12d89947315",
+  "clean": true,
+  "compiler": "MSVC 19.44.35229.0, x64, C++23",
+  "external_tools": [
+    {
+      "path": "build/mesence test/Mesen.exe",
+      "file_version": "2.2.1",
+      "product_version": "2.2.1+20ba206cef5ba207c21203176d02cb9f43dda9fb",
+      "sha256": "8ef403d6b9af32075416193914d7993ce8480b347fe1f20a0cfd9815374933e7"
+    },
+    {
+      "path": "build/mesence test/MesenCore.dll",
+      "file_version": null,
+      "product_version": null,
+      "sha256": "55a5f918c8ead04d4a401fc12f0ce9e4de69bebbc484f1ca3a7c018916b1fad1"
+    },
+    {
+      "path": "build/mesence test/SNES Test/WLA-DX/wla-65816.exe",
+      "file_version": null,
+      "product_version": null,
+      "sha256": "75cbd4d2f7145984fc19e051c2dda90b7b89105cd10278e14adb487c36dcb59d"
+    },
+    {
+      "path": "build/mesence test/SNES Test/WLA-DX/wlalink.exe",
+      "file_version": null,
+      "product_version": null,
+      "sha256": "bdafcb2dc13ab57ceb6610e71c22b705e96b40963df15f02f066f6ba1364a095"
+    }
+  ],
+  "builds": [
+    {
+      "configuration": "release",
+      "tools": [
+        {
+          "name": "discc",
+          "sha256": "69271ffa37a0b20487d86d15b4cc5fbf3dcd331c3aab82df59a528f8ea4d9340"
+        },
+        {
+          "name": "discas",
+          "sha256": "11ea5a53cecd338d2de7558ed6809a01f040b79f8a44ce11dcc417cd87183e70"
+        },
+        {
+          "name": "discld",
+          "sha256": "5ca27e1178a13a2740b937fd78f17172dec44fee3a9517f9a4b3e02e264698c9"
+        },
+        {
+          "name": "disco_gsu_benchmarks",
+          "sha256": "7c97679f986481f31971f550ff4d5d1d17eaa030f147a37e862ddf4d54818864"
+        }
+      ],
+      "warning_count": 23,
+      "warnings": [
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(22): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(24): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(26): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(29): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(33): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(36): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(38): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(40): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(42): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(46): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(48): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\LanguageWarnings.cpp(20): warning C4456: declaration of 'variable' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\LanguageWarnings.cpp(23): warning C4456: declaration of 'variable' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\LanguageWarnings.cpp(98): warning C4456: declaration of 'loop' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\LanguageWarnings.cpp(104): warning C4456: declaration of 'loop' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\Optimizer.cpp(132): warning C4456: declaration of 'loop' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\Optimizer.cpp(143): warning C4244: '=': conversion from 'int64_t' to 'long', possible loss of data",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\Analyzer.cpp(113): warning C4456: declaration of 'loop' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\Analyzer.cpp(135): warning C4456: declaration of 'loop' hides previous local declaration",
+        "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\utility(274): warning C4244: 'initializing': conversion from '_Ty' to '_Ty1', possible loss of data",
+        "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\utility(274): warning C4244: 'initializing': conversion from '_Ty' to '_Ty2', possible loss of data",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\tests\\TargetFoundationTests.cpp(82): warning C4127: conditional expression is constant",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\tests\\TargetFoundationTests.cpp(91): warning C4127: conditional expression is constant"
+      ]
+    },
+    {
+      "configuration": "debug",
+      "tools": [
+        {
+          "name": "discc",
+          "sha256": "75eb89cd32305e5eae32b984debefa2faa13b78f388166b10a496c7c1faa2f6d"
+        },
+        {
+          "name": "discas",
+          "sha256": "9363e91da1da03edd73af8450fc5fda759e29be14dd5bf34abfcb6c806b71e2f"
+        },
+        {
+          "name": "discld",
+          "sha256": "d0b6a9cfb160ed73213460a04228d0598a5e8b6344d4d9d140bf8b67666bf4c6"
+        },
+        {
+          "name": "disco_gsu_benchmarks",
+          "sha256": "cd76659243128e10380956650338957eb7d53b2fe7b1dc52a523c5046d202cea"
+        }
+      ],
+      "warning_count": 23,
+      "warnings": [
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(22): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(24): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(26): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(29): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(33): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(36): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(38): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(40): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(42): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(46): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\ModuleInterface.cpp(48): warning C4456: declaration of 'expression' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\LanguageWarnings.cpp(20): warning C4456: declaration of 'variable' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\LanguageWarnings.cpp(23): warning C4456: declaration of 'variable' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\LanguageWarnings.cpp(98): warning C4456: declaration of 'loop' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\LanguageWarnings.cpp(104): warning C4456: declaration of 'loop' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\Optimizer.cpp(132): warning C4456: declaration of 'loop' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\Optimizer.cpp(143): warning C4244: '=': conversion from 'int64_t' to 'long', possible loss of data",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\Analyzer.cpp(113): warning C4456: declaration of 'loop' hides previous local declaration",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\src\\Analyzer.cpp(135): warning C4456: declaration of 'loop' hides previous local declaration",
+        "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\utility(274): warning C4244: 'initializing': conversion from '_Ty' to '_Ty1', possible loss of data",
+        "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\utility(274): warning C4244: 'initializing': conversion from '_Ty' to '_Ty2', possible loss of data",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\tests\\TargetFoundationTests.cpp(82): warning C4127: conditional expression is constant",
+        "C:\\Users\\paulo\\Desktop\\Projetos\\DiscoC\\tests\\TargetFoundationTests.cpp(91): warning C4127: conditional expression is constant"
+      ]
+    }
+  ]
+}

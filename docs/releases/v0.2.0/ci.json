@@ -1,0 +1,110 @@
+{
+  "source_revision": "d967c3ef45a948ff457d81052448732da3bd73dc",
+  "checked_date": "2026-10-09",
+  "runs": [
+    {
+      "conclusion": "success",
+      "headSha": "d967c3ef45a948ff457d81052448732da3bd73dc",
+      "jobs": [
+        {
+          "completedAt": "2026-10-09T06:57:15Z",
+          "conclusion": "success",
+          "name": "Sanitizers (Ubuntu)",
+          "startedAt": "2026-10-09T06:48:47Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498955/job/113705810362"
+        },
+        {
+          "completedAt": "2026-10-09T06:56:27Z",
+          "conclusion": "success",
+          "name": "Windows MinGW static (Release)",
+          "startedAt": "2026-10-09T06:48:47Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498955/job/113705810639"
+        },
+        {
+          "completedAt": "2026-10-09T06:51:10Z",
+          "conclusion": "success",
+          "name": "DOS cross-compile (DJGPP) (Release)",
+          "startedAt": "2026-10-09T06:48:47Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498955/job/113705810677"
+        },
+        {
+          "completedAt": "2026-10-09T06:53:26Z",
+          "conclusion": "success",
+          "name": "Native ubuntu-latest (Release)",
+          "startedAt": "2026-10-09T06:48:47Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498955/job/113705810688"
+        },
+        {
+          "completedAt": "2026-10-09T06:52:09Z",
+          "conclusion": "success",
+          "name": "Native windows-latest (Release)",
+          "startedAt": "2026-10-09T06:48:47Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498955/job/113705810721"
+        },
+        {
+          "completedAt": "2026-10-09T06:51:31Z",
+          "conclusion": "success",
+          "name": "Native ubuntu-latest (Debug)",
+          "startedAt": "2026-10-09T06:48:48Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498955/job/113705810726"
+        },
+        {
+          "completedAt": "2026-10-09T06:52:56Z",
+          "conclusion": "success",
+          "name": "Native macos-latest (Release)",
+          "startedAt": "2026-10-09T06:48:52Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498955/job/113705810812"
+        },
+        {
+          "completedAt": "2026-10-09T06:52:32Z",
+          "conclusion": "success",
+          "name": "Native windows-latest (Debug)",
+          "startedAt": "2026-10-09T06:48:47Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498955/job/113705810824"
+        },
+        {
+          "completedAt": "2026-10-09T06:52:24Z",
+          "conclusion": "success",
+          "name": "Native macos-latest (Debug)",
+          "startedAt": "2026-10-09T06:48:51Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498955/job/113705810954"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498955"
+    },
+    {
+      "conclusion": "success",
+      "headSha": "d967c3ef45a948ff457d81052448732da3bd73dc",
+      "jobs": [
+        {
+          "completedAt": "2026-10-09T06:49:29Z",
+          "conclusion": "success",
+          "name": "Analyze (actions)",
+          "startedAt": "2026-10-09T06:48:48Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498688/job/113705815882"
+        },
+        {
+          "completedAt": "2026-10-09T06:52:41Z",
+          "conclusion": "success",
+          "name": "Analyze (c-cpp)",
+          "startedAt": "2026-10-09T06:48:48Z",
+          "status": "completed",
+          "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498688/job/113705816113"
+        }
+      ],
+      "status": "completed",
+      "url": "https://github.com/DiscoLabOfficial/DiscoC/actions/runs/37895498688"
+    }
+  ]
+}

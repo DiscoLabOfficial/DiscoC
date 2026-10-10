@@ -1,5 +1,12 @@
 # GSU benchmarks
 
+Fresh **O0/O1/O2/Os** results for the frozen merged source candidate are in the
+[v0.2.0 evidence](../docs/releases/v0.2.0/optimization-results.md), with
+[validation and reproduction](../docs/releases/v0.2.0/validation.md), raw
+JSON/CSV and independently checked RAM demos. Those reports identify their
+full source SHA; they do not publish a v0.2.0 release or replace the historical
+v0.1.0 reference below.
+
 This suite measures generated code size and executed GSU opcodes before further
 optimization. The reference is the published **v0.1.0 toolchain**, running the
 same workloads through the same instruction model as the current tools.

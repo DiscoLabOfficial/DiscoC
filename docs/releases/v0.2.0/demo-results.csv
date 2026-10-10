@@ -1,0 +1,7 @@
+"source_revision","demo","optimization","payload_bytes","gsu_cycles_mean","gsu_samples","displayed_pose_fps","fps_intervals"
+"d967c3ef45a948ff457d81052448732da3bd73dc","rotating_triangle","O2","2733","945534.515625","64","20.032931334445","64"
+"d967c3ef45a948ff457d81052448732da3bd73dc","rotating_triangle","Os","2733","944432.640625","64","20.032937173736","64"
+"d967c3ef45a948ff457d81052448732da3bd73dc","interactive_shapes_wire","O2","12987","407584","4","",""
+"d967c3ef45a948ff457d81052448732da3bd73dc","interactive_shapes_filled","O2","12987","1739658","4","",""
+"d967c3ef45a948ff457d81052448732da3bd73dc","interactive_shapes_wire","Os","12978","418768","4","",""
+"d967c3ef45a948ff457d81052448732da3bd73dc","interactive_shapes_filled","Os","12978","1850435","4","",""
