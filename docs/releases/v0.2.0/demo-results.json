@@ -1,0 +1,1955 @@
+{
+  "schema_version": 1,
+  "source_revision": "d967c3ef45a948ff457d81052448732da3bd73dc",
+  "source_tree": "1435ea92f18ff8229b4051fa8e35e12d89947315",
+  "source_clean_during_validation": true,
+  "rotations": [
+    {
+      "optimization": "O2",
+      "timing": {
+        "optimization": "O2",
+        "profile": "NTSC CLSR=1 GSU=100% CFGR.MSO=0 RAM-execution CACHE cold",
+        "payload_bytes": 2733,
+        "rom_bytes": 65536,
+        "payload_sha256": "ff8dbc49547132066774bc5f99f962eb3b46215a31120a30acf2b8c9ea1b8a9b",
+        "source_sha256": "36754515f4b1dfa900944a7a1398c5620f1f004ef3c484d63fbb41335832858b",
+        "samples": [
+          {
+            "phase": 0,
+            "master_clocks_to_stop_entry": 904109,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 904114,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 1,
+            "master_clocks_to_stop_entry": 953379,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 953384,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 2,
+            "master_clocks_to_stop_entry": 971312,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 971317,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 3,
+            "master_clocks_to_stop_entry": 989261,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 989266,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 4,
+            "master_clocks_to_stop_entry": 994823,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 994828,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 5,
+            "master_clocks_to_stop_entry": 1000835,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 1000840,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 6,
+            "master_clocks_to_stop_entry": 986710,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 986715,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 7,
+            "master_clocks_to_stop_entry": 982431,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 982436,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 8,
+            "master_clocks_to_stop_entry": 971918,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 971923,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 9,
+            "master_clocks_to_stop_entry": 952943,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 952948,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 10,
+            "master_clocks_to_stop_entry": 929816,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 929821,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 11,
+            "master_clocks_to_stop_entry": 906330,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 906335,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 12,
+            "master_clocks_to_stop_entry": 884888,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 884893,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 13,
+            "master_clocks_to_stop_entry": 893806,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 893811,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 14,
+            "master_clocks_to_stop_entry": 902413,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 902418,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 15,
+            "master_clocks_to_stop_entry": 906730,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 906735,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 16,
+            "master_clocks_to_stop_entry": 921456,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 921461,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 17,
+            "master_clocks_to_stop_entry": 904946,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 904951,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 18,
+            "master_clocks_to_stop_entry": 900770,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 900775,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 19,
+            "master_clocks_to_stop_entry": 892795,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 892800,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 20,
+            "master_clocks_to_stop_entry": 884358,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 884363,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 21,
+            "master_clocks_to_stop_entry": 906322,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 906327,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 22,
+            "master_clocks_to_stop_entry": 930205,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 930210,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 23,
+            "master_clocks_to_stop_entry": 954243,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 954248,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 24,
+            "master_clocks_to_stop_entry": 971198,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 971203,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 25,
+            "master_clocks_to_stop_entry": 980399,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 980404,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 26,
+            "master_clocks_to_stop_entry": 985314,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 985319,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 27,
+            "master_clocks_to_stop_entry": 1001595,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 1001600,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 28,
+            "master_clocks_to_stop_entry": 995093,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 995098,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 29,
+            "master_clocks_to_stop_entry": 987341,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 987346,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 30,
+            "master_clocks_to_stop_entry": 969708,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 969713,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 31,
+            "master_clocks_to_stop_entry": 953706,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 953711,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 32,
+            "master_clocks_to_stop_entry": 903606,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 903611,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 33,
+            "master_clocks_to_stop_entry": 944775,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 944780,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 34,
+            "master_clocks_to_stop_entry": 960960,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 960965,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 35,
+            "master_clocks_to_stop_entry": 979056,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 979061,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 36,
+            "master_clocks_to_stop_entry": 987066,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 987071,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 37,
+            "master_clocks_to_stop_entry": 994179,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 994184,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 38,
+            "master_clocks_to_stop_entry": 978225,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 978230,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 39,
+            "master_clocks_to_stop_entry": 974009,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 974014,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 40,
+            "master_clocks_to_stop_entry": 965224,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 965229,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 41,
+            "master_clocks_to_stop_entry": 948898,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 948903,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 42,
+            "master_clocks_to_stop_entry": 925579,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 925584,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 43,
+            "master_clocks_to_stop_entry": 902440,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 902445,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 44,
+            "master_clocks_to_stop_entry": 897291,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 897296,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 45,
+            "master_clocks_to_stop_entry": 905941,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 905946,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 46,
+            "master_clocks_to_stop_entry": 914238,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 914243,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 47,
+            "master_clocks_to_stop_entry": 918397,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 918402,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 48,
+            "master_clocks_to_stop_entry": 936482,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 936487,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 49,
+            "master_clocks_to_stop_entry": 920155,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 920160,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 50,
+            "master_clocks_to_stop_entry": 915813,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 915818,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 51,
+            "master_clocks_to_stop_entry": 906858,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 906863,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 52,
+            "master_clocks_to_stop_entry": 897686,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 897691,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 53,
+            "master_clocks_to_stop_entry": 902540,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 902545,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 54,
+            "master_clocks_to_stop_entry": 925290,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 925295,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 55,
+            "master_clocks_to_stop_entry": 947667,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 947672,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 56,
+            "master_clocks_to_stop_entry": 966013,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 966018,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 57,
+            "master_clocks_to_stop_entry": 976110,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 976115,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 58,
+            "master_clocks_to_stop_entry": 979690,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 979695,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 59,
+            "master_clocks_to_stop_entry": 993488,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 993493,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 60,
+            "master_clocks_to_stop_entry": 986865,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 986870,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 61,
+            "master_clocks_to_stop_entry": 981045,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 981050,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 62,
+            "master_clocks_to_stop_entry": 962633,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 962638,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 63,
+            "master_clocks_to_stop_entry": 944517,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 944522,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 0,
+            "master_clocks_to_stop_entry": 904109,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 904114,
+            "cache_base_at_stop": 26336
+          }
+        ]
+      },
+      "fps": {
+        "profile": "NTSC CLSR=1 GSU=100% CACHE RAM; no artificial presentation hold",
+        "measurement": "64 completed-image intervals after VRAM DMA; excludes boot and first render",
+        "master_clock_hz": 21477270,
+        "intervals": 64,
+        "master_clocks": 68614286,
+        "seconds": 3.194739648009,
+        "displayed_pose_fps": 20.032931334445,
+        "snes_frames": 192,
+        "repeated_refreshes": 128,
+        "samples": [
+          {
+            "frame": 1,
+            "phase": 0,
+            "master_clock": 2497152,
+            "snes_frame": 7
+          },
+          {
+            "frame": 2,
+            "phase": 1,
+            "master_clock": 3569270,
+            "snes_frame": 10
+          },
+          {
+            "frame": 3,
+            "phase": 2,
+            "master_clock": 4641360,
+            "snes_frame": 13
+          },
+          {
+            "frame": 4,
+            "phase": 3,
+            "master_clock": 5713422,
+            "snes_frame": 16
+          },
+          {
+            "frame": 5,
+            "phase": 4,
+            "master_clock": 6785518,
+            "snes_frame": 19
+          },
+          {
+            "frame": 6,
+            "phase": 5,
+            "master_clock": 7857624,
+            "snes_frame": 22
+          },
+          {
+            "frame": 7,
+            "phase": 6,
+            "master_clock": 8929738,
+            "snes_frame": 25
+          },
+          {
+            "frame": 8,
+            "phase": 7,
+            "master_clock": 10001844,
+            "snes_frame": 28
+          },
+          {
+            "frame": 9,
+            "phase": 8,
+            "master_clock": 11073950,
+            "snes_frame": 31
+          },
+          {
+            "frame": 10,
+            "phase": 9,
+            "master_clock": 12146040,
+            "snes_frame": 34
+          },
+          {
+            "frame": 11,
+            "phase": 10,
+            "master_clock": 13218152,
+            "snes_frame": 37
+          },
+          {
+            "frame": 12,
+            "phase": 11,
+            "master_clock": 14290206,
+            "snes_frame": 40
+          },
+          {
+            "frame": 13,
+            "phase": 12,
+            "master_clock": 15362336,
+            "snes_frame": 43
+          },
+          {
+            "frame": 14,
+            "phase": 13,
+            "master_clock": 16434406,
+            "snes_frame": 46
+          },
+          {
+            "frame": 15,
+            "phase": 14,
+            "master_clock": 17506538,
+            "snes_frame": 49
+          },
+          {
+            "frame": 16,
+            "phase": 15,
+            "master_clock": 18578620,
+            "snes_frame": 52
+          },
+          {
+            "frame": 17,
+            "phase": 16,
+            "master_clock": 19650710,
+            "snes_frame": 55
+          },
+          {
+            "frame": 18,
+            "phase": 17,
+            "master_clock": 20722796,
+            "snes_frame": 58
+          },
+          {
+            "frame": 19,
+            "phase": 18,
+            "master_clock": 21794920,
+            "snes_frame": 61
+          },
+          {
+            "frame": 20,
+            "phase": 19,
+            "master_clock": 22866998,
+            "snes_frame": 64
+          },
+          {
+            "frame": 21,
+            "phase": 20,
+            "master_clock": 23939106,
+            "snes_frame": 67
+          },
+          {
+            "frame": 22,
+            "phase": 21,
+            "master_clock": 25011212,
+            "snes_frame": 70
+          },
+          {
+            "frame": 23,
+            "phase": 22,
+            "master_clock": 26083300,
+            "snes_frame": 73
+          },
+          {
+            "frame": 24,
+            "phase": 23,
+            "master_clock": 27155416,
+            "snes_frame": 76
+          },
+          {
+            "frame": 25,
+            "phase": 24,
+            "master_clock": 28227512,
+            "snes_frame": 79
+          },
+          {
+            "frame": 26,
+            "phase": 25,
+            "master_clock": 29299582,
+            "snes_frame": 82
+          },
+          {
+            "frame": 27,
+            "phase": 26,
+            "master_clock": 30371676,
+            "snes_frame": 85
+          },
+          {
+            "frame": 28,
+            "phase": 27,
+            "master_clock": 31443786,
+            "snes_frame": 88
+          },
+          {
+            "frame": 29,
+            "phase": 28,
+            "master_clock": 32515870,
+            "snes_frame": 91
+          },
+          {
+            "frame": 30,
+            "phase": 29,
+            "master_clock": 33587994,
+            "snes_frame": 94
+          },
+          {
+            "frame": 31,
+            "phase": 30,
+            "master_clock": 34660076,
+            "snes_frame": 97
+          },
+          {
+            "frame": 32,
+            "phase": 31,
+            "master_clock": 35732176,
+            "snes_frame": 100
+          },
+          {
+            "frame": 33,
+            "phase": 32,
+            "master_clock": 36804288,
+            "snes_frame": 103
+          },
+          {
+            "frame": 34,
+            "phase": 33,
+            "master_clock": 37876396,
+            "snes_frame": 106
+          },
+          {
+            "frame": 35,
+            "phase": 34,
+            "master_clock": 38948480,
+            "snes_frame": 109
+          },
+          {
+            "frame": 36,
+            "phase": 35,
+            "master_clock": 40020576,
+            "snes_frame": 112
+          },
+          {
+            "frame": 37,
+            "phase": 36,
+            "master_clock": 41092666,
+            "snes_frame": 115
+          },
+          {
+            "frame": 38,
+            "phase": 37,
+            "master_clock": 42164798,
+            "snes_frame": 118
+          },
+          {
+            "frame": 39,
+            "phase": 38,
+            "master_clock": 43236896,
+            "snes_frame": 121
+          },
+          {
+            "frame": 40,
+            "phase": 39,
+            "master_clock": 44308986,
+            "snes_frame": 124
+          },
+          {
+            "frame": 41,
+            "phase": 40,
+            "master_clock": 45381072,
+            "snes_frame": 127
+          },
+          {
+            "frame": 42,
+            "phase": 41,
+            "master_clock": 46453194,
+            "snes_frame": 130
+          },
+          {
+            "frame": 43,
+            "phase": 42,
+            "master_clock": 47525246,
+            "snes_frame": 133
+          },
+          {
+            "frame": 44,
+            "phase": 43,
+            "master_clock": 48597372,
+            "snes_frame": 136
+          },
+          {
+            "frame": 45,
+            "phase": 44,
+            "master_clock": 49669440,
+            "snes_frame": 139
+          },
+          {
+            "frame": 46,
+            "phase": 45,
+            "master_clock": 50741570,
+            "snes_frame": 142
+          },
+          {
+            "frame": 47,
+            "phase": 46,
+            "master_clock": 51813676,
+            "snes_frame": 145
+          },
+          {
+            "frame": 48,
+            "phase": 47,
+            "master_clock": 52885738,
+            "snes_frame": 148
+          },
+          {
+            "frame": 49,
+            "phase": 48,
+            "master_clock": 53957870,
+            "snes_frame": 151
+          },
+          {
+            "frame": 50,
+            "phase": 49,
+            "master_clock": 55029934,
+            "snes_frame": 154
+          },
+          {
+            "frame": 51,
+            "phase": 50,
+            "master_clock": 56102048,
+            "snes_frame": 157
+          },
+          {
+            "frame": 52,
+            "phase": 51,
+            "master_clock": 57174170,
+            "snes_frame": 160
+          },
+          {
+            "frame": 53,
+            "phase": 52,
+            "master_clock": 58246220,
+            "snes_frame": 163
+          },
+          {
+            "frame": 54,
+            "phase": 53,
+            "master_clock": 59318340,
+            "snes_frame": 166
+          },
+          {
+            "frame": 55,
+            "phase": 54,
+            "master_clock": 60390462,
+            "snes_frame": 169
+          },
+          {
+            "frame": 56,
+            "phase": 55,
+            "master_clock": 61462552,
+            "snes_frame": 172
+          },
+          {
+            "frame": 57,
+            "phase": 56,
+            "master_clock": 62534648,
+            "snes_frame": 175
+          },
+          {
+            "frame": 58,
+            "phase": 57,
+            "master_clock": 63606716,
+            "snes_frame": 178
+          },
+          {
+            "frame": 59,
+            "phase": 58,
+            "master_clock": 64678828,
+            "snes_frame": 181
+          },
+          {
+            "frame": 60,
+            "phase": 59,
+            "master_clock": 65750956,
+            "snes_frame": 184
+          },
+          {
+            "frame": 61,
+            "phase": 60,
+            "master_clock": 66823006,
+            "snes_frame": 187
+          },
+          {
+            "frame": 62,
+            "phase": 61,
+            "master_clock": 67895144,
+            "snes_frame": 190
+          },
+          {
+            "frame": 63,
+            "phase": 62,
+            "master_clock": 68967230,
+            "snes_frame": 193
+          },
+          {
+            "frame": 64,
+            "phase": 63,
+            "master_clock": 70039304,
+            "snes_frame": 196
+          },
+          {
+            "frame": 65,
+            "phase": 0,
+            "master_clock": 71111438,
+            "snes_frame": 199
+          }
+        ]
+      },
+      "pose_png_sha256": [
+        "b52869804074f73e3a10688a64f5142a845bf95b60b51ee268d83ab3b62272e2",
+        "f3c9e0e1f8cc7f89d47367706fdfce868f09fd3b48465f4e361893e9c6cd2e1a",
+        "dcf40af0582b11f19d68504643bcf8948da6f9f9ca4ad37fb95fb289ed2be381",
+        "e3d42a32ba6a154217f026569243f648f68cd3d42a01bafa53f604b29729b41f",
+        "d891d85e8d7044f2c9ee1ddd6dcfde9b7f3d501bcae08d6a035fb6e3dab77545",
+        "c7e05f76c3275ba3faf5a285c7b74b45cf9281d01ef4e9128c19e71c11624f6a",
+        "ce09a36c4e72c26d960f7e0579c6bd58c424910af14e00ccb4d61f76b8884539",
+        "793e4398153375d60ff0c12233a03c60ba6aca4bc867eae0989c6c8f9aae1e07",
+        "6ec3d3c4f746906362a0847e9905c8f6ad996222a40fa93e3fcb7207b42aa865",
+        "20fc32063e1936ebbd78b76dd022e77df43442ed539a8ae08f2553c95cf7182f",
+        "447dcd871e0c2451646abd79ad6c4524c4b989590435fe79ab8cf9317808d03e",
+        "0f7ba394abf4b5b892b1575422126770a7a44c1a80981ba17a289829caf4520d",
+        "ee2fb09f735b2e7ee0646c84e026a10bef4c06fca1f96475ac93dd011eb03282",
+        "f2506f7fb2f8efac175cd3676a1fff2fc256cde3d4e8cf44233163a81ca3c5e4",
+        "1ff9d7be40bcd0e5c7416151081e72e42ca2c75013d05c90ce920670173afd23",
+        "daf98b61212484b68b7830a630a861471e94b574538345e70fe425326e12cfcf",
+        "589cad866eeaff967ec6a6410f92435665b9b9fa372c69b4eeeaa8521264b3cb",
+        "a7bfd4f98a9dac3cddb8e518a84a71d70adcf485a070211510bf07effbec458f",
+        "44048bb36f07c5b79ae230ffe04431f319e8b6e08a7249e41b6f229d0bd28da4",
+        "ab8ac98836ecc5fd366a1abb10642bc187ea6b40d64bf98f40f3951cc13a3bda",
+        "b2d117d49d0e993593c86eb422cc844421791dc414478fccdc9f87d746ff5eda",
+        "add0a2f4bcf26ea08656e7ec14ee34fbab7744df3a1194b8b9ebd3d4ded514fb",
+        "7f5124547d2c357d9d07a0e63f10aa11501a16b82b7cdd1e28e2662182f7bd01",
+        "cf3c9a09cb195a2288dbdc6b474c8fd60956a7c793ecf62f5ba96e59a71ed199",
+        "08ab9d276504eabf300f8472248933bdfd7fb778306aef9ca44dc503ef0bbd86",
+        "96e8bbb0faf195bea321cbb6f5522659255e03887cda03a6ac6779104177d250",
+        "95d6d790d3e704e5765e057110a0aaf226f389d1f4c41d2f5c04fc8ca819a0d5",
+        "3336f999133c3a38bc188cb6b8b39cfea9b31f75ae4d0e49d0e1e5cd919fdc15",
+        "c131aa9199360d0fa83ff24077a0f6d30e20086f6e64bfd97da5229bc5e275fd",
+        "c6c4ba8115946ccc9d4f70a733dc26bdaf07749eb65ee517d163ae624631be39",
+        "8bd153874eea03e9f4cdf335e86ec7602b144f8bf136a346004ae2609ace1aaa",
+        "26431814c2aec584276717e069942fa6ea7c30b564ce1d229c5f82e719e7334b",
+        "3919a64e58eaa234eb70c59ebd15acd37f7305d6cef408c6c7863a0276db16f0",
+        "94cfc8e3245d37be151a2263320f2936b1557d3b0d0caf67b666a835e18b3a2a",
+        "abd8cf6d7bd0b55a57182402478a2072f6952b761188d7c0db2cf06c251ca429",
+        "a4cc678730bc1041e028ad311905f8cfcc13cfd36f3ba45d5a465720395153f5",
+        "d6531e1ee2afcd18b5a5f3a9c7ceb973bbcea19c22f2182b1de93e91cc11b062",
+        "42901fb975bc616a8272e819be6002d656dae9ad48f88c4e3c53601542cf0854",
+        "52e10d0b4c1b6a753ff9c6863bcb3d91e0aa2c62bce7b6106cbd31a5b150bfcf",
+        "2e5e84ba6a242761ee26d881f5210230994583d8c30ea52c6395018620776872",
+        "7ecbc8758f12381c673652ae24d36c47ebed04df6b1281316ee99a1ff5d7b20f",
+        "48fc19db022efad11a4edb213217afc25dc312b7b0c6b38f32c64bf0d50e90e2",
+        "964ab902a39795ca159a21a8732580b4f131a3491006ff787eaa2b791ff46c82",
+        "b59fa8a42361924e37cab544eceb68dce4765601cc12e579ddf2a34ae43bd133",
+        "2b7f37d688da9650cb0d0a49b02967bbea328766d906d1a8f154d328515a8021",
+        "9b1f58f0a3225561c17bb12b8247955e96dd700fdcafb26dcc11ad5c4f091025",
+        "d456f2462b9a2bd4118240164e2ed96a0b8f336a0d91f7ac8a15fe99cec7b89a",
+        "499eb2fa4eb361e26e4d14d93816b34356bb446f08a65c069e9eb8da07069316",
+        "2e46847a82937991a20fe6cb1011f0657b175eba25b4800ade0f9aa098800a5e",
+        "1d9df6c230039bdaf5d291cd125c1b115e307b3dc792b929b04a24020840e900",
+        "5dff12ed77a3e766300f0369556c4f95f1ba0a5cde3ac202f986092c060d52aa",
+        "f69e10ef9687466d8fdcc312519ba4e5f3a8c55856ace8d03a43b8244b515a64",
+        "f35d3eddb965670951331367c92ba35419861224baa78907e2495310e8fece68",
+        "728adbaf40fdb92443e2b0a68e25f14b220c29166aa6dc8ce7636039cb75deea",
+        "01624ebcbd5a8c8785ced22f0335455728bb529df695884f6b2e74414cd019ab",
+        "0784da16d35ef6ba43f51687559b8db6ea1e26a2d186da5cc9548ff25c35a178",
+        "f760d3f2fad9073610c8eb4e159b9b139f8d463d0f64afe2910b103442b30d3a",
+        "baef3cf1f86e8e4d971aad99244f1a395acfe860de5ce153841a50f51b543c1a",
+        "9359eb6e49bd58b314b9ab5776923e17c7c9e06e764bba50f567c816ffab97f6",
+        "4735192b5eec6356ae47cdce4a9fcdf3e73785efb83c10ee83ee09d2908dccb7",
+        "b95c1f0d54bb1c5dde798bb4d850cbdc75d57a660654c844e4fd5a7b93c3dc53",
+        "1b0c4c4aafb3f8e6d4bfc42ad0f66de884560647395218334278845e47080edf",
+        "ce3c0938bb3ad4e4a2bb320ff5715fb826bf1b8793f923e42d55331ce7fb9cca",
+        "f06809c5c91e49838c6990bc64a177f160308be8121095f7a0aba232136a7f82"
+      ],
+      "matches_O2_images": true,
+      "positive": "PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; 202 SNES frames",
+      "negative": "PASS rotating triangle negative: status=2 result=3281 red backdrop"
+    },
+    {
+      "optimization": "Os",
+      "timing": {
+        "optimization": "Os",
+        "profile": "NTSC CLSR=1 GSU=100% CFGR.MSO=0 RAM-execution CACHE cold",
+        "payload_bytes": 2733,
+        "rom_bytes": 65536,
+        "payload_sha256": "190ede296cff09403be29aff83fee6d0c7bc0b340cf54a60ce06db51a829fbbb",
+        "source_sha256": "36754515f4b1dfa900944a7a1398c5620f1f004ef3c484d63fbb41335832858b",
+        "samples": [
+          {
+            "phase": 0,
+            "master_clocks_to_stop_entry": 903457,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 903462,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 1,
+            "master_clocks_to_stop_entry": 952275,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 952280,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 2,
+            "master_clocks_to_stop_entry": 970208,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 970213,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 3,
+            "master_clocks_to_stop_entry": 988157,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 988162,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 4,
+            "master_clocks_to_stop_entry": 993719,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 993724,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 5,
+            "master_clocks_to_stop_entry": 999707,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 999712,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 6,
+            "master_clocks_to_stop_entry": 985582,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 985587,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 7,
+            "master_clocks_to_stop_entry": 981303,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 981308,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 8,
+            "master_clocks_to_stop_entry": 970790,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 970795,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 9,
+            "master_clocks_to_stop_entry": 951815,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 951820,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 10,
+            "master_clocks_to_stop_entry": 928688,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 928693,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 11,
+            "master_clocks_to_stop_entry": 905202,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 905207,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 12,
+            "master_clocks_to_stop_entry": 883760,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 883765,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 13,
+            "master_clocks_to_stop_entry": 892678,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 892683,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 14,
+            "master_clocks_to_stop_entry": 901285,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 901290,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 15,
+            "master_clocks_to_stop_entry": 905602,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 905607,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 16,
+            "master_clocks_to_stop_entry": 920352,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 920357,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 17,
+            "master_clocks_to_stop_entry": 903842,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 903847,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 18,
+            "master_clocks_to_stop_entry": 899666,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 899671,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 19,
+            "master_clocks_to_stop_entry": 891691,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 891696,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 20,
+            "master_clocks_to_stop_entry": 883254,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 883259,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 21,
+            "master_clocks_to_stop_entry": 905218,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 905223,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 22,
+            "master_clocks_to_stop_entry": 929101,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 929106,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 23,
+            "master_clocks_to_stop_entry": 953115,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 953120,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 24,
+            "master_clocks_to_stop_entry": 970094,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 970099,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 25,
+            "master_clocks_to_stop_entry": 979295,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 979300,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 26,
+            "master_clocks_to_stop_entry": 984210,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 984215,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 27,
+            "master_clocks_to_stop_entry": 1000491,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 1000496,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 28,
+            "master_clocks_to_stop_entry": 993965,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 993970,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 29,
+            "master_clocks_to_stop_entry": 986213,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 986218,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 30,
+            "master_clocks_to_stop_entry": 968580,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 968585,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 31,
+            "master_clocks_to_stop_entry": 952578,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 952583,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 32,
+            "master_clocks_to_stop_entry": 902954,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 902959,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 33,
+            "master_clocks_to_stop_entry": 943647,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 943652,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 34,
+            "master_clocks_to_stop_entry": 959832,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 959837,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 35,
+            "master_clocks_to_stop_entry": 977928,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 977933,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 36,
+            "master_clocks_to_stop_entry": 985938,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 985943,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 37,
+            "master_clocks_to_stop_entry": 993075,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 993080,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 38,
+            "master_clocks_to_stop_entry": 977121,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 977126,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 39,
+            "master_clocks_to_stop_entry": 972905,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 972910,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 40,
+            "master_clocks_to_stop_entry": 964120,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 964125,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 41,
+            "master_clocks_to_stop_entry": 947770,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 947775,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 42,
+            "master_clocks_to_stop_entry": 924475,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 924480,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 43,
+            "master_clocks_to_stop_entry": 901336,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 901341,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 44,
+            "master_clocks_to_stop_entry": 896187,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 896192,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 45,
+            "master_clocks_to_stop_entry": 904837,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 904842,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 46,
+            "master_clocks_to_stop_entry": 913134,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 913139,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 47,
+            "master_clocks_to_stop_entry": 917293,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 917298,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 48,
+            "master_clocks_to_stop_entry": 935378,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 935383,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 49,
+            "master_clocks_to_stop_entry": 919027,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 919032,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 50,
+            "master_clocks_to_stop_entry": 914685,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 914690,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 51,
+            "master_clocks_to_stop_entry": 905730,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 905735,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 52,
+            "master_clocks_to_stop_entry": 896558,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 896563,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 53,
+            "master_clocks_to_stop_entry": 901412,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 901417,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 54,
+            "master_clocks_to_stop_entry": 924162,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 924167,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 55,
+            "master_clocks_to_stop_entry": 946539,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 946544,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 56,
+            "master_clocks_to_stop_entry": 964885,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 964890,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 57,
+            "master_clocks_to_stop_entry": 974982,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 974987,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 58,
+            "master_clocks_to_stop_entry": 978562,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 978567,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 59,
+            "master_clocks_to_stop_entry": 992360,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 992365,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 60,
+            "master_clocks_to_stop_entry": 985761,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 985766,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 61,
+            "master_clocks_to_stop_entry": 979941,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 979946,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 62,
+            "master_clocks_to_stop_entry": 961529,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 961534,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 63,
+            "master_clocks_to_stop_entry": 943413,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 943418,
+            "cache_base_at_stop": 26336
+          },
+          {
+            "phase": 0,
+            "master_clocks_to_stop_entry": 903457,
+            "stop_fetch_master_clocks": 5,
+            "gsu_cycles": 903462,
+            "cache_base_at_stop": 26336
+          }
+        ]
+      },
+      "fps": {
+        "profile": "NTSC CLSR=1 GSU=100% CACHE RAM; no artificial presentation hold",
+        "measurement": "64 completed-image intervals after VRAM DMA; excludes boot and first render",
+        "master_clock_hz": 21477270,
+        "intervals": 64,
+        "master_clocks": 68614266,
+        "seconds": 3.194738716792,
+        "displayed_pose_fps": 20.032937173736,
+        "snes_frames": 192,
+        "repeated_refreshes": 128,
+        "samples": [
+          {
+            "frame": 1,
+            "phase": 0,
+            "master_clock": 2497136,
+            "snes_frame": 7
+          },
+          {
+            "frame": 2,
+            "phase": 1,
+            "master_clock": 3569268,
+            "snes_frame": 10
+          },
+          {
+            "frame": 3,
+            "phase": 2,
+            "master_clock": 4641320,
+            "snes_frame": 13
+          },
+          {
+            "frame": 4,
+            "phase": 3,
+            "master_clock": 5713448,
+            "snes_frame": 16
+          },
+          {
+            "frame": 5,
+            "phase": 4,
+            "master_clock": 6785558,
+            "snes_frame": 19
+          },
+          {
+            "frame": 6,
+            "phase": 5,
+            "master_clock": 7857626,
+            "snes_frame": 22
+          },
+          {
+            "frame": 7,
+            "phase": 6,
+            "master_clock": 8929754,
+            "snes_frame": 25
+          },
+          {
+            "frame": 8,
+            "phase": 7,
+            "master_clock": 10001822,
+            "snes_frame": 28
+          },
+          {
+            "frame": 9,
+            "phase": 8,
+            "master_clock": 11073942,
+            "snes_frame": 31
+          },
+          {
+            "frame": 10,
+            "phase": 9,
+            "master_clock": 12146046,
+            "snes_frame": 34
+          },
+          {
+            "frame": 11,
+            "phase": 10,
+            "master_clock": 13218120,
+            "snes_frame": 37
+          },
+          {
+            "frame": 12,
+            "phase": 11,
+            "master_clock": 14290240,
+            "snes_frame": 40
+          },
+          {
+            "frame": 13,
+            "phase": 12,
+            "master_clock": 15362332,
+            "snes_frame": 43
+          },
+          {
+            "frame": 14,
+            "phase": 13,
+            "master_clock": 16434416,
+            "snes_frame": 46
+          },
+          {
+            "frame": 15,
+            "phase": 14,
+            "master_clock": 17506510,
+            "snes_frame": 49
+          },
+          {
+            "frame": 16,
+            "phase": 15,
+            "master_clock": 18578606,
+            "snes_frame": 52
+          },
+          {
+            "frame": 17,
+            "phase": 16,
+            "master_clock": 19650710,
+            "snes_frame": 55
+          },
+          {
+            "frame": 18,
+            "phase": 17,
+            "master_clock": 20722804,
+            "snes_frame": 58
+          },
+          {
+            "frame": 19,
+            "phase": 18,
+            "master_clock": 21794890,
+            "snes_frame": 61
+          },
+          {
+            "frame": 20,
+            "phase": 19,
+            "master_clock": 22867034,
+            "snes_frame": 64
+          },
+          {
+            "frame": 21,
+            "phase": 20,
+            "master_clock": 23939104,
+            "snes_frame": 67
+          },
+          {
+            "frame": 22,
+            "phase": 21,
+            "master_clock": 25011224,
+            "snes_frame": 70
+          },
+          {
+            "frame": 23,
+            "phase": 22,
+            "master_clock": 26083326,
+            "snes_frame": 73
+          },
+          {
+            "frame": 24,
+            "phase": 23,
+            "master_clock": 27155404,
+            "snes_frame": 76
+          },
+          {
+            "frame": 25,
+            "phase": 24,
+            "master_clock": 28227514,
+            "snes_frame": 79
+          },
+          {
+            "frame": 26,
+            "phase": 25,
+            "master_clock": 29299598,
+            "snes_frame": 82
+          },
+          {
+            "frame": 27,
+            "phase": 26,
+            "master_clock": 30371700,
+            "snes_frame": 85
+          },
+          {
+            "frame": 28,
+            "phase": 27,
+            "master_clock": 31443772,
+            "snes_frame": 88
+          },
+          {
+            "frame": 29,
+            "phase": 28,
+            "master_clock": 32515870,
+            "snes_frame": 91
+          },
+          {
+            "frame": 30,
+            "phase": 29,
+            "master_clock": 33588008,
+            "snes_frame": 94
+          },
+          {
+            "frame": 31,
+            "phase": 30,
+            "master_clock": 34660104,
+            "snes_frame": 97
+          },
+          {
+            "frame": 32,
+            "phase": 31,
+            "master_clock": 35732166,
+            "snes_frame": 100
+          },
+          {
+            "frame": 33,
+            "phase": 32,
+            "master_clock": 36804262,
+            "snes_frame": 103
+          },
+          {
+            "frame": 34,
+            "phase": 33,
+            "master_clock": 37876384,
+            "snes_frame": 106
+          },
+          {
+            "frame": 35,
+            "phase": 34,
+            "master_clock": 38948482,
+            "snes_frame": 109
+          },
+          {
+            "frame": 36,
+            "phase": 35,
+            "master_clock": 40020592,
+            "snes_frame": 112
+          },
+          {
+            "frame": 37,
+            "phase": 36,
+            "master_clock": 41092696,
+            "snes_frame": 115
+          },
+          {
+            "frame": 38,
+            "phase": 37,
+            "master_clock": 42164790,
+            "snes_frame": 118
+          },
+          {
+            "frame": 39,
+            "phase": 38,
+            "master_clock": 43236850,
+            "snes_frame": 121
+          },
+          {
+            "frame": 40,
+            "phase": 39,
+            "master_clock": 44308948,
+            "snes_frame": 124
+          },
+          {
+            "frame": 41,
+            "phase": 40,
+            "master_clock": 45381048,
+            "snes_frame": 127
+          },
+          {
+            "frame": 42,
+            "phase": 41,
+            "master_clock": 46453184,
+            "snes_frame": 130
+          },
+          {
+            "frame": 43,
+            "phase": 42,
+            "master_clock": 47525250,
+            "snes_frame": 133
+          },
+          {
+            "frame": 44,
+            "phase": 43,
+            "master_clock": 48597390,
+            "snes_frame": 136
+          },
+          {
+            "frame": 45,
+            "phase": 44,
+            "master_clock": 49669472,
+            "snes_frame": 139
+          },
+          {
+            "frame": 46,
+            "phase": 45,
+            "master_clock": 50741564,
+            "snes_frame": 142
+          },
+          {
+            "frame": 47,
+            "phase": 46,
+            "master_clock": 51813678,
+            "snes_frame": 145
+          },
+          {
+            "frame": 48,
+            "phase": 47,
+            "master_clock": 52885754,
+            "snes_frame": 148
+          },
+          {
+            "frame": 49,
+            "phase": 48,
+            "master_clock": 53957848,
+            "snes_frame": 151
+          },
+          {
+            "frame": 50,
+            "phase": 49,
+            "master_clock": 55029978,
+            "snes_frame": 154
+          },
+          {
+            "frame": 51,
+            "phase": 50,
+            "master_clock": 56102054,
+            "snes_frame": 157
+          },
+          {
+            "frame": 52,
+            "phase": 51,
+            "master_clock": 57174144,
+            "snes_frame": 160
+          },
+          {
+            "frame": 53,
+            "phase": 52,
+            "master_clock": 58246260,
+            "snes_frame": 163
+          },
+          {
+            "frame": 54,
+            "phase": 53,
+            "master_clock": 59318342,
+            "snes_frame": 166
+          },
+          {
+            "frame": 55,
+            "phase": 54,
+            "master_clock": 60390426,
+            "snes_frame": 169
+          },
+          {
+            "frame": 56,
+            "phase": 55,
+            "master_clock": 61462530,
+            "snes_frame": 172
+          },
+          {
+            "frame": 57,
+            "phase": 56,
+            "master_clock": 62534640,
+            "snes_frame": 175
+          },
+          {
+            "frame": 58,
+            "phase": 57,
+            "master_clock": 63606722,
+            "snes_frame": 178
+          },
+          {
+            "frame": 59,
+            "phase": 58,
+            "master_clock": 64678848,
+            "snes_frame": 181
+          },
+          {
+            "frame": 60,
+            "phase": 59,
+            "master_clock": 65750938,
+            "snes_frame": 184
+          },
+          {
+            "frame": 61,
+            "phase": 60,
+            "master_clock": 66823054,
+            "snes_frame": 187
+          },
+          {
+            "frame": 62,
+            "phase": 61,
+            "master_clock": 67895154,
+            "snes_frame": 190
+          },
+          {
+            "frame": 63,
+            "phase": 62,
+            "master_clock": 68967202,
+            "snes_frame": 193
+          },
+          {
+            "frame": 64,
+            "phase": 63,
+            "master_clock": 70039336,
+            "snes_frame": 196
+          },
+          {
+            "frame": 65,
+            "phase": 0,
+            "master_clock": 71111402,
+            "snes_frame": 199
+          }
+        ]
+      },
+      "pose_png_sha256": [
+        "b52869804074f73e3a10688a64f5142a845bf95b60b51ee268d83ab3b62272e2",
+        "f3c9e0e1f8cc7f89d47367706fdfce868f09fd3b48465f4e361893e9c6cd2e1a",
+        "dcf40af0582b11f19d68504643bcf8948da6f9f9ca4ad37fb95fb289ed2be381",
+        "e3d42a32ba6a154217f026569243f648f68cd3d42a01bafa53f604b29729b41f",
+        "d891d85e8d7044f2c9ee1ddd6dcfde9b7f3d501bcae08d6a035fb6e3dab77545",
+        "c7e05f76c3275ba3faf5a285c7b74b45cf9281d01ef4e9128c19e71c11624f6a",
+        "ce09a36c4e72c26d960f7e0579c6bd58c424910af14e00ccb4d61f76b8884539",
+        "793e4398153375d60ff0c12233a03c60ba6aca4bc867eae0989c6c8f9aae1e07",
+        "6ec3d3c4f746906362a0847e9905c8f6ad996222a40fa93e3fcb7207b42aa865",
+        "20fc32063e1936ebbd78b76dd022e77df43442ed539a8ae08f2553c95cf7182f",
+        "447dcd871e0c2451646abd79ad6c4524c4b989590435fe79ab8cf9317808d03e",
+        "0f7ba394abf4b5b892b1575422126770a7a44c1a80981ba17a289829caf4520d",
+        "ee2fb09f735b2e7ee0646c84e026a10bef4c06fca1f96475ac93dd011eb03282",
+        "f2506f7fb2f8efac175cd3676a1fff2fc256cde3d4e8cf44233163a81ca3c5e4",
+        "1ff9d7be40bcd0e5c7416151081e72e42ca2c75013d05c90ce920670173afd23",
+        "daf98b61212484b68b7830a630a861471e94b574538345e70fe425326e12cfcf",
+        "589cad866eeaff967ec6a6410f92435665b9b9fa372c69b4eeeaa8521264b3cb",
+        "a7bfd4f98a9dac3cddb8e518a84a71d70adcf485a070211510bf07effbec458f",
+        "44048bb36f07c5b79ae230ffe04431f319e8b6e08a7249e41b6f229d0bd28da4",
+        "ab8ac98836ecc5fd366a1abb10642bc187ea6b40d64bf98f40f3951cc13a3bda",
+        "b2d117d49d0e993593c86eb422cc844421791dc414478fccdc9f87d746ff5eda",
+        "add0a2f4bcf26ea08656e7ec14ee34fbab7744df3a1194b8b9ebd3d4ded514fb",
+        "7f5124547d2c357d9d07a0e63f10aa11501a16b82b7cdd1e28e2662182f7bd01",
+        "cf3c9a09cb195a2288dbdc6b474c8fd60956a7c793ecf62f5ba96e59a71ed199",
+        "08ab9d276504eabf300f8472248933bdfd7fb778306aef9ca44dc503ef0bbd86",
+        "96e8bbb0faf195bea321cbb6f5522659255e03887cda03a6ac6779104177d250",
+        "95d6d790d3e704e5765e057110a0aaf226f389d1f4c41d2f5c04fc8ca819a0d5",
+        "3336f999133c3a38bc188cb6b8b39cfea9b31f75ae4d0e49d0e1e5cd919fdc15",
+        "c131aa9199360d0fa83ff24077a0f6d30e20086f6e64bfd97da5229bc5e275fd",
+        "c6c4ba8115946ccc9d4f70a733dc26bdaf07749eb65ee517d163ae624631be39",
+        "8bd153874eea03e9f4cdf335e86ec7602b144f8bf136a346004ae2609ace1aaa",
+        "26431814c2aec584276717e069942fa6ea7c30b564ce1d229c5f82e719e7334b",
+        "3919a64e58eaa234eb70c59ebd15acd37f7305d6cef408c6c7863a0276db16f0",
+        "94cfc8e3245d37be151a2263320f2936b1557d3b0d0caf67b666a835e18b3a2a",
+        "abd8cf6d7bd0b55a57182402478a2072f6952b761188d7c0db2cf06c251ca429",
+        "a4cc678730bc1041e028ad311905f8cfcc13cfd36f3ba45d5a465720395153f5",
+        "d6531e1ee2afcd18b5a5f3a9c7ceb973bbcea19c22f2182b1de93e91cc11b062",
+        "42901fb975bc616a8272e819be6002d656dae9ad48f88c4e3c53601542cf0854",
+        "52e10d0b4c1b6a753ff9c6863bcb3d91e0aa2c62bce7b6106cbd31a5b150bfcf",
+        "2e5e84ba6a242761ee26d881f5210230994583d8c30ea52c6395018620776872",
+        "7ecbc8758f12381c673652ae24d36c47ebed04df6b1281316ee99a1ff5d7b20f",
+        "48fc19db022efad11a4edb213217afc25dc312b7b0c6b38f32c64bf0d50e90e2",
+        "964ab902a39795ca159a21a8732580b4f131a3491006ff787eaa2b791ff46c82",
+        "b59fa8a42361924e37cab544eceb68dce4765601cc12e579ddf2a34ae43bd133",
+        "2b7f37d688da9650cb0d0a49b02967bbea328766d906d1a8f154d328515a8021",
+        "9b1f58f0a3225561c17bb12b8247955e96dd700fdcafb26dcc11ad5c4f091025",
+        "d456f2462b9a2bd4118240164e2ed96a0b8f336a0d91f7ac8a15fe99cec7b89a",
+        "499eb2fa4eb361e26e4d14d93816b34356bb446f08a65c069e9eb8da07069316",
+        "2e46847a82937991a20fe6cb1011f0657b175eba25b4800ade0f9aa098800a5e",
+        "1d9df6c230039bdaf5d291cd125c1b115e307b3dc792b929b04a24020840e900",
+        "5dff12ed77a3e766300f0369556c4f95f1ba0a5cde3ac202f986092c060d52aa",
+        "f69e10ef9687466d8fdcc312519ba4e5f3a8c55856ace8d03a43b8244b515a64",
+        "f35d3eddb965670951331367c92ba35419861224baa78907e2495310e8fece68",
+        "728adbaf40fdb92443e2b0a68e25f14b220c29166aa6dc8ce7636039cb75deea",
+        "01624ebcbd5a8c8785ced22f0335455728bb529df695884f6b2e74414cd019ab",
+        "0784da16d35ef6ba43f51687559b8db6ea1e26a2d186da5cc9548ff25c35a178",
+        "f760d3f2fad9073610c8eb4e159b9b139f8d463d0f64afe2910b103442b30d3a",
+        "baef3cf1f86e8e4d971aad99244f1a395acfe860de5ce153841a50f51b543c1a",
+        "9359eb6e49bd58b314b9ab5776923e17c7c9e06e764bba50f567c816ffab97f6",
+        "4735192b5eec6356ae47cdce4a9fcdf3e73785efb83c10ee83ee09d2908dccb7",
+        "b95c1f0d54bb1c5dde798bb4d850cbdc75d57a660654c844e4fd5a7b93c3dc53",
+        "1b0c4c4aafb3f8e6d4bfc42ad0f66de884560647395218334278845e47080edf",
+        "ce3c0938bb3ad4e4a2bb320ff5715fb826bf1b8793f923e42d55331ce7fb9cca",
+        "f06809c5c91e49838c6990bc64a177f160308be8121095f7a0aba232136a7f82"
+      ],
+      "matches_O2_images": true,
+      "positive": "PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; 202 SNES frames",
+      "negative": "PASS rotating triangle negative: status=2 result=3281 red backdrop"
+    }
+  ],
+  "interactive_shapes": [
+    {
+      "optimization": "O2",
+      "benchmark": {
+        "profile": "NTSC CLSR=1 GSU=100% normal multiply RAM CACHE cold",
+        "pose": {
+          "yaw": 8,
+          "pitch": 5,
+          "size": 12
+        },
+        "payload_bytes": 12987,
+        "wire_cycles": [
+          407584,
+          407584,
+          407584,
+          407584
+        ],
+        "filled_cycles": [
+          1739658,
+          1739658,
+          1739658,
+          1739658
+        ]
+      },
+      "positive": "PASS interactive shapes: 35 full OBJ framebuffers, 255 controller polls, A edge/hold/repress, both rotation axes, Select resize/clamps, opposing directions, PPU sprites and VBlank DMA",
+      "negative": "PASS interactive shapes negative: deliberate result mismatch gives a red screen",
+      "payload_sha256": "b4a9fc12839514543e9bed816ec00f8f10aa372f17acef0d4b9e38314ea4bcba",
+      "source_sha256": "3b6b90b9f423be54ecabb7b07bca22c1c9e6518a3711fc9d9d71348ee9a2116a"
+    },
+    {
+      "optimization": "Os",
+      "benchmark": {
+        "profile": "NTSC CLSR=1 GSU=100% normal multiply RAM CACHE cold",
+        "pose": {
+          "yaw": 8,
+          "pitch": 5,
+          "size": 12
+        },
+        "payload_bytes": 12978,
+        "wire_cycles": [
+          418768,
+          418768,
+          418768,
+          418768
+        ],
+        "filled_cycles": [
+          1850153,
+          1850529,
+          1850529,
+          1850529
+        ]
+      },
+      "positive": "PASS interactive shapes: 35 full OBJ framebuffers, 255 controller polls, A edge/hold/repress, both rotation axes, Select resize/clamps, opposing directions, PPU sprites and VBlank DMA",
+      "negative": "PASS interactive shapes negative: deliberate result mismatch gives a red screen",
+      "payload_sha256": "eadf8c4403925a3dd4ac993a89bd95672802314104398cb0839aa780cbe37dd3",
+      "source_sha256": "3b6b90b9f423be54ecabb7b07bca22c1c9e6518a3711fc9d9d71348ee9a2116a"
+    }
+  ],
+  "triangle": {
+    "verification": "PASS triangle: all 49152 pixels and 1024 tilemap entries match; count=9409 R10=$FFFA PBR=$70 RAMBR=0 screen=256x239",
+    "rom_sha256": "20a481887c3031f126df291ddce0f489e40a9787104cdf2e0528ab16d408c44b",
+    "verification-negative": "PASS triangle negative: status=2 R0=9409 RAM=9409 backdrop=$001F",
+    "rom_sha256-negative": "c4eb051f715f7a24d1c6db10d8a0ec803381de5e0bec5910d2fd79a6f7e9aae0",
+    "profile": "NTSC, CLSR=1, GSU=100%, CFGR=0, RAM $70:6000, 4bpp256x192 SCBR0 SCMR0x29, SP0xFFFE; explicit-profile positive/negative rerun",
+    "explicit_profile_fresh_artifacts_verified": true,
+    "explicit_profile_exit_codes": [0, 0]
+  }
+}

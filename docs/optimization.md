@@ -1,5 +1,12 @@
 # GSU optimization modes
 
+For the latest committed-source measurements, use the
+[v0.2.0 candidate results](releases/v0.2.0/optimization-results.md) and
+[validation/provenance](releases/v0.2.0/validation.md). They cover all four
+levels plus RAM demos on `d967c3ef45a948ff457d81052448732da3bd73dc`.
+The development snapshots later in this document remain historical evidence;
+they must not be relabeled with the candidate SHA or treated as a published release.
+
 DiscoC provides local **O1** (`-O` or `-O1`), global **O2** (`-O2`), and
 size-oriented **Os** (`-Os`).
 The default **O0** retains the v0.1.0 generation policy, with correctness fixes

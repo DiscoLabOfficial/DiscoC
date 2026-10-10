@@ -1,0 +1,37 @@
+{
+  "source_revision": "d967c3ef45a948ff457d81052448732da3bd73dc",
+  "source_tree": "1435ea92f18ff8229b4051fa8e35e12d89947315",
+  "source_clean": true,
+  "configurations": [
+    {
+      "configuration": "release",
+      "tests": 256,
+      "failures": 0,
+      "disabled": 0,
+      "ctest_log": "build/release-candidate/v0.2.0-rc.1/release/ctest.log",
+      "last_test_log": "build/release-candidate/v0.2.0-rc.1/release/Testing/Temporary/LastTest.log",
+      "junit": "build/release-candidate/v0.2.0-rc.1/release/build/release-candidate/v0.2.0-rc.1/release/ctest.xml",
+      "build_log": "build/release-candidate/v0.2.0-rc.1/release/build.log",
+      "junit_sha256": "6cbd1177e41b168800d94794c0d2edb611890abd9b58bcad9bb0ce886537c199",
+      "last_test_log_sha256": "94aca0bc68adcc206bd5ad0bcfd0269e7597e9e31b3090a0c6bc6af663d5a38f",
+      "ctest_log_sha256": "6ddc64f029bfbe5efe1456dc8568ce261d8b67bdd429d472fa1a3c43991f198d",
+      "ctest_wall_time_seconds": 194.04,
+      "junit_time_seconds": 194
+    },
+    {
+      "configuration": "debug",
+      "tests": 248,
+      "failures": 0,
+      "disabled": 0,
+      "ctest_log": "build/release-candidate/v0.2.0-rc.1/debug/ctest.log",
+      "last_test_log": "build/release-candidate/v0.2.0-rc.1/debug/Testing/Temporary/LastTest.log",
+      "junit": "build/release-candidate/v0.2.0-rc.1/debug/build/release-candidate/v0.2.0-rc.1/debug/ctest.xml",
+      "build_log": "build/release-candidate/v0.2.0-rc.1/debug/build.log",
+      "junit_sha256": "5ffea8bcadd50000ecf83b6c6fb064152364bdb20dfab07386fe357b7cd2b599",
+      "last_test_log_sha256": "c079f7d5593e609382496ec541c287ab4ef5992bde301cc2b09406d5e4380719",
+      "ctest_log_sha256": "72a25c340b019463f131e8deb31f30cbfebdef7e0953b85e21f3bd50ac9943f8",
+      "ctest_wall_time_seconds": 273.69,
+      "junit_time_seconds": 273
+    }
+  ]
+}
