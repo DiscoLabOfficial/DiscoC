@@ -54,6 +54,9 @@ For each of these 32 programs, each optimization level:
 3. Requires byte identity between those paths and reassembled final assembly.
 
 That gives **256 model executions**, plus byte-exact assembly round trips.
+CTest registers all **128 case/optimization combinations** separately, so a
+slow sanitized build can schedule them in parallel without making 32 programs
+share one timeout. Splitting the entries does not add or remove corpus cases.
 Cases alternate ROM `$00:8000` and RAM `$70:6000` execution, and exercise both
 near RAM banks. Runtime startup must correct deliberately poisoned RAMBR/R10.
 
@@ -86,7 +89,10 @@ non-boundary inputs; it does not silently change the grammar's size limits.
 
 Every run uses a new directory. It retains source, expected bytes/counts,
 seed/case/placement, tool SHA-256 hashes, commands, stage stdout/stderr, objects,
-linked binaries and assembly. On failure, `failure.txt` identifies the stage;
+linked binaries and assembly. `progress.txt` records the active stage even when
+an outer timeout interrupts the harness; `timings.txt` records completed
+subprocess wall times in whole seconds (not GSU cycles). On failure,
+`failure.txt` identifies the stage;
 the diagnostic points to a literal-argv `reproduce.cmake`:
 
 ```sh
@@ -99,9 +105,14 @@ source/expectations and tool binaries alongside the recorded tool and harness
 hashes when investigating a confirmed divergence. `commands.txt` records argv;
 `reproduce.cmake`, not that text file, is the executable replay.
 
+If the Ubuntu sanitizer job fails, CI uploads these differential artifacts and
+the CTest logs as `sanitizers-differential-failure`, retained for seven days.
+
 Replays write new artifacts and preserve the original evidence. Each matrix-stage
 subprocess has a 45-second timeout; model execution has its existing 10-million-instruction
-budget, and each CTest matrix entry has a 600-second overall limit. The negative
+budget, and each CTest case/optimization entry has a 600-second overall limit.
+The direct-build runner still executes all cases and levels through the same
+harness, with the same subprocess limits. The negative
 reporting contract deliberately invokes a non-compiler executable and checks
 nonzero failure, saved evidence and replay, including paths with spaces. Oracle
 self-tests also deliberately corrupt expectations to check mismatch detection.

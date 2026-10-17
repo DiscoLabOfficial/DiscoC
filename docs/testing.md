@@ -47,6 +47,11 @@ and retains source, seed, commands and a replay script on failure:
 ctest --preset release -L differential --output-on-failure
 ```
 
+Each of the 32 corpus cases has a separate CTest entry at each optimization
+level. This preserves all 256 model executions while allowing bounded parallel
+scheduling under sanitizers. Stage progress, subprocess timings and replay
+artifacts are retained for diagnosis; timeouts remain test failures.
+
 This complements existing hand-written and independent Mesen checks; it does
 not turn the instruction-level regression model into a full SNES emulator.
 

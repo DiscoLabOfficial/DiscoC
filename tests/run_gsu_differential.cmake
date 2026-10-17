@@ -73,14 +73,22 @@ function(fail stage detail)
 endfunction()
 
 function(run_step stage)
+    # An outer timeout can interrupt execute_process before fail() runs.
+    # Leave the active stage beside its partial stdout/stderr and replay.
+    file(WRITE "${case_dir}/progress.txt"
+        "seed=${SEED}\ncase=${index}\noptimization=O${level}\nstage=${stage}\n")
     file(APPEND "${case_dir}/commands.txt" "${stage}:\n")
     foreach(argument IN LISTS ARGN)
         literal(quoted "${argument}")
         file(APPEND "${case_dir}/commands.txt" "  ${quoted}\n")
     endforeach()
+    string(TIMESTAMP started "%s" UTC)
     execute_process(COMMAND ${ARGN} RESULT_VARIABLE status
         OUTPUT_FILE "${case_dir}/${stage}.stdout.txt"
         ERROR_FILE "${case_dir}/${stage}.stderr.txt" TIMEOUT 45)
+    string(TIMESTAMP finished "%s" UTC)
+    math(EXPR elapsed "${finished} - ${started}")
+    file(APPEND "${case_dir}/timings.txt" "${stage}=${elapsed}s; status=${status}\n")
     if(NOT status STREQUAL "0")
         file(READ "${case_dir}/${stage}.stderr.txt" detail LIMIT 8192)
         fail("${stage}" "Exit=${status}\n${detail}")
@@ -122,6 +130,7 @@ foreach(level IN LISTS levels)
         endforeach()
         file(APPEND "${case_dir}/reproduce.cmake"
             "  RESULT_VARIABLE status TIMEOUT 600)\nif(NOT status STREQUAL \"0\")\n  message(FATAL_ERROR \"Differential replay failed: \${status}\")\nendif()\n")
+        message(STATUS "GSU differential: seed=${SEED}, case=${index}, O${level}; artifacts=${case_dir}")
         file(WRITE "${case_dir}/commands.txt" "seed=${SEED} case=${index} O${level} origin=${origin} RAMBR=${bank}\n")
         run_step(generate "${DIFFERENTIAL_RUNNER}" --emit "${case_dir}/program.dc" "${case_dir}/expected.txt" "${SEED}" "${index}")
         run_step(compile "${DISCC}" "-O${level}" "${case_dir}/program.dc" -o "${case_dir}/direct.o")
@@ -138,6 +147,7 @@ foreach(level IN LISTS levels)
         run_step(link-final "${DISCLD}" "${case_dir}/final.o" -o "${case_dir}/final.bin")
         same_payload("${case_dir}/final.bin")
         math(EXPR executions "${executions} + 2")
+        file(APPEND "${case_dir}/progress.txt" "complete=true\n")
     endforeach()
 endforeach()
 file(WRITE "${run_dir}/passed.txt" "seed=${SEED}\nexecutions=${executions}\nSTOP/RAM/volatile/return/fault and direct/assembly/final-export equivalence passed\n")
