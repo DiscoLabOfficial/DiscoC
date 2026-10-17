@@ -1,0 +1,75 @@
+name: Static Analysis
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install analyzer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-tidy cmake ninja-build g++
+
+      - name: Generate compilation database
+        run: |
+          cmake -S . -B build/static-analysis -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          test -s build/static-analysis/compile_commands.json
+
+      - name: Analyze compiler sources with clang-tidy
+        # Remove after investigating existing warnings to make this check blocking.
+        continue-on-error: true
+        run: |
+          clang-tidy --version
+          clang-tidy -p build/static-analysis \
+            -checks='-*,clang-analyzer-core.*,bugprone-*' \
+            --warnings-as-errors='*' \
+            src/*.cpp
+
+  cppcheck:
+    name: cppcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install analyzer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck cmake ninja-build g++
+
+      - name: Generate compilation database
+        run: |
+          cmake -S . -B build/static-analysis -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=OFF \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+          test -s build/static-analysis/compile_commands.json
+
+      - name: Analyze compiler sources with Cppcheck
+        # Remove after investigating existing warnings to make this check blocking.
+        continue-on-error: true
+        run: |
+          cppcheck --version
+          cppcheck --project=build/static-analysis/compile_commands.json \
+            '--file-filter=src/*.cpp' \
+            --enable=warning,performance,portability \
+            --error-exitcode=1 \
+            --suppress=missingIncludeSystem \
+            --quiet
