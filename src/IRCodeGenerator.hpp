@@ -15,6 +15,7 @@
 #include "LinearScanAllocator.hpp"
 #include "GSUSpillCache.hpp"
 #include "ObjectFile.hpp"
+#include "Opcodes.hpp"
 #include "Parser.hpp"
 
 // Target backend for the verified IR. It intentionally shares the existing
@@ -48,13 +49,13 @@ private:
     void emitByte(std::uint8_t byte);
     void emitWord(std::uint16_t word);
     void emitLiteral(std::int64_t value);
-    void emitMove(std::uint8_t destination, std::uint8_t source);
+    void emitMove(Register destination, std::uint8_t source);
     void emitPush(std::uint8_t reg);
     void emitStackGuard(std::size_t required, const Token& source);
     void emitPop(std::uint8_t reg);
-    void emitStore(std::uint8_t address_reg, std::uint8_t value_reg, bool byte);
+    void emitStore(Register address, std::uint8_t value_reg, bool byte);
     bool matchesLastRamWordAddress(IRValueId address) const;
-    void emitImmediateArithmetic(std::uint8_t op_base, std::int64_t value,
+    void emitImmediateArithmetic(OpCode operation, std::int64_t value,
                                  const Token& source);
     void emitAdjustStack(std::size_t bytes, bool add, const Token& source);
     void emitFunctionEpilogue();
@@ -80,7 +81,7 @@ private:
     void emitConstantShift(bool left, unsigned count, bool unsigned_right);
     void emitWordMask(std::uint16_t mask);
     void emitBitExtract(const IRInstruction& instruction);
-    void emitBinaryOperands(IRValueId left, IRValueId right);
+    void emitBinaryOperands(const IRInstruction& instruction);
     void emitIntegerOperation(const IRInstruction& instruction);
     void emitDivMod(const IRInstruction& instruction);
     void emitDivModResult(const IRInstruction& instruction);
@@ -97,7 +98,7 @@ private:
     void selectAutomaticCaches();
     std::string loopEntrySymbol(IRBlockId target, bool backedge) const;
     void emitRegisterLiteral(std::uint8_t reg, std::uint16_t value);
-    void emitWordLiteral(std::uint8_t reg, std::uint16_t value);
+    void emitWordLiteral(Register destination, std::uint16_t value);
     bool optimized() const { return m_config.optimization != OptimizationLevel::Baseline; }
     bool globallyOptimized() const { return isGlobalOptimization(m_config.optimization); }
     bool sizeOptimized() const { return m_config.optimization == OptimizationLevel::Size; }
@@ -109,9 +110,9 @@ private:
     void emitSelectBank(std::uint8_t reg, AddressSpace space);
     void emitAddressCheck(const Type& pointer, int width);
     void ensureAddressChecked(IRValueId value, int width);
-    void emitGuard(std::uint8_t success_branch, std::uint16_t fault);
+    void emitGuard(OpCode success_condition, std::uint16_t fault);
     void emitAddressFault(std::uint16_t fault);
-    void emitCompare(std::uint8_t left, std::uint16_t right);
+    void emitCompare(Register left_register, std::uint16_t right);
     std::string localLabel();
     void bindLabel(const std::string& name);
     void emitLocalJump(const std::string& name, std::uint8_t condition = 5);
@@ -142,6 +143,9 @@ private:
     const CompilerConfig& m_config;
 
     ObjectFile m_object_file;
+    // Own the synthetic descriptor: the current-function observer may borrow
+    // it while emitting a kernel, including branch-relaxation retries.
+    IRFunction m_division_helper_context;
     const IRFunction* m_current_function = nullptr;
     std::map<std::uint32_t, const IRInstruction*> m_values;
     std::map<std::uint32_t, std::size_t> m_use_counts;

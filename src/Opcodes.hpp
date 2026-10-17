@@ -30,6 +30,7 @@ enum class OpCode : uint8_t {
     TO   = 0x10, // Base for TO R0-R15 -> 0x10-0x1F
     STW_R = 0x30, // Base for STW (Rn) -> 0x30-0x3F, e.g. STW (R1) is 0x31
     ADD_R = 0x50, // Base for ADD Rn -> 0x50-0x5F
+    SUB_R = 0x60, // Base for SUB Rn -> 0x60-0x6F
     JMP_R = 0x90, // Base for JMP Rn -> 0x90-0x9F
 
     // These are multi-byte opcodes where the instruction is a full byte

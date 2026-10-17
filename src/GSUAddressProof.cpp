@@ -11,6 +11,13 @@ namespace {
 bool nearRam(const Type& type) {
     return type.pointer_level > 0 && !isFarPointer(type) && type.space == AddressSpace::RAM;
 }
+unsigned alignmentOfOffset(std::int64_t offset) {
+    // Offsets are bounded by the proof domain to at most one bank.
+    const auto magnitude = static_cast<std::uint64_t>(offset < 0 ? -offset : offset);
+    unsigned alignment = 65536;
+    while (alignment > 1 && magnitude % alignment) alignment >>= 1;
+    return alignment;
+}
 }
 
 GSUAddressProof::Fact GSUAddressProof::scalarRange(const Type& type) {
@@ -22,11 +29,8 @@ GSUAddressProof::Fact GSUAddressProof::scalarRange(const Type& type) {
 }
 
 unsigned GSUAddressProof::commonAlignment(unsigned alignment, std::int64_t offset) {
-    // All participating alignments are powers of two. Offsets are bounded to
-    // at most one bank; taking their magnitude cannot overflow int64_t.
-    const auto magnitude = static_cast<std::uint64_t>(offset < 0 ? -offset : offset);
-    while (alignment > 1 && magnitude % alignment) alignment >>= 1;
-    return alignment;
+    // Both alignments are powers of two, so their minimum is their GCD.
+    return std::min(alignment, alignmentOfOffset(offset));
 }
 
 GSUAddressProof::Fact GSUAddressProof::get(IRValueId value) const {
@@ -233,8 +237,7 @@ void GSUAddressProof::refineControlFlow(
             else if (operation == "<=") { if (positive) fact.high = std::min(fact.high, bound); else fact.low = std::max(fact.low, bound + 1); }
             else if (operation == ">") { if (positive) fact.low = std::max(fact.low, bound + 1); else fact.high = std::min(fact.high, bound); }
             else if (operation == ">=") { if (positive) fact.low = std::max(fact.low, bound); else fact.high = std::min(fact.high, bound - 1); }
-            else if (operation == "==" && positive) fact.low = fact.high = bound;
-            else if (operation == "!=" && !positive) fact.low = fact.high = bound;
+            else if ((operation == "==" && positive) || (operation == "!=" && !positive)) fact.low = fact.high = bound;
             else continue;
             if (fact.low > fact.high) continue;
             for (std::uint32_t candidate = 0; candidate < function.blocks.size(); ++candidate) {
@@ -252,13 +255,13 @@ void GSUAddressProof::refineControlFlow(
     }
 }
 
-GSUAddressProof::Fact GSUAddressProof::displaced(Fact address, std::int64_t low,
-                                              std::int64_t high, unsigned alignment) const {
+GSUAddressProof::Fact GSUAddressProof::displaced(Fact address, Fact displacement) const {
+    const auto low = displacement.low, high = displacement.high;
     if (address.kind != Kind::Frame && address.kind != Kind::Absolute) return {};
     if (low < -65535 || high > 65535 || low > high) return {};
     address.low += low;
     address.high += high;
-    address.alignment = std::min(address.alignment, alignment);
+    address.alignment = std::min(address.alignment, displacement.alignment);
     if (address.kind == Kind::Absolute && (address.low < 0 || address.high > 65535)) return {};
     if (address.kind == Kind::Frame &&
         (!m_checked_frame || address.low < m_frame_low || address.high >= m_frame_end)) return {};
@@ -311,8 +314,8 @@ GSUAddressProof::Fact GSUAddressProof::transfer(
     if (instruction.opcode == IROpcode::Address && nearRam(instruction.type)) {
         if (instruction.operation == "member" && instruction.operands.size() == 1 &&
             instruction.immediate >= 0 && instruction.immediate <= 65535)
-            return displaced(a, instruction.immediate, instruction.immediate,
-                             commonAlignment(a.alignment, instruction.immediate));
+            return displaced(a, {Kind::Scalar, instruction.immediate, instruction.immediate,
+                                 commonAlignment(a.alignment, instruction.immediate)});
         if (!m_checked_frame) return {};
         std::int64_t offset = instruction.immediate;
         if (instruction.operation.empty()) {
@@ -332,7 +335,7 @@ GSUAddressProof::Fact GSUAddressProof::transfer(
         if (low < -65535 || high > 65535) return {};
         const auto alignment = low == high ? commonAlignment(a.alignment, low) :
             commonAlignment(a.alignment, stride);
-        return displaced(a, low, high, alignment);
+        return displaced(a, {Kind::Scalar, low, high, alignment});
     }
     if (instruction.opcode == IROpcode::Cast && nearRam(instruction.type)) {
         // Near/far and ROM/RAM conversions carry bank semantics and are not

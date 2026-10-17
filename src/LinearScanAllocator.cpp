@@ -488,10 +488,10 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
         end[block.id.value] = position - 1;
     }
     std::size_t call_live_entries = 0;
-    const auto touch = [&](std::uint32_t value, std::size_t point, unsigned depth, bool use) {
-        auto& location = m_locations.at(value);
+    const auto touch = [&](std::size_t point, IRValueId value, unsigned depth, bool use) {
+        auto& location = m_locations.at(value.value);
         location.start = std::min(location.start, point); location.end = std::max(location.end, point);
-        if (use) weight[value] += (size_policy ? 1 : GSUCostModel::blockWeight(depth)) * (cost_priority ?
+        if (use) weight[value.value] += (size_policy ? 1 : GSUCostModel::blockWeight(depth)) * (cost_priority ?
             size_policy ? GSUCostModel::spillLoad(-2).fetch_bytes - GSUCostModel::copy().fetch_bytes :
             GSUCostModel::spillLoad(-2).pressureScore() - GSUCostModel::copy().pressureScore() : 1);
     };
@@ -501,14 +501,14 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
         for (const auto& i : block.instructions) {
             for (std::size_t o = 0; o < i.operands.size(); ++o) {
                 const auto edge = i.opcode == IROpcode::Phi ? i.targets.at(o).value : b;
-                touch(i.operands[o].value, i.opcode == IROpcode::Phi ? end.at(edge) : position, cfg.loop_depth.at(edge), true);
+                touch(i.opcode == IROpcode::Phi ? end.at(edge) : position, i.operands[o], cfg.loop_depth.at(edge), true);
             }
             ++position;
         }
         // Merely surviving an inner loop is not a hot use. Otherwise cold
         // outer state would displace the induction/width used every pixel.
-        for (const auto value : cfg.live_in[b]) touch(value, begin[b], cfg.loop_depth[b], false);
-        for (const auto value : cfg.live_out[b]) touch(value, end[b], cfg.loop_depth[b], false);
+        for (const auto value : cfg.live_in[b]) touch(begin[b], IRValueId{value}, cfg.loop_depth[b], false);
+        for (const auto value : cfg.live_out[b]) touch(end[b], IRValueId{value}, cfg.loop_depth[b], false);
         auto live = cfg.live_out[b];
         position = end[b];
         for (auto i = block.instructions.rbegin(); i != block.instructions.rend(); ++i) {

@@ -37,7 +37,7 @@ private:
                            const std::vector<const IRInstruction*>& definitions);
     Fact transfer(const IRInstruction& instruction, const Analyzer::LocalSymbolTable& locals,
                   const std::vector<const IRInstruction*>& definitions) const;
-    Fact displaced(Fact address, std::int64_t low, std::int64_t high, unsigned alignment) const;
+    Fact displaced(Fact address, Fact displacement) const;
 
     std::vector<Fact> m_facts;
     std::vector<Fact> m_inductions;

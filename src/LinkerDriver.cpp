@@ -546,7 +546,11 @@ int runLinker(std::vector<std::string> arguments) {
         }
         std::ofstream outFile(out_filepath, std::ios::out | std::ios::binary);
         if (!outFile) throw std::runtime_error("Failed to open output file for writing: " + out_filepath);
-        outFile.write(reinterpret_cast<const char*>(final_rom.data()), final_rom.size());
+        // GSU placement already bounds the payload to one bank; retain an
+        // explicit stream bound before converting the unsigned byte count.
+        if (final_rom.size() > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max()))
+            throw std::runtime_error("Linked payload exceeds stream write limits.");
+        outFile.write(reinterpret_cast<const char*>(final_rom.data()), static_cast<std::streamsize>(final_rom.size()));
         outFile.flush();
         if (!outFile) throw std::runtime_error("Failed to write linked payload: " + out_filepath);
         outFile.close();

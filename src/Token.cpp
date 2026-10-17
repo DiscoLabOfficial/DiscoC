@@ -2,7 +2,10 @@
 #include <iostream>
 
 Token::Token(TokenType type, std::string lexeme, int line, int col)
-    : type(type), lexeme(std::move(lexeme)), line_number(line), col_number(col) {}
+    : Token(type, std::move(lexeme), SourcePosition{line, col}) {}
+
+Token::Token(TokenType type, std::string lexeme, SourcePosition position)
+    : type(type), lexeme(std::move(lexeme)), line_number(position.line), col_number(position.column) {}
 
 void Token::print() const {
     std::cout << "Token( " << to_string(type)

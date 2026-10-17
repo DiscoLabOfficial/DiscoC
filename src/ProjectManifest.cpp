@@ -1,6 +1,7 @@
 #include "ProjectManifest.hpp"
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
 
 namespace DiscoProject {
 namespace {
@@ -23,7 +24,8 @@ std::string configPath(const std::vector<std::string>& arguments, Consumer consu
             continue;
         }
         if (!path.empty()) throw std::runtime_error("Only one --config manifest can be specified.");
-        if (++index == arguments.size() || arguments[index].empty()) throw std::runtime_error("--config requires a filename.");
+        ++index;
+        if (index == arguments.size() || arguments[index].empty()) throw std::runtime_error("--config requires a filename.");
         path = absolutePath(arguments[index]);
     }
     return path;
@@ -46,8 +48,10 @@ TargetKind parseTarget(const std::string& name) {
 const Value* Manifest::find(const std::string& key) const {
     const auto found = values.find(key); return found == values.end() ? nullptr : &found->second;
 }
-std::string Manifest::string(const std::string& key, const std::string& fallback) const {
-    const auto* value = find(key); if (!value) return fallback;
+std::string Manifest::string(const std::string& key, StringFallback fallback) const {
+    // The owned default is a different type from the lookup key.
+    const auto* value = find(key);
+    if (!value) return std::move(fallback.value);
     if (value->kind != Value::Kind::String) error(*this, key, "Expected string.");
     return value->text;
 }
@@ -62,7 +66,7 @@ std::uint32_t Manifest::number(const std::string& key, std::uint32_t fallback) c
         error(*this, key, "Expected nonnegative 32-bit integer.");
     return static_cast<std::uint32_t>(value->integer);
 }
-TargetKind Manifest::target() const { return parseTarget(string("project.target", "gsu")); }
+TargetKind Manifest::target() const { return parseTarget(string("project.target", {"gsu"})); }
 
 void Manifest::validate() const {
     const std::map<std::string, std::uint32_t> limits = {
@@ -168,8 +172,8 @@ std::vector<std::string> configurationArguments(const std::vector<std::string>& 
             option(prefix + "rom_bank", "--rom-bank");
             if (initialize) { option(prefix + "stack_pointer", "--stack-pointer"); option("runtime.entry", "--entry"); }
         }
-        const auto directory = absolutePath(manifest.string("output.directory", "build"), parentPath(path));
-        result.push_back("-o"); result.push_back(absolutePath(manifest.string("output.binary", manifest.string("project.name", "new") + ".bin"), directory));
+        const auto directory = absolutePath(manifest.string("output.directory", {"build"}), parentPath(path));
+        result.push_back("-o"); result.push_back(absolutePath(manifest.string("output.binary", {manifest.string("project.name", {"new"}) + ".bin"}), directory));
         if (manifest.find("output.assembly")) {
             result.push_back("--emit-asm"); result.push_back(absolutePath(manifest.string("output.assembly"), directory));
         }

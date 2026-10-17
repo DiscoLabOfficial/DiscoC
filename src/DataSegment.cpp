@@ -67,14 +67,17 @@ void DataSegmentManager::add(VarDeclStmt& stmt) {
     }
     entry.bytes.resize(static_cast<std::size_t>(stmt.type.sizeInBytes) * elements, 0);
     const auto store = [&](int offset, const Type& type, const Expr& expression) {
+        if (offset < 0 || static_cast<std::size_t>(offset) >= entry.bytes.size())
+            throw CompilerError("Static initializer offset is outside its storage.", expression.token);
+        const auto index = static_cast<std::size_t>(offset);
         const auto value = static_cast<std::uint32_t>(scalarInitializer(expression));
         if (isFarPointer(type)) {
-            entry.bytes.at(static_cast<std::size_t>(offset)) = static_cast<std::uint8_t>(value >> 16);
-            entry.bytes.at(static_cast<std::size_t>(offset + 2)) = static_cast<std::uint8_t>(value);
-            entry.bytes.at(static_cast<std::size_t>(offset + 3)) = static_cast<std::uint8_t>(value >> 8);
+            entry.bytes.at(index) = static_cast<std::uint8_t>(value >> 16);
+            entry.bytes.at(index + 2) = static_cast<std::uint8_t>(value);
+            entry.bytes.at(index + 3) = static_cast<std::uint8_t>(value >> 8);
         } else {
-            entry.bytes.at(static_cast<std::size_t>(offset)) = static_cast<std::uint8_t>(value);
-            if (type.sizeInBytes > 1) entry.bytes.at(static_cast<std::size_t>(offset + 1)) = static_cast<std::uint8_t>(value >> 8);
+            entry.bytes.at(index) = static_cast<std::uint8_t>(value);
+            if (type.sizeInBytes > 1) entry.bytes.at(index + 1) = static_cast<std::uint8_t>(value >> 8);
         }
     };
     for (const auto& element : stmt.aggregate_initializers) store(element.offset, element.type, *element.value);

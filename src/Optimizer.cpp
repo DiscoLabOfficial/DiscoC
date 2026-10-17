@@ -109,9 +109,8 @@ bool containsBreak(const Stmt& stmt) {
     } else if (const auto* conditional = dynamic_cast<const IfStmt*>(&stmt)) {
         return containsBreak(*conditional->thenBranch) ||
                (conditional->elseBranch && containsBreak(*conditional->elseBranch));
-    } else if (dynamic_cast<const WhileStmt*>(&stmt) || dynamic_cast<const HardwareLoopStmt*>(&stmt)) {
-        return true;
-    } else if (dynamic_cast<const ForStmt*>(&stmt)) {
+    } else if (dynamic_cast<const WhileStmt*>(&stmt) || dynamic_cast<const HardwareLoopStmt*>(&stmt) ||
+               dynamic_cast<const ForStmt*>(&stmt)) {
         return true;
     } else if (const auto* switch_stmt = dynamic_cast<const SwitchStmt*>(&stmt)) {
         return containsBreak(*switch_stmt->body);
@@ -137,7 +136,7 @@ bool containsReturn(const Stmt& stmt) {
     return false;
 }
 
-bool parseIntegerLiteral(const LiteralExpr& literal, long& value) {
+bool parseIntegerLiteral(const LiteralExpr& literal, std::int64_t& value) {
     try {
         std::size_t parsed = 0;
         value = DiscoNumeric::parse(literal.token.lexeme, &parsed, 0);
@@ -166,7 +165,7 @@ std::unique_ptr<Stmt> Optimizer::optimize(std::unique_ptr<Stmt> statement) {
         const auto* decrement = assignment ? dynamic_cast<const BinaryExpr*>(assignment->value.get()) : nullptr;
         const auto* left = decrement ? dynamic_cast<const VariableExpr*>(decrement->left.get()) : nullptr;
         const auto* one = decrement ? dynamic_cast<const LiteralExpr*>(decrement->right.get()) : nullptr;
-        long n = 0, z = 0, d = 0;
+        std::int64_t n = 0, z = 0, d = 0;
         // Removing the induction variable is legal only when it is unobservable.
         // In particular continue/break/return must not escape the hardware body.
         if (declaration && !declaration->type.is_volatile && count && parseIntegerLiteral(*count, n) &&

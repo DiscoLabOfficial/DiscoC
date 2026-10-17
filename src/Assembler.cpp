@@ -190,7 +190,8 @@ private:
 
     static std::size_t& offsetFor(Section section, std::size_t& code, std::size_t& data, std::size_t& ram) {
         if (section == Section::Code) return code;
-        return section == Section::Data ? data : ram;
+        if (section == Section::Data) return data;
+        return ram;
     }
 
     static std::size_t currentOffset(Section section, std::size_t code, std::size_t data, std::size_t ram) {
@@ -556,7 +557,7 @@ private:
                 else if (immediate_alt3) emitByte(out, 0x3f);
                 else emitByte(out, 0x3e);
                 emitByte(out, static_cast<uint8_t>(base + value - ((op == "and" || op == "or" || op == "bic" || op == "xor") ? 1 : 0)));
-                return immediate_alt1 || immediate_alt3 ? 2 : 2;
+                return 2;
             }
             const int reg = requireRegister(line.operands[0], line);
             if (reg == 0 && (op == "and" || op == "or" || op == "bic" || op == "xor")) fail("register R0 is not valid for this operation.", line.line_number);
@@ -801,7 +802,7 @@ private:
             if (short_address) {
                 if ((address & 1u) != 0 || address > 510) fail("short memory address must be even and <= 510.", line.line_number);
                 emitByte(out, static_cast<uint8_t>(load ? 0x3d : 0x3e));
-                emitByte(out, static_cast<uint8_t>((load ? 0xa0 : 0xa0) + reg));
+                emitByte(out, static_cast<uint8_t>(0xa0 + reg));
                 emitByte(out, static_cast<uint8_t>(address >> 1));
                 return 3;
             }

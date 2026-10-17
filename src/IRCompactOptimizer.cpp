@@ -67,11 +67,12 @@ void initializers(IRFunction& f, const Analyzer::LocalSymbolTable& locals) {
                     values.push_back(static_cast<std::uint16_t>(ConstantEvaluator::convert(v.immediate, i.type)) &
                         static_cast<std::uint16_t>(width == 1 ? 255 : 65535));
                     stores.push_back(p);
-                } else if (i.opcode == IROpcode::Constant && integer(i.type)) {
+                } else if (!((i.opcode == IROpcode::Constant && integer(i.type)) ||
+                    (i.opcode == IROpcode::Address && i.operation == "member" && i.operands[0].value == root_id.value &&
+                     i.immediate >= 0 && i.immediate < extent))) {
                     // Only side-effect-free value definitions may be crossed.
-                } else if (i.opcode == IROpcode::Address && i.operation == "member" && i.operands[0].value == root_id.value &&
-                    i.immediate >= 0 && i.immediate < extent) {
-                } else break;
+                    break;
+                }
             }
             if (values.size() < 4) continue;
             IRInstruction batch = start;
@@ -79,7 +80,10 @@ void initializers(IRFunction& f, const Analyzer::LocalSymbolTable& locals) {
             batch.immediate = extent; batch.initialization_values = std::move(values);
             for (const auto p : stores) disposable.insert(code[p].operands[0].value);
             code[first] = std::move(batch);
-            for (auto p = stores.rbegin(); p != stores.rend(); ++p) if (*p != first) code.erase(code.begin() + *p);
+            // Stored positions came from this vector; its representable
+            // iterator distance bounds each index before conversion.
+            for (auto p = stores.rbegin(); p != stores.rend(); ++p) if (*p != first)
+                code.erase(code.begin() + static_cast<std::vector<IRInstruction>::difference_type>(*p));
         }
     }
     // Erase only addresses whose in-object member checks were proven above.

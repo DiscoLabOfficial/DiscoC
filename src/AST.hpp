@@ -136,7 +136,7 @@ struct Member {
 
 // Represents a struct definition, e.g., `struct Vec2 { word x; word y; };`
 struct StructDefStmt : public Stmt {
-    StructDefStmt(Token n, std::vector<Member> m) { token = n; members = std::move(m); }
+    StructDefStmt(Token n, std::vector<Member> m) : members(std::move(m)) { token = std::move(n); }
     std::vector<Member> members;
     void accept(Visitor& v) override { v.visit(*this); }
 };
@@ -170,7 +170,7 @@ struct MemberAccessExpr : public Expr {
     std::unique_ptr<Expr> object;
     bool through_pointer = false;
     int member_offset = 0; // Filled in by the Analyzer
-    MemberAccessExpr(std::unique_ptr<Expr> obj, Token m) : object(std::move(obj)) { token = m; includeChild(*object); }
+    MemberAccessExpr(std::unique_ptr<Expr> obj, Token m) : object(std::move(obj)) { token = std::move(m); includeChild(*object); }
     void accept(Visitor& v, const Type* c) override { v.visit(*this, c); }
 };
 
@@ -393,7 +393,7 @@ struct SubscriptExpr : public Expr {
     // two bytes and therefore cannot be used as the stride.
     int element_size = 0;
     SubscriptExpr(std::unique_ptr<Expr> a, Token bracket, std::unique_ptr<Expr> i)
-        : array(std::move(a)), index(std::move(i)) { token = bracket; includeChild(*array); includeChild(*index); }
+        : array(std::move(a)), index(std::move(i)) { token = std::move(bracket); includeChild(*array); includeChild(*index); }
     void accept(Visitor& v, const Type* c) override { v.visit(*this, c); }
 };
 struct ConstDataStmt : public Stmt {

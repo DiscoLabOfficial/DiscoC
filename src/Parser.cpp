@@ -935,11 +935,13 @@ std::unique_ptr<Stmt> Parser::drawStatement() {
 
 std::vector<std::unique_ptr<Stmt>> Parser::cursorWrites(std::unique_ptr<Expr> x, std::unique_ptr<Expr> y, const Token& source) {
     std::vector<std::unique_ptr<Stmt>> result;
-    for (unsigned axis = 0; axis < 2; ++axis) {
-        auto target = std::make_unique<PlotCoordinateExpr>(Token(TokenType::IDENTIFIER, axis ? "y" : "x", source), axis != 0);
+    const auto append = [&](bool is_y, std::unique_ptr<Expr> value) {
+        auto target = std::make_unique<PlotCoordinateExpr>(Token(TokenType::IDENTIFIER, is_y ? "y" : "x", source), is_y);
         result.push_back(std::make_unique<ExpressionStmt>(std::make_unique<AssignExpr>(std::move(target),
-            axis ? std::move(y) : std::move(x))));
-    }
+            std::move(value))));
+    };
+    append(false, std::move(x));
+    append(true, std::move(y));
     return result;
 }
 
