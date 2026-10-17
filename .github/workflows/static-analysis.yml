@@ -32,8 +32,6 @@ jobs:
           test -s build/static-analysis/compile_commands.json
 
       - name: Analyze compiler sources with clang-tidy
-        # Remove after investigating existing warnings to make this check blocking.
-        continue-on-error: true
         run: |
           clang-tidy --version
           clang-tidy -p build/static-analysis \
@@ -63,8 +61,6 @@ jobs:
           test -s build/static-analysis/compile_commands.json
 
       - name: Analyze compiler sources with Cppcheck
-        # Remove after investigating existing warnings to make this check blocking.
-        continue-on-error: true
         run: |
           cppcheck --version
           cppcheck --project=build/static-analysis/compile_commands.json \
