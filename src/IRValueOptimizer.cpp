@@ -253,10 +253,11 @@ void simplifyFacts(IRFunction& f) {
 }
 
 struct Ramp { IRInstruction phi; IRValueId initial; std::uint16_t step; };
-std::map<std::uint32_t, Ramp> ramps(const IRFunction& f, const Definitions& defs, std::uint32_t header,
-                                  std::uint32_t preheader, std::uint32_t latch) {
+std::map<std::uint32_t, Ramp> ramps(const IRFunction& f, const Definitions& defs,
+                                  const IRControlFlow::Loop& loop, std::uint32_t preheader) {
+    const auto latch = *loop.latches.begin();
     std::map<std::uint32_t, Ramp> result;
-    for (const auto& phi : f.blocks[header].instructions) {
+    for (const auto& phi : f.blocks[loop.header].instructions) {
         if (phi.opcode != IROpcode::Phi) break;
         if (phi.operands.size() != 2 || !scalar(phi.type) || phi.type.base != BaseType::WORD || !phi.type.enum_name.empty()) continue;
         IRValueId initial, next;
@@ -291,7 +292,7 @@ void recurrences(IRFunction& f) {
         if (outside.size() != 1 || cfg.successors[outside[0]].size() != 1) continue;
         const auto preheader = outside[0], latch = *loop.latches.begin();
         const auto defs = definitions(f);
-        const auto induction = ramps(f, defs, loop.header, preheader, latch);
+        const auto induction = ramps(f, defs, loop, preheader);
         std::vector<std::uint32_t> owner(defs.size(), IRBlockId::Invalid);
         for (const auto& b : f.blocks) for (const auto& i : b.instructions) if (i.result.isValid()) owner[i.result.value] = b.id.value;
         std::vector<IRInstruction> candidates;

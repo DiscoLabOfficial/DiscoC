@@ -4,6 +4,7 @@
 #include "IR.hpp"
 #include "GsuPointer.hpp"
 #include "Lexer.hpp"
+#include "Optimizer.hpp"
 #include "Parser.hpp"
 
 #include <cstdint>
@@ -57,6 +58,35 @@ void expectDiagnostic(const std::string& source, const std::string& expected) {
         return;
     }
     throw std::runtime_error("Invalid language fixture was accepted: " + source);
+}
+
+void checkHardwareLoopLiteralWidth() {
+    const std::string source = "void main() { for (word n = 1; n > 0; n = n - 1) {} }";
+    for (const auto& text : {"1", "65535", "65536", "4294967297", "9223372036854775807"}) {
+        Lexer lexer(source);
+        const auto tokens = lexer.scanTokens();
+        Parser parser(tokens);
+        auto program = parser.parseProgram();
+        DataSegmentManager data;
+        Analyzer analyzer(data);
+        analyzer.analyze(program);
+        auto* function = dynamic_cast<FunctionDeclStmt*>(program.at(0).get());
+        require(function != nullptr, "Expected the loop fixture function");
+        auto* loop = dynamic_cast<ForStmt*>(function->body.at(0).get());
+        require(loop != nullptr, "Expected the countdown loop fixture");
+        auto* declaration = dynamic_cast<VarDeclStmt*>(loop->initializer.get());
+        require(declaration != nullptr, "Expected a countdown declaration");
+        auto* literal = dynamic_cast<LiteralExpr*>(declaration->initializer.get());
+        require(literal != nullptr, "Expected a countdown literal");
+        // Probe the optimizer's range check independently of frontend narrowing.
+        // On LLP64, 4294967297 must not truncate to a one-iteration LOOP.
+        literal->token.lexeme = text;
+        Optimizer optimizer;
+        optimizer.optimize(program);
+        const bool converted = dynamic_cast<HardwareLoopStmt*>(function->body.at(0).get()) != nullptr;
+        require(converted == (std::string(text) == "1" || std::string(text) == "65535"),
+                "Hardware-loop range validation truncated a wide literal");
+    }
 }
 
 void checkWidthsAndWidening() {
@@ -121,6 +151,56 @@ void checkAggregateLayout() {
                 require(member != nullptr && member->member_offset == expected[index],
                         "Structure member offset does not match declaration order/alignment");
             }
+        });
+}
+
+void checkOwnedTokensAndCursorWrites() {
+    Token name(TokenType::IDENTIFIER, "Packet", 12, 4);
+    name.source_path = "owned-token.dc";
+    StructDefStmt structure(name, {});
+    MemberAccessExpr member(std::make_unique<VariableExpr>(name), name);
+    SubscriptExpr indexed(std::make_unique<VariableExpr>(name), name,
+                          std::make_unique<LiteralExpr>(Token(TokenType::LITERAL_INTEGER, "0", 12, 8)));
+    name.lexeme = "changed";
+    name.source_path = "changed.dc";
+    for (const auto* token : {&structure.token, &member.token, &indexed.token}) {
+        require(token->lexeme == "Packet" && token->source_path == "owned-token.dc" &&
+                token->line_number == 12 && token->col_number == 4,
+                "AST constructors must own token text and preserve source metadata");
+    }
+    const Token positioned(TokenType::IDENTIFIER, "positioned", SourcePosition{23, 9});
+    require(positioned.line_number == 23 && positioned.col_number == 9,
+            "Grouped source coordinates changed token line/column ordering");
+
+    analyze("void main() { word x = 1; word y = 2; plot { "
+            "at (x++, y++); draw at (x++, y++) with color 3; } }",
+        [](const Program& program, const Analyzer&, const DataSegmentManager&, const IRModule&) {
+            const auto& main = node<FunctionDeclStmt>(*program.at(0));
+            const auto& plot = node<PlotBlockStmt>(*main.body.at(2));
+            const auto& body = node<BlockStmt>(*plot.body);
+            const auto check = [](const BlockStmt& block, std::size_t first) {
+                for (std::size_t axis = 0; axis < 2; ++axis) {
+                    const auto& statement = node<ExpressionStmt>(*block.statements.at(first + axis));
+                    const auto* assignment = dynamic_cast<const AssignExpr*>(statement.expression.get());
+                    require(assignment != nullptr && assignment->name && assignment->value,
+                            "Coordinate desugaring lost a uniquely owned expression");
+                    const auto* cursor = dynamic_cast<const PlotCoordinateExpr*>(assignment->name.get());
+                    const auto* update = dynamic_cast<const UpdateExpr*>(assignment->value.get());
+                    require(cursor && cursor->is_y == (axis == 1) && update && update->postfix,
+                            "Coordinates must be assigned exactly once in X-before-Y order");
+                    const auto* input = dynamic_cast<const VariableExpr*>(update->target.get());
+                    require(input && input->token.lexeme == (axis == 0 ? "x" : "y"),
+                            "Coordinate desugaring swapped or reused a moved operand");
+                }
+            };
+            const auto& at = node<BlockStmt>(*body.statements.at(0));
+            const auto& draw = node<BlockStmt>(*body.statements.at(1));
+            require(at.statements.size() == 2 && draw.statements.size() == 4,
+                    "at/draw sugar emitted an unexpected number of effects");
+            check(at, 0);
+            (void)node<SetColorStmt>(*draw.statements.at(0));
+            check(draw, 1);
+            (void)node<PlotStmt>(*draw.statements.at(3));
         });
 }
 
@@ -403,6 +483,8 @@ int main() {
     try {
         checkWidthsAndWidening();
         checkAggregateLayout();
+        checkOwnedTokensAndCursorWrites();
+        checkHardwareLoopLiteralWidth();
         checkScopesAndPrototypes();
         checkLiteralsAndRomData();
         checkDiagnostics();

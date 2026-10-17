@@ -6,10 +6,10 @@
 
 void IRCodeGenerator::emitPointerValueCheck(const Type& type, int width) {
     const auto validate = localLabel(), done = localLabel();
-    emitCompare(0, 0);
+    emitCompare(Register::R0, 0);
     emitLocalJump(validate, 8);
     if (isFarPointer(type)) {
-        emitCompare(4, 0);
+        emitCompare(Register::R4_LMULT_LO, 0);
         emitLocalJump(validate, 8);
     }
     emitLocalJump(done); // Null is a storable/comparable value, not an address.
@@ -45,10 +45,11 @@ void IRCodeGenerator::emitRegisterLiteral(std::uint8_t reg, std::uint16_t value)
         emitByte(static_cast<std::uint8_t>(value));
         return;
     }
-    emitWordLiteral(reg, value);
+    emitWordLiteral(static_cast<Register>(reg), value);
 }
 
-void IRCodeGenerator::emitWordLiteral(std::uint8_t reg, std::uint16_t value) {
+void IRCodeGenerator::emitWordLiteral(Register destination, std::uint16_t value) {
+    const auto reg = static_cast<std::uint8_t>(destination);
     m_spill_cache.clobber(reg);
     emitByte(static_cast<std::uint8_t>(0xf0 | reg));
     emitWord(value);
@@ -70,13 +71,15 @@ void IRCodeGenerator::emitSelectBank(std::uint8_t reg, AddressSpace space) {
     emitByte(0xdf);
 }
 
-void IRCodeGenerator::emitCompare(std::uint8_t left, std::uint16_t right) {
+void IRCodeGenerator::emitCompare(Register left_register, std::uint16_t right) {
+    const auto left = static_cast<std::uint8_t>(left_register);
     emitRegisterLiteral(3, right);
     emitByte(static_cast<std::uint8_t>(0xb0 | left));
     emitByte(0x3f); emitByte(0x63); // CMP R3: unsigned ordering uses C, equality uses Z.
 }
 
-void IRCodeGenerator::emitGuard(std::uint8_t success_branch, std::uint16_t fault) {
+void IRCodeGenerator::emitGuard(OpCode success_condition, std::uint16_t fault) {
+    const auto success_branch = static_cast<std::uint8_t>(success_condition);
     const auto previous = m_fault_offsets.find(fault);
     if (globallyOptimized() && previous != m_fault_offsets.end() && success_branch >= 6 && success_branch <= 15) {
         const auto distance = static_cast<std::int64_t>(previous->second) -
@@ -139,29 +142,29 @@ void IRCodeGenerator::emitAddressCheck(const Type& pointer, int width) {
     // R0 is the offset, R4 the bank for a far value. Checks leave both intact.
     // No bank is switched until every check succeeds, so failures cannot send
     // a subsequent stack access into the foreign data bank.
-    if (!isFarPointer(pointer)) { emitCompare(0, 0); emitGuard(8, 2); }
+    if (!isFarPointer(pointer)) { emitCompare(Register::R0, 0); emitGuard(OpCode::BNE, 2); }
     if (width > 1) {
         const auto alignment = storageAlignment(pointeeType(pointer));
         if (alignment > 1) {
         // Verified type layouts have a power-of-two alignment <= 128.
         emitRegisterLiteral(3, static_cast<std::uint16_t>(alignment - 1)); emitByte(0xb0); emitByte(0x13); emitByte(0x73); // R3 = R0 & (alignment - 1)
-        emitGuard(9, 1);
+        emitGuard(OpCode::BEQ, 1);
         }
         if (width > 2) {
-            emitCompare(0, static_cast<std::uint16_t>(65537 - width));
-            emitGuard(12, 2);
+            emitCompare(Register::R0, static_cast<std::uint16_t>(65537 - width));
+            emitGuard(OpCode::BCC, 2);
         }
     }
     if (pointer.space == AddressSpace::ROM) {
         if (!isFarPointer(pointer)) emitNearBank(4, AddressSpace::ROM);
-        emitCompare(4, 0x60); emitGuard(12, 2);
+        emitCompare(Register::R4_LMULT_LO, 0x60); emitGuard(OpCode::BCC, 2);
         const auto full_bank = localLabel();
-        emitCompare(4, 0x40); emitLocalJump(full_bank, 13);
-        emitCompare(0, 0x8000); emitGuard(13, 2);
+        emitCompare(Register::R4_LMULT_LO, 0x40); emitLocalJump(full_bank, 13);
+        emitCompare(Register::R0, 0x8000); emitGuard(OpCode::BCS, 2);
         bindLabel(full_bank);
     } else if (isFarPointer(pointer)) {
-        emitCompare(4, 0x70); emitGuard(13, 2);
-        emitCompare(4, 0x72); emitGuard(12, 2);
+        emitCompare(Register::R4_LMULT_LO, 0x70); emitGuard(OpCode::BCS, 2);
+        emitCompare(Register::R4_LMULT_LO, 0x72); emitGuard(OpCode::BCC, 2);
     }
 }
 
@@ -172,7 +175,7 @@ void IRCodeGenerator::emitWordSpillStore(IRValueId value, std::uint8_t source) {
     // In particular R6 remains available for a parallel-copy cycle.
     emitRegisterLiteral(3, static_cast<std::uint16_t>(m_spill_offsets.at(value.value)));
     emitByte(0xb9); emitByte(0x13); emitByte(0x53);
-    emitStore(3, source, false);
+    emitStore(Register::R3, source, false);
     if (globallyOptimized()) m_accumulator_value = cached;
 }
 
@@ -193,18 +196,18 @@ void IRCodeGenerator::emitSpill(IRValueId value, bool load) {
     // Preserve the baseline and far-pair encodings, whose bank word also
     // participates in address selection. Optimized word stores keep R0.
     if (!load && optimized() && !isFarPointer(type)) { emitWordSpillStore(value, 0); return; }
-    if (!load) emitMove(6, 0);
+    if (!load) emitMove(Register::R6_LMULT_HI, 0);
     emitRegisterLiteral(3, static_cast<std::uint16_t>(m_spill_offsets.at(value.value)));
     emitByte(0xb9); emitByte(0x13); emitByte(0x53); // R3 = FP + signed frame displacement.
     if (isFarPointer(type)) {
         if (load) { emitByte(0x14); emitByte(0x43); } // bank word -> R4
-        else emitStore(3, 4, false);
+        else emitStore(Register::R3, 4, false);
         emitByte(0xd3); emitByte(0xd3);
     }
     if (load) emitByte(0x43); // offset/scalar -> R0
     else {
-        emitStore(3, 6, false);
-        emitMove(0, 6);
+        emitStore(Register::R3, 6, false);
+        emitMove(Register::R0, 6);
         // Scalar stores preserve the exact R0 bits. Loads, calls, labels
         // and bank-sensitive operations still invalidate the snapshot.
         if (globallyOptimized() && !isFarPointer(type)) m_accumulator_value = cached;
@@ -222,7 +225,7 @@ void IRCodeGenerator::retainSpillCopy(IRValueId value, bool after_load) {
     if (reg < 0) return;
     const auto reload = GSUCostModel::spillLoad(m_spill_offsets.at(value.value)).pressureScore();
     if (reload <= GSUCostModel::copy().pressureScore() * 2) return;
-    emitMove(static_cast<std::uint8_t>(reg), 0);
+    emitMove(static_cast<Register>(static_cast<std::uint8_t>(reg)), 0);
     m_spill_cache.record(static_cast<std::uint8_t>(reg), value);
 }
 
@@ -232,7 +235,7 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
     const auto stride = static_cast<std::uint16_t>(instruction.immediate);
     materialize(instruction.operands[1]);
     if (index_type.sizeInBytes == 1 && !index_type.is_unsigned) emitByte(0x95);
-    emitMove(6, 0); // Signed displacement/count, retained across pointer materialization.
+    emitMove(Register::R6_LMULT_HI, 0); // Signed displacement/count, retained across pointer materialization.
     materialize(instruction.operands[0]);
     // Reloading a spill uses R3, not R6. All checked-address values are eager
     // frame values, so there can be no intervening call/rematerialized load.
@@ -250,15 +253,15 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
     if (instruction.operands.size() == 3) {
         // The recurrence is modulo 2^16. Never let its wrap mask an illegal
         // scaled displacement: check the original index before using it.
-        emitCompare(6, static_cast<std::uint16_t>(65535u / stride + 1)); emitGuard(12, 3);
-        emitMove(4, 0);
-        materialize(instruction.operands[2]); emitMove(6, 0); emitMove(0, 4);
+        emitCompare(Register::R6_LMULT_HI, static_cast<std::uint16_t>(65535u / stride + 1)); emitGuard(OpCode::BCC, 3);
+        emitMove(Register::R4_LMULT_LO, 0);
+        materialize(instruction.operands[2]); emitMove(Register::R6_LMULT_HI, 0); emitMove(Register::R0, 4);
         const bool subtract = instruction.operation == "scaled-";
-        emitByte(subtract ? 0x66 : 0x56); emitGuard(subtract ? 13 : 12, 3);
+        emitByte(subtract ? 0x66 : 0x56); emitGuard(subtract ? OpCode::BCS : OpCode::BCC, 3);
         if (pointer.space == AddressSpace::ROM && subtract) {
             const auto full = localLabel();
-            emitNearBank(4, AddressSpace::ROM); emitCompare(4, 0x40); emitLocalJump(full, 13);
-            emitCompare(0, 0x8000); emitGuard(13, 3); bindLabel(full);
+            emitNearBank(4, AddressSpace::ROM); emitCompare(Register::R4_LMULT_LO, 0x40); emitLocalJump(full, 13);
+            emitCompare(Register::R0, 0x8000); emitGuard(OpCode::BCS, 3); bindLabel(full);
         }
         emitAddressCheck(pointer, stride);
         if (globallyOptimized() && pointer.space == AddressSpace::RAM && !isFarPointer(pointer) && m_checked_addresses.size() < 1024)
@@ -271,20 +274,20 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
         // Far byte window transitions keep their original explicit algorithm.
         const auto negative = localLabel(), done = localLabel();
         if (!index_type.is_unsigned) {
-            emitCompare(6, 0); emitLocalJump(negative, 11);
+            emitCompare(Register::R6_LMULT_HI, 0); emitLocalJump(negative, 11);
         }
         const auto step = [&](bool subtract) {
             for (std::uint16_t scale = stride; scale > 1; scale >>= 1) {
                 emitByte(0xb6); emitByte(0x16); emitByte(0x56);
-                emitGuard(12, 3); // Magnitude multiplication must not overflow.
+                emitGuard(OpCode::BCC, 3); // Magnitude multiplication must not overflow.
             }
             emitByte(static_cast<std::uint8_t>(subtract ? 0x66 : 0x56));
-            emitGuard(subtract ? 13 : 12, 3);
+            emitGuard(subtract ? OpCode::BCS : OpCode::BCC, 3);
             if (pointer.space == AddressSpace::ROM && subtract) {
                 const auto full = localLabel();
                 emitNearBank(4, AddressSpace::ROM);
-                emitCompare(4, 0x40); emitLocalJump(full, 13);
-                emitCompare(0, 0x8000); emitGuard(13, 3);
+                emitCompare(Register::R4_LMULT_LO, 0x40); emitLocalJump(full, 13);
+                emitCompare(Register::R0, 0x8000); emitGuard(OpCode::BCS, 3);
                 bindLabel(full);
             }
         };
@@ -302,7 +305,7 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
     }
     const auto positive = localLabel(), negative = localLabel(), done = localLabel();
     if (!index_type.is_unsigned) {
-        emitCompare(6, 0); emitLocalJump(instruction.operation == "+" ? negative : positive, 11);
+        emitCompare(Register::R6_LMULT_HI, 0); emitLocalJump(instruction.operation == "+" ? negative : positive, 11);
     }
     emitLocalJump(instruction.operation == "+" ? positive : negative);
 
@@ -314,7 +317,7 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
         const bool count_negative = !index_type.is_unsigned &&
             ((instruction.operation == "+" && subtract) || (instruction.operation == "-" && !subtract));
         bindLabel(loop);
-        emitCompare(6, 0); emitLocalJump(done, 9);
+        emitCompare(Register::R6_LMULT_HI, 0); emitLocalJump(done, 9);
         if (stride > 1 || !isFarPointer(pointer)) {
             // Check BEFORE arithmetic. This rejects even aligned word carries
             // and cannot transiently wrap an address used by typed memory.
@@ -322,20 +325,20 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
                 if (pointer.space == AddressSpace::ROM) {
                     if (!isFarPointer(pointer)) emitNearBank(4, AddressSpace::ROM);
                     const auto full = localLabel(), checked = localLabel();
-                    emitCompare(4, 0x40); emitLocalJump(full, 13);
+                    emitCompare(Register::R4_LMULT_LO, 0x40); emitLocalJump(full, 13);
                     // A whole 32 KiB LoROM object has no preceding same-bank
                     // slot. Do not narrow the unrepresentable $10000 limit.
                     if (stride >= 0x8000u) emitAddressFault(3);
                     else {
-                        emitCompare(0, static_cast<std::uint16_t>(0x8000u + stride));
-                        emitGuard(13, 3);
+                        emitCompare(Register::R0, static_cast<std::uint16_t>(0x8000u + stride));
+                        emitGuard(OpCode::BCS, 3);
                     }
                     emitLocalJump(checked);
-                    bindLabel(full); emitCompare(0, stride); emitGuard(13, 3);
+                    bindLabel(full); emitCompare(Register::R0, stride); emitGuard(OpCode::BCS, 3);
                     bindLabel(checked);
-                } else { emitCompare(0, stride); emitGuard(13, 3); }
+                } else { emitCompare(Register::R0, stride); emitGuard(OpCode::BCS, 3); }
             } else {
-                emitCompare(0, static_cast<std::uint16_t>(65536u - stride)); emitGuard(12, 3);
+                emitCompare(Register::R0, static_cast<std::uint16_t>(65536u - stride)); emitGuard(OpCode::BCC, 3);
             }
             emitRegisterLiteral(3, stride);
             emitByte(static_cast<std::uint8_t>(subtract ? 0x63 : 0x53));
@@ -346,27 +349,27 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
             if (subtract) {
                 if (pointer.space == AddressSpace::ROM) {
                     const auto full = localLabel();
-                    emitCompare(4, 0x40); emitLocalJump(full, 13);
-                    emitCompare(0, 0x8000); emitLocalJump(simple, 8);
-                    emitCompare(4, 0); emitGuard(8, 3);
+                    emitCompare(Register::R4_LMULT_LO, 0x40); emitLocalJump(full, 13);
+                    emitCompare(Register::R0, 0x8000); emitLocalJump(simple, 8);
+                    emitCompare(Register::R4_LMULT_LO, 0); emitGuard(OpCode::BNE, 3);
                     emitByte(0xe4); emitRegisterLiteral(0, 0xffff);
                     emitLocalJump(stepped);
                     bindLabel(full);
                 }
-                emitCompare(0, 0); emitLocalJump(simple, 8);
-                emitCompare(4, pointer.space == AddressSpace::ROM ? 0x40 : 0x70); emitGuard(8, 3);
+                emitCompare(Register::R0, 0); emitLocalJump(simple, 8);
+                emitCompare(Register::R4_LMULT_LO, pointer.space == AddressSpace::ROM ? 0x40 : 0x70); emitGuard(OpCode::BNE, 3);
                 emitByte(0xe4); emitRegisterLiteral(0, 0xffff);
             } else {
-                emitCompare(0, 0xffff); emitLocalJump(simple, 8);
+                emitCompare(Register::R0, 0xffff); emitLocalJump(simple, 8);
                 if (pointer.space == AddressSpace::ROM) {
                     const auto full = localLabel();
-                    emitCompare(4, 0x40); emitLocalJump(full, 13);
-                    emitCompare(4, 0x3f); emitGuard(8, 3);
+                    emitCompare(Register::R4_LMULT_LO, 0x40); emitLocalJump(full, 13);
+                    emitCompare(Register::R4_LMULT_LO, 0x3f); emitGuard(OpCode::BNE, 3);
                     emitByte(0xd4); emitRegisterLiteral(0, 0x8000);
                     emitLocalJump(stepped);
                     bindLabel(full);
                 }
-                emitCompare(4, pointer.space == AddressSpace::ROM ? 0x5f : 0x71); emitGuard(8, 3);
+                emitCompare(Register::R4_LMULT_LO, pointer.space == AddressSpace::ROM ? 0x5f : 0x71); emitGuard(OpCode::BNE, 3);
                 emitByte(0xd4); emitRegisterLiteral(0, 0);
             }
             emitLocalJump(stepped);

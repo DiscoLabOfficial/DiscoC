@@ -48,6 +48,12 @@ void parsing() {
     require(manifest.string("output.assembly") == "final \xf0\x9f\x98\x80.s", "Unicode escapes");
     require(manifest.find("target.gsu.origin")->line == 10, "Value source location");
     require(Manifest::parse("", "empty.toml").target() == TargetKind::GSU, "Empty linker config defaults");
+    const auto defaults = Manifest::parse("", "defaults.toml");
+    std::string fallback = "custom.bin";
+    require(defaults.string("output.binary", {fallback}) == "custom.bin" && fallback == "custom.bin",
+            "Returning an owned fallback must not consume the caller's string");
+    require(defaults.string("output.binary", {std::string("computed") + ".bin"}) == "computed.bin",
+            "Computed string defaults must remain valid after lookup");
     require(Manifest::parse("[target.gsu]\norigin = +32768", "signed.toml").number("target.gsu.origin", 0) == 32768,
             "Signed decimal decoding");
     require(Manifest::parse("[output]\nbinary = 'quote\"\\file.bin'", "literal.toml").string("output.binary") == "quote\"\\file.bin",

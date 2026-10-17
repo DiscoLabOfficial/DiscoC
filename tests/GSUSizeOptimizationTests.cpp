@@ -206,6 +206,40 @@ void boundedFusion() {
     require(first == dumpIR(module), "A second fusion invocation exceeded its per-function pair cap");
 }
 
+void reusableDivisionContexts() {
+    const std::string source =
+        "word signed_div(word a,word b,word c){return a/b+c/b;} "
+        "unsigned word unsigned_div(unsigned word a,unsigned word b,unsigned word c){return a/b+c/b;} "
+        "word main(){return signed_div(*(volatile word*)0x100,*(volatile word*)0x102,*(volatile word*)0x104)"
+        "+(word)unsigned_div(*(volatile unsigned word*)0x106,*(volatile unsigned word*)0x108,*(volatile unsigned word*)0x10a);}";
+    Lexer lexer(source);
+    const auto tokens = lexer.scanTokens();
+    Parser parser(tokens);
+    auto ast = parser.parseProgram();
+    DataSegmentManager data;
+    Analyzer analyzer(data);
+    analyzer.analyze(ast);
+    IRLowerer lowerer;
+    const auto module = lowerer.lower(ast);
+    CompilerConfig config;
+    config.optimization = OptimizationLevel::Size;
+    IRCodeGenerator backend(analyzer.getAllLocalSymbols(), analyzer.getFunctionSymbols(), data, config);
+    const auto expected = backend.generate(module);
+    for (const auto* suffix : {"s", "u"}) {
+        std::size_t kernels = 0;
+        for (const auto& symbol : expected.symbol_table)
+            kernels += symbol.name == std::string(1, '\x01') + "__disco_os_divmod_" + suffix;
+        require(kernels == 1, "Signed and unsigned divisions must own distinct private helper contexts");
+    }
+    const auto assembly = AssemblyGenerator(expected).generate();
+    for (unsigned repeat = 0; repeat < 3; ++repeat) {
+        const auto actual = backend.generate(module);
+        require(actual.code_section == expected.code_section && actual.data_section == expected.data_section &&
+                AssemblyGenerator(actual).generate() == assembly,
+                "Reusing a backend retained a temporary helper borrow or stale label state");
+    }
+}
+
 void sizePolicy() {
     const auto tail = [](const std::string& source, unsigned expected) {
         Lexer lexer(source); const auto tokens = lexer.scanTokens(); Parser parser(tokens); auto ast = parser.parseProgram();
@@ -238,7 +272,7 @@ void sizePolicy() {
 
 int main() {
     try {
-        divmod(); phiStress(); sharedTails(); boundedFusion(); sizePolicy();
+        divmod(); phiStress(); sharedTails(); boundedFusion(); sizePolicy(); reusableDivisionContexts();
         std::cout << "O2/Os divmod, exact-tail sharing, PHI interference and deterministic codegen checks passed\n";
     } catch (const CompilerError& e) { std::cerr << e.getMessage() << '\n'; return 1; }
       catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

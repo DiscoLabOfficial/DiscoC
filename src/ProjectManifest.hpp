@@ -22,6 +22,11 @@ struct Value {
     std::size_t line = 1, column = 1;
 };
 
+// Own the default separately from the lookup key; the two cannot be swapped.
+struct StringFallback {
+    std::string value;
+};
+
 // Owns decoded values. The bounded reader supports the documented manifest
 // subset of TOML; unsupported TOML constructs are errors, never ignored text.
 struct Manifest {
@@ -31,7 +36,7 @@ struct Manifest {
     static Manifest read(const std::string& path);
     void validate() const;
     const Value* find(const std::string& key) const;
-    std::string string(const std::string& key, const std::string& fallback = "") const;
+    std::string string(const std::string& key, StringFallback fallback = {}) const;
     bool boolean(const std::string& key, bool fallback = false) const;
     std::uint32_t number(const std::string& key, std::uint32_t fallback) const;
     TargetKind target() const;

@@ -6,6 +6,11 @@
 // Forward declaration of the helper function. We just promise it exists.
 std::string to_string(TokenType type);
 
+struct SourcePosition {
+    int line;
+    int column;
+};
+
 struct Token {
     TokenType type;
     std::string lexeme;
@@ -15,6 +20,7 @@ struct Token {
 
     // The constructor is a good way to initialize the token.
     Token(TokenType type, std::string lexeme, int line, int col);
+    Token(TokenType type, std::string lexeme, SourcePosition position);
     Token(TokenType kind, std::string text, const Token& source)
         : Token(kind, std::move(text), source.line_number, source.col_number) { source_path = source.source_path; }
 

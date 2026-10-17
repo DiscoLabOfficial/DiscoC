@@ -143,17 +143,17 @@ bool IRCodeGenerator::emitConstantArithmetic(const IRInstruction& instruction) {
     if (op == "/") {
         if (count != 0) {
             const auto positive = localLabel();
-            emitCompare(0, 0); emitLocalJump(positive, 10);
+            emitCompare(Register::R0, 0); emitLocalJump(positive, 10);
             // Bias a negative dividend before ASR to truncate toward zero,
             // not toward minus infinity. This sum cannot overflow a word.
-            emitImmediateArithmetic(0x50, mask, instruction.source);
+            emitImmediateArithmetic(OpCode::ADD_R, mask, instruction.source);
             bindLabel(positive);
             emitConstantShift(false, count, false);
         }
         if (negate) { emitByte(0x4f); emitByte(0xd0); }
     } else {
         const auto positive = localLabel(), done = localLabel();
-        emitCompare(0, 0); emitLocalJump(positive, 10);
+        emitCompare(Register::R0, 0); emitLocalJump(positive, 10);
         // The remainder follows the dividend's sign, even for a negative
         // divisor; the unsigned magnitude also represents abs(-32768).
         emitByte(0x4f); emitByte(0xd0); emitWordMask(mask);
@@ -170,9 +170,9 @@ void IRCodeGenerator::emitPointerCompare(const IRInstruction& instruction) {
     emitPush(0);
     if (far) emitPush(4);
     materialize(instruction.operands.back());
-    emitMove(3, 0);
+    emitMove(Register::R3, 0);
     if (far) {
-        emitMove(6, 4); emitPop(4);
+        emitMove(Register::R6_LMULT_HI, 4); emitPop(4);
         emitByte(0xb4); emitByte(0x3f); emitByte(0x66);
         emitLocalJump(unequal_bank, 8);
     }
@@ -198,11 +198,11 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
     }
     if (operation == "<<" || operation == ">>") {
         // Counts are checked, never silently masked by the target ISA.
-        emitMove(6, scratch);
-        emitCompare(6, 16);
-        emitGuard(12, 5);
+        emitMove(Register::R6_LMULT_HI, scratch);
+        emitCompare(Register::R6_LMULT_HI, 16);
+        emitGuard(OpCode::BCC, 5);
         const auto loop = localLabel(), end = localLabel();
-        emitCompare(6, 0);
+        emitCompare(Register::R6_LMULT_HI, 0);
         emitLocalJump(end, 9);
         bindLabel(loop);
         if (operation == "<<") emitByte(0x50); // ADD R0: modular left shift.
@@ -223,30 +223,30 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
     // Fixed sixteen-step restoring division. R1 carries dividend/quotient,
     // R2 the remainder, R3 the divisor, R4 the count. R12/R13 are untouched
     // so this is safe inside hardware loops. Preserve plotting coordinates.
-    emitMove(4, scratch); // Stack guards use R3; retain the divisor across pushes.
+    emitMove(Register::R4_LMULT_LO, scratch); // Stack guards use R3; retain the divisor across pushes.
     if (m_isInPlottingContext) { emitPush(1); emitPush(2); }
-    emitMove(3, 4);
-    emitMove(1, 0);
+    emitMove(Register::R3, 4);
+    emitMove(Register::R1_PIXEL_X, 0);
     emitRegisterLiteral(6, 0);
     emitByte(0xb3); emitByte(0x3f); emitByte(0x66);
     const auto division_guard_slot = m_object_file.code_section.size() + 2;
-    emitGuard(8, 6);
+    emitGuard(OpCode::BNE, 6);
     const bool signed_operation = !instruction.type.is_unsigned;
     if (signed_operation) {
-        emitMove(4, 3);
+        emitMove(Register::R4_LMULT_LO, 3);
         emitRegisterLiteral(6, 0x8000);
-        emitMove(0, 1); emitByte(0x3d); emitByte(0xc3); emitByte(0x76);
+        emitMove(Register::R0, 1); emitByte(0x3d); emitByte(0xc3); emitByte(0x76);
         emitPush(0); // Quotient sign: dividend XOR divisor.
-        emitMove(3, 4);
-        emitMove(0, 1); emitByte(0x76); emitPush(0); // Remainder sign: dividend.
-        emitMove(3, 4);
+        emitMove(Register::R3, 4);
+        emitMove(Register::R0, 1); emitByte(0x76); emitPush(0); // Remainder sign: dividend.
+        emitMove(Register::R3, 4);
         const auto make_positive = [&](std::uint8_t reg) {
             const auto positive = localLabel();
             emitByte(static_cast<std::uint8_t>(0xb0 | reg));
             emitByte(static_cast<std::uint8_t>(0x10 | reg));
             emitByte(0x3e); emitByte(0x50); // ADD #0 sets sign, leaves operand intact.
             emitLocalJump(positive, 10);
-            emitMove(0, reg); emitByte(0x4f); emitByte(0xd0); emitMove(reg, 0);
+            emitMove(Register::R0, reg); emitByte(0x4f); emitByte(0xd0); emitMove(static_cast<Register>(reg), 0);
             bindLabel(positive);
         };
         make_positive(1);
@@ -278,7 +278,7 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
     emitByte(0xe4);
     emitLocalJump(loop, 8);
     const bool combined = instruction.opcode == IROpcode::DivMod;
-    if (!combined) emitMove(0, operation == "/" ? 1 : 2);
+    if (!combined) emitMove(Register::R0, operation == "/" ? 1 : 2);
     if (signed_operation) {
         emitPop(6); emitPop(3);
         emitRegisterLiteral(4, 0);
@@ -287,7 +287,7 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
                 const auto positive = localLabel();
                 emitByte(static_cast<std::uint8_t>(0xb0 | sign)); emitByte(0x3f); emitByte(0x64);
                 emitLocalJump(positive, 9);
-                emitMove(0, value); emitByte(0x4f); emitByte(0xd0); emitMove(value, 0);
+                emitMove(Register::R0, value); emitByte(0x4f); emitByte(0xd0); emitMove(static_cast<Register>(value), 0);
                 bindLabel(positive);
             };
             restore_sign(1, 3); restore_sign(2, 6);
@@ -305,15 +305,15 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
         // projection cannot assume those physical helper registers survive.
         emitRegisterLiteral(3, static_cast<std::uint16_t>(m_divmod_offsets.at(instruction.result.value)));
         emitByte(0xb9); emitByte(0x13); emitByte(0x53);
-        emitStore(3, operation == "/" ? 2 : 1, false);
-        emitMove(0, operation == "/" ? 1 : 2);
+        emitStore(Register::R3, operation == "/" ? 2 : 1, false);
+        emitMove(Register::R0, operation == "/" ? 1 : 2);
     }
     if (m_isInPlottingContext) { emitPop(2); emitPop(1); }
 }
 
 void IRCodeGenerator::emitDivMod(const IRInstruction& instruction) {
     if (!globallyOptimized()) fail("IR codegen: divmod requires the O2 backend.", instruction.source);
-    emitBinaryOperands(instruction.operands.at(0), instruction.operands.at(1));
+    emitBinaryOperands(instruction);
     emitIntegerOperation(instruction);
 }
 
@@ -329,25 +329,25 @@ void IRCodeGenerator::emitSharedDivision(const IRInstruction& instruction) {
     // R0/R3/R4/R6/R11/flags. R5/R7/R8/R9/R10/R12/R13/R14 and banks survive.
     // The enclosing function already owns its saved R11. This helper neither
     // nests calls nor adds a return-address word to the stack.
-    emitMove(4, scratchRegister());
+    emitMove(Register::R4_LMULT_LO, scratchRegister());
     if (m_isInPlottingContext) { emitPush(1); emitPush(2); }
-    emitMove(3, 4); emitMove(1, 0);
+    emitMove(Register::R3, 4); emitMove(Register::R1_PIXEL_X, 0);
     const bool is_unsigned = instruction.type.is_unsigned;
     const std::string label = std::string(1, '\x01') + "__disco_os_divmod_" + (is_unsigned ? "u" : "s");
     m_division_helpers.insert(is_unsigned);
     m_spill_cache.clear(); m_last_ram_word_address = IRValueId{};
     emitByte(0x94);
     const auto patch = m_object_file.code_section.size();
-    emitWordLiteral(15, 0); addRelocation(label, patch, RelocationType::ADDR16_IWT); emitByte(1);
+    emitWordLiteral(Register::R15_PC, 0); addRelocation(label, patch, RelocationType::ADDR16_IWT); emitByte(1);
     // Balanced kernel sign pushes still require their own runtime checks.
     // Never carry caller-only stack credit into an outlined implementation.
     m_stack_check_credit.reset();
     if (instruction.opcode == IROpcode::DivMod) {
         emitRegisterLiteral(3, static_cast<std::uint16_t>(m_divmod_offsets.at(instruction.result.value)));
         emitByte(0xb9); emitByte(0x13); emitByte(0x53);
-        emitStore(3, instruction.operation == "/" ? 2 : 1, false);
+        emitStore(Register::R3, instruction.operation == "/" ? 2 : 1, false);
     }
-    emitMove(0, instruction.operation == "/" ? 1 : 2);
+    emitMove(Register::R0, instruction.operation == "/" ? 1 : 2);
     if (m_isInPlottingContext) { emitPop(2); emitPop(1); }
 }
 
@@ -358,26 +358,26 @@ void IRCodeGenerator::emitDivisionHelpers() {
         ~FunctionObserverGuard() { observer = previous; }
     };
     for (const bool is_unsigned : m_division_helpers) {
-        IRFunction helper; helper.name = "__disco_os.divmod." + std::string(is_unsigned ? "u" : "s");
-        // Restore this borrow before the temporary descriptor is destroyed,
-        // including branch-relaxation retries that unwind through this scope.
+        m_division_helper_context.name = "__disco_os.divmod." + std::string(is_unsigned ? "u" : "s");
+        // Restore the caller's context on every exit, including retries that
+        // unwind through this scope. The synthetic descriptor is backend-owned.
         const FunctionObserverGuard restore{m_current_function, m_current_function};
-        m_current_function = &helper;
+        m_current_function = &m_division_helper_context;
         m_branch_fixups.clear(); m_block_addresses.clear(); m_branch_serial = 0; m_local_label_serial = 0;
         m_fault_offsets.clear(); m_spill_cache.clear(); m_last_ram_word_address = IRValueId{};
         m_isInPlottingContext = false; m_stack_check_credit.reset();
         bindLabel(std::string(1, '\x01') + "__disco_os_divmod_" + (is_unsigned ? "u" : "s"));
-        emitRegisterLiteral(6, 0); emitByte(0xb3); emitByte(0x3f); emitByte(0x66); emitGuard(8, 6);
+        emitRegisterLiteral(6, 0); emitByte(0xb3); emitByte(0x3f); emitByte(0x66); emitGuard(OpCode::BNE, 6);
         if (!is_unsigned) {
-            emitMove(4, 3); emitRegisterLiteral(6, 0x8000);
-            emitMove(0, 1); emitByte(0x3d); emitByte(0xc3); emitByte(0x76); emitPush(0);
-            emitMove(3, 4);
-            emitMove(0, 1); emitByte(0x76); emitPush(0); emitMove(3, 4);
+            emitMove(Register::R4_LMULT_LO, 3); emitRegisterLiteral(6, 0x8000);
+            emitMove(Register::R0, 1); emitByte(0x3d); emitByte(0xc3); emitByte(0x76); emitPush(0);
+            emitMove(Register::R3, 4);
+            emitMove(Register::R0, 1); emitByte(0x76); emitPush(0); emitMove(Register::R3, 4);
             for (const std::uint8_t reg : {std::uint8_t{1}, std::uint8_t{3}}) {
                 const auto positive = localLabel();
                 emitByte(static_cast<std::uint8_t>(0xb0 | reg)); emitByte(static_cast<std::uint8_t>(0x10 | reg));
                 emitByte(0x3e); emitByte(0x50); emitLocalJump(positive, 10);
-                emitMove(0, reg); emitByte(0x4f); emitByte(0xd0); emitMove(reg, 0); bindLabel(positive);
+                emitMove(Register::R0, reg); emitByte(0x4f); emitByte(0xd0); emitMove(static_cast<Register>(reg), 0); bindLabel(positive);
             }
         }
         emitRegisterLiteral(2, 0); emitRegisterLiteral(4, 16);
@@ -396,7 +396,7 @@ void IRCodeGenerator::emitDivisionHelpers() {
                 const auto positive = localLabel();
                 emitByte(static_cast<std::uint8_t>(0xb0 | pair.second)); emitByte(0x3f); emitByte(0x64);
                 emitLocalJump(positive, 9);
-                emitMove(0, pair.first); emitByte(0x4f); emitByte(0xd0); emitMove(pair.first, 0); bindLabel(positive);
+                emitMove(Register::R0, pair.first); emitByte(0x4f); emitByte(0xd0); emitMove(static_cast<Register>(pair.first), 0); bindLabel(positive);
             }
         }
         emitByte(0x9b); emitByte(1);

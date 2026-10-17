@@ -29,7 +29,9 @@ std::vector<Instruction> decode(const ObjectFile& object, std::set<std::size_t>&
         const std::size_t length = op >= 0xf0 ? 3 : (op >= 0xa0 && op <= 0xaf) || (op >= 5 && op <= 15) ? 2 : 1;
         if (length > object.code_section.size() - p) throw std::runtime_error("GSU scheduler: truncated compiler instruction.");
         Instruction i; i.old = p;
-        i.bytes.assign(object.code_section.begin() + p, object.code_section.begin() + p + length);
+        // run() caps CODE at 65536 bytes before decode, including the endpoint.
+        const auto begin = object.code_section.begin() + static_cast<std::ptrdiff_t>(p);
+        i.bytes.assign(begin, begin + static_cast<std::ptrdiff_t>(length));
         if (op >= 5 && op <= 15) {
             const auto distance = i.bytes[1] < 128 ? static_cast<int>(i.bytes[1]) : static_cast<int>(i.bytes[1]) - 256;
             const auto target = static_cast<std::int64_t>(p) + 2 + distance;
@@ -100,8 +102,9 @@ bool registerSlot(const Instruction& i, std::uint8_t branch) {
         writes = op <= 0x6f ? Sign | Zero | Carry | Overflow : Sign | Zero;
     } else if (op == 3 || op == 4 || op == 0x96 || op == 0x97) writes = Sign | Zero | Carry;
     else if (op == 0x4d || op == 0x4f || op == 0x95 || op == 0x9e || op == 0xc0) writes = Sign | Zero;
-    else if (op == 0x4e) writes = 0; // COLOR/CMODE; executed on both paths, not speculated.
-    else if (op == 0x4c && i.alt == 0) writes = 0; // PLOT includes R1's hardware increment.
+    // COLOR/CMODE and plain PLOT preserve flags, but keep their state effects.
+    // PLOT still includes R1's hardware increment.
+    else if (op == 0x4e || (op == 0x4c && i.alt == 0)) writes = 0;
     else return false;
     // Branch preserves selectors and does not modify NZCV. Its decision may
     // move before an operation only if that operation leaves its inputs intact.
@@ -109,7 +112,10 @@ bool registerSlot(const Instruction& i, std::uint8_t branch) {
 }
 // Only fault-free register operations, with neither PC/ROM-pointer effects nor
 // memory/volatile accesses. Prefixes are moved with their complete copy pair.
-std::size_t independent(const std::vector<Instruction>& code, std::size_t at, unsigned forbidden) {
+struct SchedulingPoint { std::size_t index; unsigned forbidden_registers; };
+std::size_t independent(const std::vector<Instruction>& code, SchedulingPoint point) {
+    const auto at = point.index;
+    const auto forbidden = point.forbidden_registers;
     if (at >= code.size() || !code[at].plain || code[at].delay_slot) return 0;
     const auto op = code[at].bytes[0];
     const unsigned reg = op & 15u;
@@ -200,17 +206,21 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
             read = n + 1; end = n + 2; destination = op & 15;
         } else continue;
         unsigned forbidden = destination == 16 ? 0 : 1u << destination;
-        auto work = independent(code, end, forbidden);
+        auto work = independent(code, {end, forbidden});
         std::size_t gap = 0;
         if (!work && end < code.size() && code[end].bytes[0] == 0x4c && code[end].plain) {
             // A PLOT depends on the new COLR, but pure following counter work
             // may move before both. Preserve R1/R2 reads AND R1 auto-increment.
-            gap = 1; forbidden |= 6u; work = independent(code, end + gap, forbidden);
+            gap = 1; forbidden |= 6u; work = independent(code, {end + gap, forbidden});
         }
         if (!work || !freeRange(code, n, end + gap + work, protected_offsets)) continue;
         // A consumer resets selectors; hence the following operation's original
         // plain state is also valid before the consumer's complete prefix group.
-        std::rotate(code.begin() + n, code.begin() + end + gap, code.begin() + end + gap + work);
+        // Every decoded instruction occupies at least one byte in the bounded
+        // CODE image, so all these instruction indices fit ptrdiff_t.
+        std::rotate(code.begin() + static_cast<std::ptrdiff_t>(n),
+                    code.begin() + static_cast<std::ptrdiff_t>(end + gap),
+                    code.begin() + static_cast<std::ptrdiff_t>(end + gap + work));
         ++stats.rom_operations;
         n = read + work + gap;
     }
@@ -226,7 +236,8 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
             freeRange(code, n + 1, n + 2, protected_offsets)) {
             // Leave complete source/destination/ALT prefixes in place. Only
             // the final physical opcode executes in the old-flow delay slot.
-            code[n + 1] = candidate; code[n + 1].delay_slot = true; code.erase(code.begin() + n - 1);
+            code[n + 1] = candidate; code[n + 1].delay_slot = true;
+            code.erase(code.begin() + static_cast<std::ptrdiff_t>(n - 1));
             ++stats.delay_slots; if (n > 1) --n; continue;
         }
         const auto copy_opcode = candidate.bytes[0];
@@ -241,18 +252,19 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
             // MOVES writes N/Z/V, so only BRA and carry branches may precede it.
             // The one-byte copy clears selectors before either successor.
             // IWT/JMP/LINK/LOOP clear that prefix, so this rule excludes them.
-            code[n + 1] = candidate; code[n + 1].delay_slot = true; code.erase(code.begin() + n - 1);
+            code[n + 1] = candidate; code[n + 1].delay_slot = true;
+            code.erase(code.begin() + static_cast<std::ptrdiff_t>(n - 1));
             ++stats.delay_slots; if (n > 1) --n; continue;
         }
         if (!candidate.plain || (!increment(candidate) && candidate.bytes[0] != 0x4c)) continue;
         std::size_t slot = n + 1;
         bool legal = false;
-        if (op == 5) legal = increment(candidate); // BRA: does not inspect NZCV.
+        // BRA and plain IWT R15 do not inspect NZCV.
+        if (op == 5 || (op == 0xff && code[n].alt == 0)) legal = increment(candidate);
         else if (op >= 6 && op <= 15) {
             // INC/DEC write N/Z. Only C/V branches may move them after testing.
             legal = increment(candidate) && op >= 12;
-        } else if (op == 0xff && code[n].alt == 0) legal = increment(candidate);
-        else if (op >= 0x98 && op <= 0x9d && code[n].alt == 0)
+        } else if (op >= 0x98 && op <= 0x9d && code[n].alt == 0)
             legal = increment(candidate) && (candidate.bytes[0] & 15) != (op & 15);
         else if (op == 0x94 && n + 2 < code.size() && code[n + 1].bytes[0] == 0xff && code[n + 1].alt == 0) {
             slot = n + 2; legal = increment(candidate) && (candidate.bytes[0] & 15) != 11;
@@ -264,7 +276,7 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
         // fetched at the taken destination, not beside the old-flow opcode.
         code[slot] = candidate;
         code[slot].delay_slot = true;
-        code.erase(code.begin() + n - 1);
+        code.erase(code.begin() + static_cast<std::ptrdiff_t>(n - 1));
         ++stats.delay_slots;
         if (n > 1) --n;
     }

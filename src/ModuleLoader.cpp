@@ -102,7 +102,9 @@ std::size_t ModuleLoader::loadFile(const std::string& path, bool interface, cons
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file) throw CompilerError("Cannot open module interface/source: " + path, origin);
         const auto size = file.tellg();
-        if (size < 0 || size > 16 * 1024 * 1024 || static_cast<std::size_t>(size) > 32 * 1024 * 1024 - m_total_bytes)
+        constexpr std::streamoff MaxFileBytes = std::streamoff{16} * 1024 * 1024;
+        constexpr std::size_t MaxTotalBytes = std::size_t{32} * 1024 * 1024;
+        if (size < 0 || size > MaxFileBytes || static_cast<std::size_t>(size) > MaxTotalBytes - m_total_bytes)
             throw CompilerError("Module source exceeds per-file/total byte limit.", origin);
         std::string source(static_cast<std::size_t>(size), '\0');
         file.seekg(0);

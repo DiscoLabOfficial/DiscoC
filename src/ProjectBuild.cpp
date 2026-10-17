@@ -69,8 +69,8 @@ int buildProject(const std::vector<std::string>& arguments) {
             } else if (link_values.count(flag)) {
                 const auto value = next(); link_flags.insert(link_flags.end(), {flag, value});
             } else if (link_switches.count(flag)) link_flags.push_back(flag);
-            else if (flag == "-O" || flag == "-O0" || flag == "-O1" || flag == "-O2" || flag == "-Os") compile_flags.push_back(flag);
-            else if (flag.compare(0, 2, "-W") == 0) compile_flags.push_back(flag);
+            else if (flag == "-O" || flag == "-O0" || flag == "-O1" || flag == "-O2" || flag == "-Os" ||
+                     flag.compare(0, 2, "-W") == 0) compile_flags.push_back(flag);
             else throw std::runtime_error("Unknown project-build option: " + flag);
         }
         if (path.empty()) path = "discoc.toml";
@@ -78,7 +78,7 @@ int buildProject(const std::vector<std::string>& arguments) {
         const auto* list = manifest.find("project.sources");
         if (!list || list->strings.empty()) throw std::runtime_error("Project build requires a nonempty project.sources array.");
         const auto base = parentPath(manifest.path);
-        if (output_directory.empty()) output_directory = absolutePath(manifest.string("output.directory", "build"), base);
+        if (output_directory.empty()) output_directory = absolutePath(manifest.string("output.directory", {"build"}), base);
         std::vector<std::string> sources, objects;
         for (const auto& name : list->strings) {
             const auto source = absolutePath(name, base);
@@ -108,7 +108,7 @@ int buildProject(const std::vector<std::string>& arguments) {
             sources.push_back(dependency);
         }
         std::vector<std::string> link{"discld", "--config", manifest.path, "-o",
-            absolutePath(manifest.string("output.binary", manifest.string("project.name", "new") + ".bin"), output_directory)};
+            absolutePath(manifest.string("output.binary", {manifest.string("project.name", {"new"}) + ".bin"}), output_directory)};
         if (manifest.find("output.assembly"))
             link.insert(link.end(), {"--emit-asm", absolutePath(manifest.string("output.assembly"), output_directory)});
         link.insert(link.end(), link_flags.begin(), link_flags.end());

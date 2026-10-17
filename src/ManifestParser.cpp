@@ -35,7 +35,7 @@ void appendUtf8(std::string& output, std::uint32_t point) {
 }
 class Reader {
 public:
-    Reader(const std::string& source, const std::string& path) : m_source(source) { m_result.path = path; }
+    Reader(const std::string& source, Manifest initial) : m_source(source), m_result(std::move(initial)) {}
     Manifest read() {
         if (m_source.size() > MaxManifestBytes) fail("Manifest exceeds 64 KiB.");
         validateUtf8();
@@ -238,7 +238,7 @@ private:
 } // namespace
 
 Manifest Manifest::parse(const std::string& source, const std::string& path) {
-    auto result = Reader(source, path).read(); result.validate(); return result;
+    auto result = Reader(source, Manifest{path, {}}).read(); result.validate(); return result;
 }
 Manifest Manifest::read(const std::string& path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
