@@ -1,0 +1,48 @@
+cmake_minimum_required(VERSION 3.20)
+foreach(argument IN ITEMS DISCAS DISCLD DIFFERENTIAL_RUNNER OUTPUT_DIR)
+    if(NOT DEFINED ${argument})
+        message(FATAL_ERROR "Missing ${argument}")
+    endif()
+endforeach()
+string(RANDOM LENGTH 8 ALPHABET 0123456789abcdef nonce)
+get_filename_component(directory "${OUTPUT_DIR}/reporting with spaces-${nonce}" ABSOLUTE)
+# A valid executable that cannot compile DiscoC sources creates a controlled
+# process failure, without changing the compiler or adding a bypass to it.
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DDISCC=${CMAKE_COMMAND}"
+    "-DDISCAS=${DISCAS}" "-DDISCLD=${DISCLD}" "-DDIFFERENTIAL_RUNNER=${DIFFERENTIAL_RUNNER}"
+    "-DOUTPUT_DIR=${directory}" -DCASE_INDEX=0 -DOPTIMIZATION=0
+    -P "${CMAKE_CURRENT_LIST_DIR}/run_gsu_differential.cmake"
+    RESULT_VARIABLE status OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 90)
+if(status STREQUAL "0" OR NOT error MATCHES "stage=compile")
+    message(FATAL_ERROR "Controlled compile failure was hidden or misreported: ${status}\n${output}\n${error}")
+endif()
+file(GLOB_RECURSE failures "${directory}/failure.txt")
+list(LENGTH failures count)
+if(NOT count EQUAL 1)
+    message(FATAL_ERROR "Expected one preserved failure, found ${count}")
+endif()
+list(GET failures 0 failure)
+get_filename_component(case_dir "${failure}" DIRECTORY)
+foreach(name IN ITEMS program.dc expected.txt commands.txt compile.stdout.txt compile.stderr.txt reproduce.cmake)
+    if(NOT EXISTS "${case_dir}/${name}")
+        message(FATAL_ERROR "Failure artifact missing: ${name}")
+    endif()
+endforeach()
+file(READ "${failure}" record)
+if(NOT record MATCHES "seed=[0-9]+" OR NOT record MATCHES "case=0" OR
+   NOT record MATCHES "optimization=O0" OR NOT record MATCHES "stage=compile")
+    message(FATAL_ERROR "Incomplete differential failure record: ${record}")
+endif()
+file(SHA256 "${case_dir}/program.dc" source_before)
+file(SHA256 "${failure}" failure_before)
+execute_process(COMMAND "${CMAKE_COMMAND}" -P "${case_dir}/reproduce.cmake"
+    RESULT_VARIABLE replay_status OUTPUT_VARIABLE replay_output ERROR_VARIABLE replay_error TIMEOUT 90)
+if(replay_status STREQUAL "0" OR NOT replay_error MATCHES "stage=compile")
+    message(FATAL_ERROR "Saved reproducer failed to repeat the controlled failure\n${replay_output}\n${replay_error}")
+endif()
+file(SHA256 "${case_dir}/program.dc" source_after)
+file(SHA256 "${failure}" failure_after)
+if(NOT source_before STREQUAL source_after OR NOT failure_before STREQUAL failure_after)
+    message(FATAL_ERROR "Replay overwrote the original failure evidence")
+endif()
+message(STATUS "Differential failure visibility, artifacts and literal-argv replay passed")
