@@ -35,6 +35,26 @@ explicit GSU capability exceptions. Negative tests require exit status 1 and
 a matching source-located language diagnostic; crashes, timeouts and internal
 IR failures do not count as successful rejections.
 
+## Deterministic source-level differential coverage
+
+The [GSU differential suite](../tests/differential/README.md) generates bounded
+valid programs with fixed seeds and checks them against an independent 16-bit
+semantic oracle, not against O0. It runs real compiler/assembler/linker paths at
+O0/O1/O2/Os, observes RAM, volatile witnesses, returns and checked fault STOPs,
+and retains source, seed, commands and a replay script on failure:
+
+```sh
+ctest --preset release -L differential --output-on-failure
+```
+
+Each of the 32 corpus cases has a separate CTest entry at each optimization
+level. This preserves all 256 model executions while allowing bounded parallel
+scheduling under sanitizers. Stage progress, subprocess timings and replay
+artifacts are retained for diagnosis; timeouts remain test failures.
+
+This complements existing hand-written and independent Mesen checks; it does
+not turn the instruction-level regression model into a full SNES emulator.
+
 ## Linker/object/runtime acceptance
 
 `object_file_hardening` checks independent little-endian fixtures, versions

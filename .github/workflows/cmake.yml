@@ -188,3 +188,14 @@ jobs:
 
       - name: Test
         run: ctest --preset sanitizers
+
+      - name: Preserve sanitizer differential failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizers-differential-failure
+          path: |
+            build/sanitizers/Testing/Temporary/
+            build/sanitizers/test-output/differential-*/
+          if-no-files-found: warn
+          retention-days: 7

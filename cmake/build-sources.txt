@@ -26,6 +26,7 @@ disco_gsu_compaction_tests tests/GSUCompactionTests.cpp @compiler @frontend @ass
 disco_project_manifest_tests tests/ProjectManifestTests.cpp @project
 disco_module_loader_tests tests/ModuleLoaderTests.cpp @compiler @frontend @object @project
 disco_gsu_execution_tests tests/GSUExecutionTests.cpp
+disco_gsu_differential_tests tests/GSUDifferentialTests.cpp
 disco_gsu_benchmarks benchmarks/GSUBenchmarkRunner.cpp @object
 disco_gsu_mapping_tests tests/GsuMemoryMapTests.cpp @object
 disco_assembly_export_tests tests/AssemblyExportTests.cpp @assembler @object

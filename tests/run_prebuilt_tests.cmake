@@ -21,6 +21,15 @@ foreach(test IN ITEMS disco_object_tests disco_ir_verifier_tests
     run_checked("${BIN_DIR}/${test}${EXE_SUFFIX}")
 endforeach()
 run_checked("${BIN_DIR}/disco_gsu_execution_tests${EXE_SUFFIX}" --self-test)
+run_checked("${BIN_DIR}/disco_gsu_differential_tests${EXE_SUFFIX}" --self-test)
+run_checked("${CMAKE_COMMAND}"
+    "-DDISCC=${BIN_DIR}/discc${EXE_SUFFIX}" "-DDISCAS=${BIN_DIR}/discas${EXE_SUFFIX}"
+    "-DDISCLD=${BIN_DIR}/discld${EXE_SUFFIX}"
+    "-DDIFFERENTIAL_RUNNER=${BIN_DIR}/disco_gsu_differential_tests${EXE_SUFFIX}"
+    "-DOUTPUT_DIR=${BIN_DIR}/test-output/differential" -P "${ROOT_DIR}/tests/run_gsu_differential.cmake")
+run_checked("${CMAKE_COMMAND}" "-DDISCAS=${BIN_DIR}/discas${EXE_SUFFIX}" "-DDISCLD=${BIN_DIR}/discld${EXE_SUFFIX}"
+    "-DDIFFERENTIAL_RUNNER=${BIN_DIR}/disco_gsu_differential_tests${EXE_SUFFIX}"
+    "-DOUTPUT_DIR=${BIN_DIR}/test-output/differential-reporting" -P "${ROOT_DIR}/tests/test_gsu_differential_reporting.cmake")
 run_checked("${CMAKE_COMMAND}" "-DTOOLS_DIR=${BIN_DIR}"
     "-DRUNNER=${BIN_DIR}/disco_gsu_execution_tests${EXE_SUFFIX}"
     "-DOUTPUT_DIR=${BIN_DIR}/benchmark-tests/value-optimizations" -P "${ROOT_DIR}/benchmarks/optimizer/run.cmake")

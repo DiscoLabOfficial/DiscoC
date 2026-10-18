@@ -205,6 +205,10 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_executable(disco_gsu_execution_tests ${DISCO_SOURCES_disco_gsu_execution_tests})
     target_link_libraries(disco_gsu_execution_tests PRIVATE disco_common_warnings disco_platform_options)
 
+    # Keep the generator/oracle independent of all compiler/linker libraries.
+    add_executable(disco_gsu_differential_tests ${DISCO_SOURCES_disco_gsu_differential_tests})
+    target_link_libraries(disco_gsu_differential_tests PRIVATE disco_common_warnings disco_platform_options)
+
     add_executable(disco_gsu_mapping_tests tests/GsuMemoryMapTests.cpp)
     target_link_libraries(disco_gsu_mapping_tests PRIVATE disco_object_core)
 
@@ -271,6 +275,28 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_test(NAME project_manifest COMMAND disco_project_manifest_tests)
     add_test(NAME module_loader COMMAND disco_module_loader_tests)
     add_test(NAME gsu_execution_model COMMAND disco_gsu_execution_tests --self-test)
+    add_test(NAME gsu_differential_oracle COMMAND disco_gsu_differential_tests --self-test)
+    set_tests_properties(gsu_differential_oracle PROPERTIES LABELS "gsu;differential;unit" TIMEOUT 30)
+    foreach(level IN ITEMS 0 1 2 s)
+        # Sanitized Debug builds must not share one timeout across 32 programs.
+        # Keep the full corpus, but schedule and diagnose each case independently.
+        foreach(case_index RANGE 0 31)
+            set(test_name gsu_differential_O${level}_case_${case_index})
+            add_test(NAME ${test_name} COMMAND ${CMAKE_COMMAND}
+                -DDISCC=$<TARGET_FILE:discc> -DDISCAS=$<TARGET_FILE:discas> -DDISCLD=$<TARGET_FILE:discld>
+                -DDIFFERENTIAL_RUNNER=$<TARGET_FILE:disco_gsu_differential_tests>
+                -DOPTIMIZATION=${level} -DCASE_INDEX=${case_index}
+                -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/differential-O${level}-case-${case_index}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_gsu_differential.cmake)
+            set_tests_properties(${test_name} PROPERTIES LABELS "gsu;differential;correctness" TIMEOUT 600)
+        endforeach()
+    endforeach()
+    add_test(NAME gsu_differential_reporting COMMAND ${CMAKE_COMMAND}
+        -DDISCAS=$<TARGET_FILE:discas> -DDISCLD=$<TARGET_FILE:discld>
+        -DDIFFERENTIAL_RUNNER=$<TARGET_FILE:disco_gsu_differential_tests>
+        -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/differential-reporting
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gsu_differential_reporting.cmake)
+    set_tests_properties(gsu_differential_reporting PROPERTIES LABELS "gsu;differential;unit" TIMEOUT 180)
     add_test(NAME gsu_memory_map COMMAND disco_gsu_mapping_tests)
     add_test(NAME assembly_export COMMAND disco_assembly_export_tests)
     set_tests_properties(language_contract PROPERTIES LABELS "language;unit")
