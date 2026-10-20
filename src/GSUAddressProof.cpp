@@ -466,13 +466,12 @@ bool GSUAddressProof::provesAccess(IRValueId value, const Type& pointer, int wid
     return false;
 }
 
-bool GSUAddressProof::scalarBounds(IRValueId value, IRBlockId block,
-                                  std::int64_t& low, std::int64_t& high) const {
+bool GSUAddressProof::scalarBounds(IRValueId value, IRBlockId block, ScalarBounds& bounds) const {
     if (!value.isValid() || value.value >= m_facts.size() ||
         !block.isValid() || block.value >= m_block_count) return false;
     const auto fact = get(value, block.value);
     if (fact.kind != Kind::Scalar || fact.low > fact.high) return false;
-    low = fact.low; high = fact.high;
+    bounds = {fact.low, fact.high};
     return true;
 }
 

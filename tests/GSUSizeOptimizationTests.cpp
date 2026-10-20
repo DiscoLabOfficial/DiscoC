@@ -104,7 +104,13 @@ struct IRCodeGeneratorTestAccess {
         backend.m_function_candidates["main"] = greedy;
         auto incomplete = module; auto absent = module.functions[0]; absent.name = "absent"; absent.link_name.clear();
         incomplete.functions.push_back(absent); bool failed = false;
-        try { backend.generateMixedCandidate(incomplete); } catch (const CompilerError&) { failed = true; }
+        try { backend.generateMixedCandidate(incomplete); }
+        catch (const CompilerError& error) {
+            require(error.getMessage() == "IR codegen: missing bounded function candidate." &&
+                error.getLine() == 1 && error.getCol() == 1,
+                "Missing mixed candidate produced the wrong diagnostic or source location");
+            failed = true;
+        }
         require(failed && backend.m_function_policies.empty() && backend.m_function_division_policies.empty() &&
             backend.m_function_pool_policies.empty() && !backend.m_collect_function_candidates && backend.m_allow_auto_cache &&
             backend.m_current_function == nullptr && backend.m_values.empty(),

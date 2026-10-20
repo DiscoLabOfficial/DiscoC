@@ -8,6 +8,7 @@
 
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 
 namespace {
@@ -191,6 +192,10 @@ void malformedHomes() {
     IRStorageOptimizer::run(fixture.module, fixture.locals);
     const auto root = symbol(fixture.module.functions[0], "t");
     const auto parameter = fixture.module.functions[0].parameters[0].symbol_id;
+    require(fixture.module.functions[0].total_local_alloc_size == 10 &&
+        fixture.module.functions[0].storage_layout.at(root).stackOffset == -8,
+        "Exact-fit word storage lost its checked-frame boundary");
+    IRVerifier::verify(fixture.module);
     auto broken = fixture.module;
     broken.functions[0].storage_layout.at(parameter).stackOffset = 8;
     reject(broken, "parameter ABI offsets");
@@ -202,8 +207,26 @@ void malformedHomes() {
     broken = fixture.module;
     broken.functions[0].storage_layout.at(root).stackOffset = -broken.functions[0].total_local_alloc_size - 2;
     reject(broken, "exceeds the checked frame");
+    broken = fixture.module; broken.functions[0].storage_layout.at(root).stackOffset = -6;
+    reject(broken, "exceeds the checked frame");
+    broken = fixture.module; broken.functions[0].storage_layout.at(root).type.alignment = 3;
+    reject(broken, "identity or alignment");
+    broken = fixture.module; broken.functions[0].storage_layout.at(root).type.sizeInBytes = std::numeric_limits<int>::max();
+    reject(broken, "local object extent");
+    broken = fixture.module; broken.functions[0].storage_layout.at(root).type.array_size = std::numeric_limits<int>::max();
+    reject(broken, "local object extent");
     broken = fixture.module; broken.functions[0].storage_layout.erase(root);
     reject(broken, "absent from its owned storage layout");
+
+    auto odd = prepare("word f(word p){byte t[3]={11,22,33};return t[p&1];}", false);
+    IRStorageOptimizer::run(odd.module, odd.locals);
+    const auto odd_root = symbol(odd.module.functions[0], "t");
+    require(odd.module.functions[0].total_local_alloc_size == 6 &&
+        odd.module.functions[0].storage_layout.at(odd_root).stackOffset == -4,
+        "Odd-sized storage did not round up to an exact-fit even reservation");
+    IRVerifier::verify(odd.module);
+    odd.module.functions[0].storage_layout.at(odd_root).stackOffset = -2;
+    reject(odd.module, "exceeds the checked frame");
 }
 
 void inlineLoopFallbacks() {
@@ -336,12 +359,26 @@ void queryAndLimits() {
     auto fixture = prepare("word f(word p){word t[4]={1,2,3,4};return t[p&3];}");
     const auto& f = fixture.module.functions[0]; GSUAddressProof ranges;
     ranges.run(f, fixture.locals.at("f"), static_cast<std::size_t>(f.total_local_alloc_size), true);
-    std::int64_t low = 123, high = 456;
-    require(!ranges.scalarBounds({}, f.entry, low, high) && low == 123 && high == 456, "Invalid scalar ID changed query outputs");
-    require(!ranges.scalarBounds(IRValueId{f.value_count + 1}, f.entry, low, high), "Out-of-range scalar ID was accepted");
-    require(!ranges.scalarBounds(IRValueId{1}, {}, low, high), "Invalid block ID was accepted");
-    require(!ranges.scalarBounds(IRValueId{1}, IRBlockId{static_cast<std::uint32_t>(f.blocks.size())}, low, high), "Out-of-range block ID was accepted");
-    require(low == 123 && high == 456, "Failed scalar queries modified outputs");
+    GSUAddressProof::ScalarBounds bounds{123, 456};
+    require(!ranges.scalarBounds({}, f.entry, bounds) && bounds.low == 123 && bounds.high == 456, "Invalid scalar ID changed query output");
+    require(!ranges.scalarBounds(IRValueId{f.value_count + 1}, f.entry, bounds), "Out-of-range scalar ID was accepted");
+    require(!ranges.scalarBounds(IRValueId{1}, {}, bounds), "Invalid block ID was accepted");
+    require(!ranges.scalarBounds(IRValueId{1}, IRBlockId{static_cast<std::uint32_t>(f.blocks.size())}, bounds), "Out-of-range block ID was accepted");
+    IRValueId scalar, pointer;
+    IRBlockId scalar_block, pointer_block;
+    for (const auto& block : f.blocks) for (const auto& instruction : block.instructions) {
+        if (instruction.opcode == IROpcode::PointerOffset) {
+            scalar = instruction.operands.at(1); scalar_block = block.id;
+        }
+        if (instruction.opcode == IROpcode::Address && instruction.symbol == "t") {
+            pointer = instruction.result; pointer_block = block.id;
+        }
+    }
+    require(scalar.isValid() && pointer.isValid(), "Scalar query fixture lost its masked index or pointer");
+    require(!ranges.scalarBounds(pointer, pointer_block, bounds), "Non-scalar address was accepted as numeric bounds");
+    require(bounds.low == 123 && bounds.high == 456, "Failed scalar queries modified output");
+    require(ranges.scalarBounds(scalar, scalar_block, bounds) && bounds.low == 0 && bounds.high == 3,
+        "Successful scalar query did not replace the complete output interval");
     const auto snapshot = dumpIR(fixture.module);
     auto local = fixture.locals.at("f").begin()->second;
     for (std::uint32_t id = 1000; id < 1257; ++id) {

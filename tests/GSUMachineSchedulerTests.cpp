@@ -267,15 +267,34 @@ void pipelinePlan() {
             conditional.code_section == conditional_before.code_section,
             "A conditional branch split an immediate that both paths execute");
 
-    auto entry = object({0x01, 0x05, 0x02, 0x01, 0x00, 0xd5, 0x05, 0x01, 0x01, 0x00, 0x01});
-    entry.symbol_table.push_back({"\x01head", SymbolSection::CODE, 5});
-    const auto entry_before = entry;
-    const auto entry_stats = GSUMachineScheduler::run(entry);
-    require(entry_stats.entry_slots == 1 && entry.code_section.size() == 10 && entry.code_section[7] == 0xd5,
-            "An INC entry immediately before BRA did not become that BRA's delay slot");
-    equivalent(entry_before, entry, false);
-    DiscoGSU::Machine entry_machine(linked(entry), 0x008000); entry_machine.run();
-    require(entry_machine.reg(5) == 1, "Retargeted INC entry did not run once");
+    for (const auto opcode : {std::uint8_t{0xd5}, std::uint8_t{0xe5}}) {
+        auto entry = object({0x01, 0x05, 0x02, 0x01, 0x00, opcode, 0x05, 0x01, 0x01, 0x00, 0x01});
+        entry.symbol_table.push_back({"\x01head", SymbolSection::CODE, 5});
+        const auto entry_before = entry;
+        const auto entry_stats = GSUMachineScheduler::run(entry);
+        require(entry_stats.entry_slots == 1 && entry.code_section.size() == 10 && entry.code_section[5] == 5 &&
+                entry.code_section[7] == opcode && entry.symbol_table[0].offset == 5,
+                "An INC/DEC entry lost its BRA anchor or useful delay slot");
+        equivalent(entry_before, entry, false);
+        DiscoGSU::Machine entry_machine(linked(entry), 0x008000); entry_machine.run();
+        require(entry_machine.reg(5) == (opcode == 0xd5 ? 1 : 65535), "Retargeted INC/DEC entry did not run once");
+        for (unsigned fence = 0; fence < 5; ++fence) {
+            auto unsafe = entry_before;
+            if (fence == 0) unsafe.symbol_table.push_back({"public_head", SymbolSection::CODE, 5});
+            if (fence == 1) unsafe.symbol_table.push_back({"\x01" "branch", SymbolSection::CODE, 6});
+            if (fence == 2) unsafe.symbol_table.push_back({"\x01slot", SymbolSection::CODE, 8});
+            if (fence == 3) unsafe.relocation_table.push_back({"\x01head", SymbolSection::CODE, 5, RelocationType::ADDR24_BANK});
+            if (fence == 4) unsafe.relocation_table.push_back({"\x01head", SymbolSection::CODE, 7, RelocationType::ADDR24_BANK});
+            const auto saved = unsafe;
+            require(GSUMachineScheduler::run(unsafe).entry_slots == 0 && unsafe.code_section == saved.code_section &&
+                unsafe.symbol_table[0].offset == saved.symbol_table[0].offset &&
+                unsafe.relocation_table.size() == saved.relocation_table.size(),
+                "Entry scheduling crossed a public entry, branch/slot label, or relocated byte");
+            if (!unsafe.relocation_table.empty())
+                require(unsafe.relocation_table[0].patch_offset == saved.relocation_table[0].patch_offset,
+                    "Fenced entry scheduling changed a relocation offset");
+        }
+    }
 
     auto nested = object({0x02});
     nested.code_section.insert(nested.code_section.end(), 2, 0x01);

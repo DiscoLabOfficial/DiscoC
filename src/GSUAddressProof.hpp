@@ -17,10 +17,12 @@ public:
              std::size_t frame_bytes, bool checked_frame);
     bool provesAccess(IRValueId value, const Type& pointer, int width) const;
     bool provesOffset(const IRInstruction& instruction) const;
+    struct ScalarBounds {
+        std::int64_t low = 0, high = 0;
+    };
     // Numeric facts only; the caller must independently prove provenance,
-    // object extent, mutability and lifetime. Failure leaves outputs intact.
-    bool scalarBounds(IRValueId value, IRBlockId block,
-                      std::int64_t& low, std::int64_t& high) const;
+    // object extent, mutability and lifetime. Failure leaves output intact.
+    bool scalarBounds(IRValueId value, IRBlockId block, ScalarBounds& bounds) const;
     enum class MultiplyKind { FullWord, SignedByte, UnsignedByte };
     MultiplyKind multiplyKind(const IRInstruction& instruction) const;
 

@@ -364,7 +364,7 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                 fail("IR verifier: invalid local storage identity or alignment.", storage_source);
             if (symbol.stackOffset < 0 &&
                 (symbol.stackOffset < -function.total_local_alloc_size + 2 ||
-                 static_cast<std::int64_t>(symbol.stackOffset) + ((bytes + 1) / 2) * 2 + alignment - 2 > 0))
+                 static_cast<std::int64_t>(symbol.stackOffset) + ((static_cast<std::int64_t>(bytes) + 1) / 2) * 2 + alignment - 2 > 0))
                 fail("IR verifier: local storage exceeds the checked frame.", storage_source);
         }
         int parameter_offset = 6;

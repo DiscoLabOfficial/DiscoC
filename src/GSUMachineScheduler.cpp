@@ -198,9 +198,13 @@ bool splitImmediate(const Instruction& instruction) {
     return (op >= 0xa0 && op <= 0xae && instruction.bytes.size() == 2) ||
         (op >= 0xf0 && op <= 0xfe && instruction.bytes.size() == 3);
 }
-void planEntryIncrements(std::vector<Instruction>& code, const std::set<std::size_t>& entries,
-                         const std::set<std::size_t>& relocation_offsets,
-                         const std::set<std::size_t>& protected_offsets, const ObjectFile& object,
+struct SchedulingBoundaries {
+    const std::set<std::size_t>& entries;
+    const std::set<std::size_t>& relocation_offsets;
+    const std::set<std::size_t>& protected_offsets;
+};
+void planEntryIncrements(std::vector<Instruction>& code, const SchedulingBoundaries& boundaries,
+                         const ObjectFile& object,
                          const std::map<std::size_t, std::size_t>& jump_targets,
                          GSUMachineScheduler::Statistics& stats) {
     std::map<std::size_t, unsigned> incoming;
@@ -215,10 +219,10 @@ void planEntryIncrements(std::vector<Instruction>& code, const std::set<std::siz
         // zero-byte anchor keeps the label on the BRA.
         if (previous.bytes.empty() || previous.delay_slot || !increment(previous)) continue;
         if (branch.bytes.size() != 2 || branch.bytes[0] != 5 || !oneByte(slot, 1)) continue;
-        if (!entries.count(previous.old) || entries.count(branch.old) || incoming[branch.old]) continue;
+        if (!boundaries.entries.count(previous.old) || boundaries.entries.count(branch.old) || incoming[branch.old]) continue;
         if (publicCodeSymbol(object, previous.old) || publicCodeSymbol(object, branch.old)) continue;
-        if (!freeRange(code, n - 1, n, relocation_offsets) ||
-            !freeRange(code, n + 1, n + 2, protected_offsets)) continue;
+        if (!freeRange(code, n - 1, n, boundaries.relocation_offsets) ||
+            !freeRange(code, n + 1, n + 2, boundaries.protected_offsets)) continue;
         slot.bytes = previous.bytes;
         slot.delay_slot = true;
         previous.bytes.clear();
@@ -591,7 +595,8 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
     // would treat a split immediate opcode as a full instruction.
     const auto without_plans = code;
     const auto without_plan_stats = stats;
-    planEntryIncrements(code, entries, relocation_offsets, protected_offsets, object, jump_targets, stats);
+    const SchedulingBoundaries boundaries{entries, relocation_offsets, protected_offsets};
+    planEntryIncrements(code, boundaries, object, jump_targets, stats);
     planImmediateSlots(code, object, jump_targets, relocation_offsets, protected_offsets, stats);
     if (object.config.optimization != OptimizationLevel::Size)
         dropNestedCaches(code, object, entries, stats);

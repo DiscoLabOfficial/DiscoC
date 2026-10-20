@@ -176,7 +176,7 @@ private:
     bool needsPointerSpill(const IRInstruction& instruction) const;
     void addRelocation(const std::string& symbol, std::size_t patch_offset,
                        RelocationType type);
-    void fail(const std::string& message, const Token& source) const;
+    [[noreturn]] void fail(const std::string& message, const Token& source) const;
     void buildRegisterAllocation(const IRFunction& function);
     // Caller-saved extras (R2, R4, R14) join R5/R7/R8 only when this function
     // does not use them as plot, multiply, division, far-bank, or ROM hardware.

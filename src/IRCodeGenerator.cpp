@@ -34,7 +34,7 @@ IRCodeGenerator::IRCodeGenerator(
       m_data_manager(data_manager),
       m_config(config) {}
 
-void IRCodeGenerator::fail(const std::string& message, const Token& source) const {
+[[noreturn]] void IRCodeGenerator::fail(const std::string& message, const Token& source) const {
     throw CompilerError(message, source);
 }
 

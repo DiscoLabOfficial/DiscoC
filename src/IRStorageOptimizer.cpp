@@ -78,8 +78,9 @@ bool analyze(const IRFunction& function, const Analyzer::LocalSymbolTable& local
                 base.low += instruction.immediate; base.high += instruction.immediate;
             } else if (instruction.opcode == IROpcode::PointerOffset && instruction.operands.size() == 2 &&
                        (instruction.operation == "+" || instruction.operation == "-")) {
-                std::int64_t low = 0, high = 0;
-                if (!ranges.scalarBounds(instruction.operands[1], block.id, low, high)) continue;
+                GSUAddressProof::ScalarBounds bounds;
+                if (!ranges.scalarBounds(instruction.operands[1], block.id, bounds)) continue;
+                auto low = bounds.low, high = bounds.high;
                 // Scalar facts are at most one word. Keep arithmetic bounded
                 // before multiplying even if this routine receives hostile IR.
                 if (low < -65535 || high > 65535 || instruction.immediate < 1 || instruction.immediate > 65528) return false;
