@@ -14,6 +14,7 @@ struct Instruction {
     std::vector<std::uint8_t> bytes;
     bool plain = false;
     bool delay_slot = false;
+    bool operand_fragment = false;
     unsigned alt = 4;
     unsigned source = 16, destination = 16;
     std::size_t target = Missing;
@@ -80,7 +81,7 @@ bool increment(const Instruction& i) {
     return i.bytes.size() == 1 && ((op >= 0xd0 && op <= 0xdd) || (op >= 0xe0 && op <= 0xed));
 }
 bool oneByte(const Instruction& i, std::uint8_t opcode) {
-    return i.bytes.size() == 1 && i.bytes[0] == opcode;
+    return !i.operand_fragment && i.bytes.size() == 1 && i.bytes[0] == opcode;
 }
 enum ConditionFlag : unsigned { Sign = 1, Zero = 2, Carry = 4, Overflow = 8 };
 unsigned branchFlags(std::uint8_t opcode) {
@@ -173,6 +174,171 @@ bool assemble(const std::vector<Instruction>& code, ObjectFile& object) {
     }
     object.code_section = std::move(bytes); return true;
 }
+bool publicCodeSymbol(const ObjectFile& object, std::size_t offset) {
+    for (const auto& symbol : object.symbol_table) {
+        if (symbol.section != SymbolSection::CODE || symbol.offset != offset) continue;
+        if (symbol.name == GSUCodeLayout::CacheAlignmentSymbol) continue;
+        if (symbol.name.empty() || symbol.name.front() != '\x01') return true;
+    }
+    return false;
+}
+bool unconditionalExit(const Instruction& instruction) {
+    if (instruction.bytes.empty()) return false;
+    const auto op = instruction.bytes[0];
+    // BRA and STOP never fall through. JMP and IWT R15 do so only as those
+    // opcodes; an unknown or ALT-prefixed encoding is a different instruction.
+    if ((op == 0 && instruction.bytes.size() == 1) || (op == 5 && instruction.bytes.size() == 2)) return true;
+    if (instruction.alt != 0) return false;
+    return (op >= 0x98 && op <= 0x9d && instruction.bytes.size() == 1) ||
+        (op == 0xff && instruction.bytes.size() == 3);
+}
+bool splitImmediate(const Instruction& instruction) {
+    if (instruction.delay_slot || instruction.bytes.size() < 2) return false;
+    const auto op = instruction.bytes[0];
+    return (op >= 0xa0 && op <= 0xae && instruction.bytes.size() == 2) ||
+        (op >= 0xf0 && op <= 0xfe && instruction.bytes.size() == 3);
+}
+struct SchedulingBoundaries {
+    const std::set<std::size_t>& entries;
+    const std::set<std::size_t>& relocation_offsets;
+    const std::set<std::size_t>& protected_offsets;
+};
+void planEntryIncrements(std::vector<Instruction>& code, const SchedulingBoundaries& boundaries,
+                         const ObjectFile& object,
+                         const std::map<std::size_t, std::size_t>& jump_targets,
+                         GSUMachineScheduler::Statistics& stats) {
+    std::map<std::size_t, unsigned> incoming;
+    for (const auto& instruction : code) if (instruction.target != Missing) ++incoming[instruction.target];
+    for (const auto& jump : jump_targets) ++incoming[jump.second];
+    for (std::size_t n = 1; n + 1 < code.size(); ++n) {
+        auto& previous = code[n - 1];
+        auto& branch = code[n];
+        auto& slot = code[n + 1];
+        // The ordinary filler cannot cross an entry. A one-byte INC/DEC that
+        // is itself the entry becomes the following BRA's slot, and the
+        // zero-byte anchor keeps the label on the BRA.
+        if (previous.bytes.empty() || previous.delay_slot || !increment(previous)) continue;
+        if (branch.bytes.size() != 2 || branch.bytes[0] != 5 || !oneByte(slot, 1)) continue;
+        if (!boundaries.entries.count(previous.old) || boundaries.entries.count(branch.old) || incoming[branch.old]) continue;
+        if (publicCodeSymbol(object, previous.old) || publicCodeSymbol(object, branch.old)) continue;
+        if (!freeRange(code, n - 1, n, boundaries.relocation_offsets) ||
+            !freeRange(code, n + 1, n + 2, boundaries.protected_offsets)) continue;
+        slot.bytes = previous.bytes;
+        slot.delay_slot = true;
+        previous.bytes.clear();
+        previous.target = Missing;
+        ++stats.delay_slots;
+        ++stats.entry_slots;
+    }
+}
+void planImmediateSlots(std::vector<Instruction>& code, const ObjectFile& object,
+                        const std::map<std::size_t, std::size_t>& jump_targets,
+                        const std::set<std::size_t>& relocation_offsets,
+                        const std::set<std::size_t>& protected_offsets,
+                        GSUMachineScheduler::Statistics& stats) {
+    std::map<std::size_t, std::size_t> at;
+    std::map<std::size_t, unsigned> incoming;
+    for (std::size_t n = 0; n < code.size(); ++n) {
+        const auto& instruction = code[n];
+        if (instruction.old != Missing && !instruction.bytes.empty()) at[instruction.old] = n;
+        if (instruction.target != Missing) ++incoming[instruction.target];
+        else if (instruction.bytes.size() == 3 && instruction.bytes[0] == 0xff) {
+            const auto jump = jump_targets.find(instruction.old);
+            if (jump != jump_targets.end()) ++incoming[jump->second];
+        }
+    }
+    for (std::size_t n = 0; n + 1 < code.size(); ++n) {
+        const auto& branch = code[n];
+        if (branch.delay_slot || !oneByte(code[n + 1], 1)) continue;
+        if (n && !code[n - 1].bytes.empty()) {
+            const auto link = code[n - 1].bytes[0];
+            if (link >= 0x91 && link <= 0x94) continue;
+        }
+        std::size_t destination = Missing;
+        if (branch.bytes.size() == 2 && branch.bytes[0] == 5 && branch.plain) destination = branch.target;
+        else if (branch.bytes.size() == 3 && branch.bytes[0] == 0xff && branch.alt == 0) {
+            const auto jump = jump_targets.find(branch.old);
+            if (jump != jump_targets.end()) destination = jump->second;
+        }
+        if (destination == Missing || incoming[destination] != 1) continue;
+        const auto found = at.find(destination);
+        if (found == at.end() || !splitImmediate(code[found->second])) continue;
+        const auto target = found->second;
+        if (publicCodeSymbol(object, code[target].old)) continue;
+        if (!freeRange(code, target, target + 1, relocation_offsets) ||
+            !freeRange(code, n + 1, n + 2, protected_offsets)) continue;
+        std::size_t predecessor = target;
+        while (predecessor > 0 && code[predecessor - 1].bytes.empty()) --predecessor;
+        const bool slot_precedes = predecessor > 0 && predecessor - 1 == n + 1;
+        if (predecessor > 0 && !slot_precedes && !unconditionalExit(code[predecessor - 1])) continue;
+        // The branch preserves clear selectors. Only its opcode byte executes
+        // in the slot; the immediate stays at the unique target PC.
+        code[n + 1].bytes = {code[target].bytes[0]};
+        code[n + 1].delay_slot = true;
+        code[target].bytes.erase(code[target].bytes.begin());
+        // The remaining byte(s) are fetched by the opcode in the old-flow
+        // slot. Their numeric value is not an executable CACHE/STOP/etc.
+        code[target].operand_fragment = true;
+        ++stats.immediate_slots;
+    }
+}
+void dropNestedCaches(std::vector<Instruction>& code, const ObjectFile& object,
+                      const std::set<std::size_t>& entries,
+                      GSUMachineScheduler::Statistics& stats) {
+    // Without a required final alignment, two different PCs can cross a
+    // cache-line boundary after relinking. Entry-CACHE padding is applied
+    // later, so it also prevents an exact position proof in this pass.
+    if (GSUCodeLayout::alignment(object) != 16) return;
+    for (const auto& instruction : code)
+        if (oneByte(instruction, 2) && publicCodeSymbol(object, instruction.old)) return;
+    bool have_window = false;
+    bool selectors_clear = false;
+    std::size_t anchor = 0, position = 0;
+    for (auto& instruction : code) {
+        // A linear predecessor's CACHE need not execute on another entry.
+        // Calls may also replace CBR before returning. Restrict the proof to
+        // a straight-line basic-block segment, including zero-byte anchors.
+        if (entries.count(instruction.old)) { have_window = false; selectors_clear = false; }
+        const auto size = instruction.bytes.size();
+        if (instruction.bytes.empty() || instruction.operand_fragment) { position += size; continue; }
+        const auto op = instruction.bytes[0];
+        if (instruction.delay_slot) {
+            // CACHE here observes the transfer's effective PC, not this
+            // byte's linear position. Keep it and lose CBR knowledge unless
+            // both paths' effective windows are independently proved.
+            have_window = false;
+            selectors_clear = false;
+            position += size;
+            continue;
+        }
+        if (transfer(op) || op == 0 || (op >= 0x91 && op <= 0x94)) {
+            have_window = false;
+            selectors_clear = false;
+            position += size;
+            continue;
+        }
+        if (!oneByte(instruction, 2)) {
+            // Conservatively forget even a complete WITH/TO copy pair. An
+            // ordinary consumer/literal resets all selectors; prefixes do not.
+            selectors_clear = !((op >= 0x10 && op <= 0x2f) || (op >= 0xb0 && op <= 0xbf) ||
+                (op >= 0x3d && op <= 0x3f));
+            position += size;
+            continue;
+        }
+        const auto next_pc = position + size;
+        // Equality of CBR, not just membership in its 512-byte window, keeps
+        // all later coverage unchanged. CACHE also resets ALT/WITH/FROM/TO.
+        if (have_window && selectors_clear && (next_pc & ~std::size_t{15}) == (anchor & ~std::size_t{15})) {
+            instruction.bytes.clear(); instruction.target = Missing;
+            ++stats.nested_caches;
+        } else {
+            anchor = next_pc;
+            have_window = true;
+            position += size;
+        }
+        selectors_clear = true;
+    }
+}
 }
 
 GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
@@ -191,6 +357,50 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
             protected_offsets.insert(r.patch_offset + b);
             relocation_offsets.insert(r.patch_offset + b);
         }
+
+    // A private one-PLOT loop may put PLOT in LOOP's always-executed slot,
+    // including its first/final iteration and the raw zero-count wrap. Keep
+    // the old PLOT entry anchor on the new LOOP; generic scheduling cannot
+    // erase that entry or infer its incoming selector state from linear code.
+    std::map<std::string, std::size_t> pixel_symbols;
+    std::set<std::size_t> private_pixels, blocked_pixels, r13_literals;
+    for (const auto& i : code) {
+        if (i.bytes.size() == 3 && i.bytes[0] == 0xfd && i.alt == 0 && !i.delay_slot)
+            r13_literals.insert(i.old);
+        if (i.target != Missing) blocked_pixels.insert(i.target);
+    }
+    for (const auto& s : object.symbol_table) if (s.section == SymbolSection::CODE) {
+        pixel_symbols.emplace(s.name, s.offset);
+        if (!s.name.empty() && s.name.front() == '\x01') private_pixels.insert(s.offset);
+        else blocked_pixels.insert(s.offset);
+    }
+    std::set<std::size_t> r13_pixels;
+    for (const auto& r : object.relocation_table) {
+        const auto target = pixel_symbols.find(r.target_symbol_name);
+        if (target == pixel_symbols.end()) continue;
+        const auto patch = static_cast<std::size_t>(r.patch_offset);
+        if (r.section_to_patch == SymbolSection::CODE && r.type == RelocationType::ADDR16_IWT &&
+            r13_literals.count(patch))
+            r13_pixels.insert(target->second);
+        else blocked_pixels.insert(target->second);
+    }
+    for (std::size_t n = 1; n + 2 < code.size(); ++n) {
+        const auto entry = code[n].old;
+        if (!oneByte(code[n], 0x4c) || !oneByte(code[n + 1], 0x3c) || !oneByte(code[n + 2], 1) ||
+            code[n].delay_slot || !private_pixels.count(entry) || !r13_pixels.count(entry) || blocked_pixels.count(entry) ||
+            !freeRange(code, n + 1, n + 3, entries) || !freeRange(code, n, n + 3, relocation_offsets)) continue;
+        const auto& before = code[n - 1];
+        // LOOP resets prefixes on every backedge. The only remaining entry
+        // is fallthrough, which must also be a known reset, never LINK's or
+        // another transfer's delay slot, WITH, FROM, TO or ALT.
+        if (before.delay_slot || !(oneByte(before, 1) || oneByte(before, 2) ||
+            (before.bytes.size() == 3 && before.bytes[0] == 0xfd && before.alt == 0))) continue;
+        code[n].bytes = {0x3c}; code[n].plain = true; code[n].alt = code[n].source = code[n].destination = 0;
+        code[n + 1].bytes = {0x4c}; code[n + 1].delay_slot = true;
+        code[n + 1].plain = true; code[n + 1].alt = code[n + 1].source = code[n + 1].destination = 0;
+        code.erase(code.begin() + static_cast<std::ptrdiff_t>(n + 2));
+        ++stats.delay_slots; ++stats.private_pixel_loops;
+    }
 
     // Hide ROM-buffer latency with work already following the read. GETC has no
     // register/condition-code result; plain GETB writes only its selected DREG.
@@ -342,39 +552,100 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
         code[n + 3].bytes.clear();
         ++stats.compact_branches;
     }
-    auto scheduled = object;
-    if (!assemble(code, scheduled)) return Statistics{};
-    object = std::move(scheduled);
-
-    // Size policy keeps explicit CACHE opcodes but adds no alignment bytes or
-    // linker padding hints. Delay-slot/ROM scheduling above is non-increasing.
-    if (object.config.optimization == OptimizationLevel::Size) return stats;
-
-    // Align function-entry CACHE's *prefetched next byte*, not its opcode.
-    // Padding is outside the entry symbol, hence not paid on calls. Deliberately
-    // do not pad loop CACHE directives: measured rotation timing regressed when
-    // those NOPs executed on each scanline. Hot loop layout is handled in IR.
-    entries.clear();
-    for (const auto& s : object.symbol_table) if (s.section == SymbolSection::CODE) entries.insert(s.offset);
-    code = decode(object, entries);
-    std::set<std::size_t> cache_entries;
-    for (const auto& s : object.symbol_table)
-        if (s.section == SymbolSection::CODE && !s.name.empty() && s.name.front() != '\x01' &&
-            s.offset < object.code_section.size() && object.code_section[s.offset] == 2) cache_entries.insert(s.offset);
-    std::vector<Instruction> aligned;
-    std::size_t bytes = 0;
-    unsigned padding = 0;
-    for (auto i : code) {
-        if (cache_entries.count(i.old)) while ((bytes + 1) % 16) {
-            Instruction nop; nop.bytes = {1}; aligned.push_back(std::move(nop)); ++bytes; ++padding;
-        }
-        bytes += i.bytes.size(); aligned.push_back(std::move(i));
+    // Relax symbol-resolved, non-call PC literals after useful-slot/layout
+    // compaction. Never infer a destination from an unrelocated numeric word.
+    // Plain selectors make BRA's preserved prefix state identical to IWT's
+    // reset state, including for a useful opcode in the existing delay slot.
+    std::map<std::size_t, std::size_t> jump_targets;
+    for (const auto& r : object.relocation_table) {
+        const auto target = symbols.find(r.target_symbol_name);
+        if (r.section_to_patch == SymbolSection::CODE && r.type == RelocationType::ADDR16_IWT && target != symbols.end())
+            jump_targets.emplace(r.patch_offset, target->second);
     }
-    auto candidate = object;
-    if (!cache_entries.empty() && bytes <= 65536 && assemble(aligned, candidate)) {
-        if (GSUCodeLayout::alignment(candidate) != 16)
+    std::set<std::size_t> shortened;
+    for (unsigned round = 0; round < 8 && !jump_targets.empty(); ++round) {
+        std::vector<std::size_t> positions(object.code_section.size() + 1, Missing);
+        std::size_t length = 0;
+        for (const auto& i : code) {
+            if (i.old != Missing) positions.at(i.old) = length;
+            length += i.bytes.size();
+        }
+        positions.back() = length;
+        bool changed = false;
+        for (std::size_t n = 0; n < code.size(); ++n) {
+            auto& i = code[n];
+            const auto target = jump_targets.find(i.old);
+            if (target == jump_targets.end() || i.bytes.size() != 3 || i.bytes[0] != 0xff ||
+                !i.plain || i.delay_slot || (n && code[n - 1].bytes.size() == 1 &&
+                code[n - 1].bytes[0] >= 0x91 && code[n - 1].bytes[0] <= 0x94)) continue;
+            if (entries.count(i.old + 1) || entries.count(i.old + 2) ||
+                relocation_offsets.count(i.old + 3)) continue;
+            const auto here = positions.at(i.old), destination = positions.at(target->second);
+            if (here == Missing || destination == Missing) continue;
+            // This round's distances can only decrease as other jumps shrink.
+            const auto distance = static_cast<std::int64_t>(destination) -
+                static_cast<std::int64_t>(here + 2) - (destination > here ? 1 : 0);
+            if (distance < -128 || distance > 127) continue;
+            i.bytes = {5, 0}; i.target = target->second;
+            shortened.insert(i.old); changed = true; ++stats.short_jumps;
+        }
+        if (!changed) break;
+    }
+    // Slot planning stays on this instruction list. Re-decoding afterwards
+    // would treat a split immediate opcode as a full instruction.
+    const auto without_plans = code;
+    const auto without_plan_stats = stats;
+    const SchedulingBoundaries boundaries{entries, relocation_offsets, protected_offsets};
+    planEntryIncrements(code, boundaries, object, jump_targets, stats);
+    planImmediateSlots(code, object, jump_targets, relocation_offsets, protected_offsets, stats);
+    if (object.config.optimization != OptimizationLevel::Size)
+        dropNestedCaches(code, object, entries, stats);
+
+    const auto publish = [&](const std::vector<Instruction>& seq, bool hint, unsigned padding) {
+        auto candidate = object;
+        candidate.relocation_table.erase(std::remove_if(candidate.relocation_table.begin(), candidate.relocation_table.end(),
+            [&](const RelocationEntry& r) { return r.section_to_patch == SymbolSection::CODE && shortened.count(r.patch_offset); }),
+            candidate.relocation_table.end());
+        if (!assemble(seq, candidate)) return false;
+        if (hint && GSUCodeLayout::alignment(candidate) != 16)
             candidate.symbol_table.push_back({GSUCodeLayout::CacheAlignmentSymbol, SymbolSection::CODE, 0});
-        object = std::move(candidate); stats.cache_padding = padding;
+        object = std::move(candidate);
+        if (hint) stats.cache_padding = padding;
+        return true;
+    };
+    std::set<std::size_t> cache_entries;
+    // Size policy keeps explicit CACHE opcodes but adds no alignment bytes or
+    // linker padding hints. Align a function-entry CACHE's prefetched next
+    // byte, not its opcode. Do not pad loop CACHE directives.
+    if (object.config.optimization != OptimizationLevel::Size) {
+        for (const auto& symbol : object.symbol_table)
+            if (symbol.section == SymbolSection::CODE && !symbol.name.empty() && symbol.name.front() != '\x01')
+                cache_entries.insert(symbol.offset);
+    }
+    const auto layout = [&](const std::vector<Instruction>& seq) {
+        unsigned padding = 0;
+        std::vector<Instruction> aligned;
+        std::size_t bytes = 0;
+        bool can_hint = false;
+        if (!cache_entries.empty()) {
+            for (const auto& instruction : seq) {
+                if (oneByte(instruction, 2) && cache_entries.count(instruction.old)) {
+                    can_hint = true;
+                    while ((bytes + 1) % 16) {
+                        Instruction nop; nop.bytes = {1}; aligned.push_back(std::move(nop)); ++bytes; ++padding;
+                    }
+                }
+                bytes += instruction.bytes.size();
+                aligned.push_back(instruction);
+            }
+            if (bytes > 65536) can_hint = false;
+        }
+        if (can_hint && publish(aligned, true, padding)) return true;
+        return publish(seq, false, 0);
+    };
+    if (!layout(code)) {
+        stats = without_plan_stats;
+        if (!layout(without_plans)) return Statistics{};
     }
     return stats;
 }

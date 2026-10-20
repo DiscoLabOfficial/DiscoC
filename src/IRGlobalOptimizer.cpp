@@ -7,6 +7,7 @@
 #include "IRSizeOptimizer.hpp"
 #include "IRCompactOptimizer.hpp"
 #include "ConstantEvaluator.hpp"
+#include "GSUCostModel.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -484,7 +485,12 @@ void inlineLeaves(IRModule& module, const std::map<std::string, Analyzer::LocalS
                         } else if (i.opcode != IROpcode::Return) legal = false;
                     }
                 }
-                const auto limit = size_policy ? 2u : cached ? 4u : 12u;
+                // Size policy's bounded leaf envelope reflects the actual
+                // emitted call/argument sequence, not a fixed two-node rule.
+                // Final backend candidates still decide using exact bytes.
+                const auto call_bytes = GSUCostModel::scalarCallBytes(call.operands.size());
+                const auto size_limit = static_cast<std::size_t>(std::min<std::uint64_t>(12, std::max<std::uint64_t>(2, call_bytes / 4)));
+                const auto limit = size_policy ? size_limit : cached ? 4u : 12u;
                 if (!legal || cost > limit || caller_growth + cost > 64 || module_growth + cost > 512 ||
                     caller_nodes + nodes > 256 || module_nodes + nodes > 2048) {
                     output.push_back(std::move(call)); continue;
@@ -509,6 +515,52 @@ void inlineLeaves(IRModule& module, const std::map<std::string, Analyzer::LocalS
         }
         compact(caller, aliases, erased);
     }
+}
+
+void rematerializeBranchPredicates(IRFunction& f) {
+    if (f.value_count > 16000 || f.blocks.size() > 256) return;
+    const auto defs = definitions(f);
+    std::vector<unsigned> uses(defs.size(), 0);
+    std::vector<bool> branches_only(defs.size(), true);
+    for (const auto& b : f.blocks) for (const auto& i : b.instructions)
+        for (const auto v : i.operands) {
+            ++uses.at(v.value);
+            branches_only.at(v.value) = branches_only.at(v.value) && i.opcode == IROpcode::CondBranch;
+        }
+    std::set<std::uint32_t> selected;
+    for (std::size_t v = 1; v < defs.size() && selected.size() < 64; ++v) {
+        const auto& i = defs[v];
+        if (uses[v] != 2 || !branches_only[v] || i.opcode != IROpcode::Binary || i.operands.size() != 2 ||
+            (i.operation != "<" && i.operation != ">" && i.operation != "<=" && i.operation != ">=" &&
+             i.operation != "==" && i.operation != "!=")) continue;
+        // A single scalar snapshot against a literal costs at most one home
+        // reload and CMP per use. Two flag-only uses avoid Boolean creation,
+        // its home and both Boolean tests. No producer is cloned: a volatile
+        // load remains one evaluation, with its SSA lifetime extended to both
+        // consumers before register allocation reconstructs interference.
+        if (!scalar(defs.at(i.operands[0].value).type) ||
+            defs.at(i.operands[1].value).opcode != IROpcode::Constant ||
+            !scalar(defs.at(i.operands[1].value).type)) continue;
+        selected.insert(static_cast<std::uint32_t>(v));
+    }
+    if (selected.empty() || selected.size() * 2 > 100000u - f.value_count) return;
+    for (auto& b : f.blocks) {
+        std::vector<IRInstruction> output;
+        for (auto i : b.instructions) {
+            if (selected.count(i.result.value)) continue;
+            if (i.opcode == IROpcode::CondBranch && selected.count(i.operands[0].value)) {
+                auto compare = defs.at(i.operands[0].value);
+                compare.result = newValue(f);
+                compare.in_plot_context = i.in_plot_context;
+                i.operands[0] = compare.result;
+                output.push_back(std::move(compare));
+            }
+            output.push_back(std::move(i));
+        }
+        b.instructions = std::move(output);
+    }
+    std::vector<IRValueId> aliases(static_cast<std::size_t>(f.value_count) + 1);
+    compact(f, aliases, {});
 }
 
 bool movable(const IRInstruction& i, const Definitions& defs) {
@@ -630,12 +682,13 @@ void strengthReduce(IRFunction& f) {
 void IRGlobalOptimizer::run(IRModule& module, const std::map<std::string, Analyzer::LocalSymbolTable>& locals,
                             OptimizationLevel policy, IRCompactionPolicy compaction) {
     const bool size_policy = policy == OptimizationLevel::Size;
+    const bool promote_near_pointers = compaction != IRCompactionPolicy::Disabled;
     const bool compact_ir = compaction == IRCompactionPolicy::Enabled;
     IRVerifier::verify(module);
     for (auto& f : module.functions) {
         IRControlFlow::exposeHardwareLoops(f);
         const auto symbols = locals.find(f.name);
-        if (symbols != locals.end()) promote(f, symbols->second, compact_ir);
+        if (symbols != locals.end()) promote(f, symbols->second, promote_near_pointers);
     }
     IRVerifier::verify(module);
     IRConditionalOptimizer::run(module);
@@ -646,7 +699,7 @@ void IRGlobalOptimizer::run(IRModule& module, const std::map<std::string, Analyz
     IRConditionalOptimizer::run(module);
     IRLocalOptimizer::run(module, locals);
     IRValueOptimizer::run(module);
-    scalarizeToFixedPoint(module, locals, compact_ir);
+    scalarizeToFixedPoint(module, locals, promote_near_pointers);
     for (auto& f : module.functions) {
         simplifyPhis(f);
         if (!size_policy) { hoist(f); strengthReduce(f); }
@@ -681,5 +734,6 @@ void IRGlobalOptimizer::run(IRModule& module, const std::map<std::string, Analyz
     // after final block layout so stable IDs are canonical on the first run.
     IRLocalOptimizer::run(module, locals);
     if (!size_policy) IRValueOptimizer::splitLoopLifetimes(module);
+    for (auto& f : module.functions) rematerializeBranchPredicates(f);
     IRVerifier::verify(module);
 }

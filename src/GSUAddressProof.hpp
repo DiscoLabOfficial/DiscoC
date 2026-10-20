@@ -17,6 +17,14 @@ public:
              std::size_t frame_bytes, bool checked_frame);
     bool provesAccess(IRValueId value, const Type& pointer, int width) const;
     bool provesOffset(const IRInstruction& instruction) const;
+    struct ScalarBounds {
+        std::int64_t low = 0, high = 0;
+    };
+    // Numeric facts only; the caller must independently prove provenance,
+    // object extent, mutability and lifetime. Failure leaves output intact.
+    bool scalarBounds(IRValueId value, IRBlockId block, ScalarBounds& bounds) const;
+    enum class MultiplyKind { FullWord, SignedByte, UnsignedByte };
+    MultiplyKind multiplyKind(const IRInstruction& instruction) const;
 
 private:
     enum class Kind { Unknown, Scalar, Frame, Absolute };
@@ -45,4 +53,5 @@ private:
     std::vector<std::map<std::uint32_t, Fact>> m_constraints;
     std::int64_t m_frame_low = 0, m_frame_end = 0;
     bool m_checked_frame = false;
+    std::size_t m_block_count = 0;
 };

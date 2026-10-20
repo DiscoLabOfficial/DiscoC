@@ -5,7 +5,9 @@
 // O2 operates on an owned copy, never on the analyzed AST/symbol table. Every
 // public pass boundary is verified. Unsupported alias/aggregate cases retain
 // memory, rather than guessing about ownership or pointer validity.
-enum class IRCompactionPolicy { Enabled, Disabled };
+// PointerPromotionOnly retains checked near-pointer SSA without initializer
+// batching or counted-loop conversion; Enabled/Disabled keep their full policy.
+enum class IRCompactionPolicy { Enabled, Disabled, PointerPromotionOnly };
 
 class IRGlobalOptimizer {
 public:

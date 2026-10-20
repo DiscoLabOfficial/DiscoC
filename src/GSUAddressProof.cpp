@@ -415,6 +415,7 @@ void GSUAddressProof::run(const IRFunction& function, const Analyzer::LocalSymbo
         parameters += isFarPointer(parameter.type) ? 4 : 2;
         if (parameters > 65526) return;
     }
+    m_block_count = function.blocks.size();
     m_checked_frame = checked_frame;
     // The linker permits stack_floor=0. Keep the bottom empty word out of
     // the proof: FP-frame_bytes itself could be the null address.
@@ -465,6 +466,15 @@ bool GSUAddressProof::provesAccess(IRValueId value, const Type& pointer, int wid
     return false;
 }
 
+bool GSUAddressProof::scalarBounds(IRValueId value, IRBlockId block, ScalarBounds& bounds) const {
+    if (!value.isValid() || value.value >= m_facts.size() ||
+        !block.isValid() || block.value >= m_block_count) return false;
+    const auto fact = get(value, block.value);
+    if (fact.kind != Kind::Scalar || fact.low > fact.high) return false;
+    bounds = {fact.low, fact.high};
+    return true;
+}
+
 bool GSUAddressProof::provesOffset(const IRInstruction& instruction) const {
     if (instruction.opcode != IROpcode::PointerOffset || instruction.operands.size() != 2 ||
         (instruction.operation != "+" && instruction.operation != "-") ||
@@ -477,4 +487,18 @@ bool GSUAddressProof::provesOffset(const IRInstruction& instruction) const {
         index.high * instruction.immediate <= 65535 &&
         provesAccess(instruction.operands[0], instruction.type, static_cast<int>(instruction.immediate)) &&
         provesAccess(instruction.result, instruction.type, static_cast<int>(instruction.immediate));
+}
+
+GSUAddressProof::MultiplyKind GSUAddressProof::multiplyKind(const IRInstruction& instruction) const {
+    if (instruction.opcode != IROpcode::Binary || instruction.operation != "*" || instruction.operands.size() != 2)
+        return MultiplyKind::FullWord;
+    const auto block = instruction.result.value < m_definition_blocks.size() ?
+        m_definition_blocks[instruction.result.value] : static_cast<std::uint32_t>(IRBlockId::Invalid);
+    const auto a = get(instruction.operands[0], block), b = get(instruction.operands[1], block);
+    // The hardware truncates BOTH inputs, not their product. A small result
+    // alone (including multiplication by zero) is never a byte-operand proof.
+    if (a.kind != Kind::Scalar || b.kind != Kind::Scalar) return MultiplyKind::FullWord;
+    if (a.low >= -128 && a.high <= 127 && b.low >= -128 && b.high <= 127) return MultiplyKind::SignedByte;
+    if (a.low >= 0 && a.high <= 255 && b.low >= 0 && b.high <= 255) return MultiplyKind::UnsignedByte;
+    return MultiplyKind::FullWord;
 }

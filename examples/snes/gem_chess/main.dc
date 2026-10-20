@@ -1,0 +1,700 @@
+// Original geometry, transformed and rasterized on the GSU, not an image asset.
+bitmap scene {
+    mode bitmap;
+    size 256x192;
+    depth 4bpp;
+    base 0;
+}
+
+word q6(word value) {
+    return (value + 32 + (value >> 15)) >> 6;
+}
+
+word sine(word* quarter, word phase) {
+    phase &= 63;
+    word index = phase & 15;
+    if ((phase & 16) != 0) index = 16 - index;
+    word value = quarter[index];
+    if ((phase & 32) != 0) value = -value;
+    return value;
+}
+
+// camera = sin(yaw), cos(yaw), sin(elevation), cos(elevation), distance.
+// The bounded orbit keeps every depth in 128..511. One reciprocal per integer
+// depth is shared by the whole frame; projection needs no per-vertex division.
+void project(word x, word height, word z, word* camera, word* inverse, word* out) {
+    word rx = q6(x * camera[1] + z * camera[0]);
+    word rz = q6(z * camera[1] - x * camera[0]);
+    word h = height - 10;
+    word vertical = q6(h * camera[3] - rz * camera[2]);
+    word depth = camera[4] - q6(h * camera[2] + rz * camera[3]);
+    if (depth < 128 || depth >= 512) {
+        *(volatile word*)0xF018 = 1;
+        out[0]=0; out[1]=0;
+        return;
+    }
+    word factor = inverse[depth];
+    out[0] = 128 + q6(rx * factor);
+    out[1] = 84 - q6(vertical * factor);
+}
+
+// Mesh instances combine unrounded yaw products modulo one word. Round only
+// after adding the center, ring offset and knight lean, just as project() does.
+void project_raw(word raw_x, word height, word raw_z, word* camera, word* inverse, word* out) {
+    word rx = q6(raw_x);
+    word rz = q6(raw_z);
+    word h = height - 10;
+    word vertical = q6(h * camera[3] - rz * camera[2]);
+    word depth = camera[4] - q6(h * camera[2] + rz * camera[3]);
+    if (depth < 128 || depth >= 512) {
+        *(volatile word*)0xF018 = 1;
+        out[0]=0; out[1]=0;
+        return;
+    }
+    word factor = inverse[depth];
+    out[0] = 128 + q6(rx * factor);
+    out[1] = 84 - q6(vertical * factor);
+}
+
+// General clipped midpoint fallback. It samples the same canonical edge pixels
+// as line(), but accumulates extrema instead of plotting them.
+void collect_clipped(word x0, word y0, word x1, word y1, word* spans) {
+    word dx=x1-x0; word dy=y1-y0;
+    if (dx<0) dx=-dx;
+    if (dy<0) dy=-dy;
+    bool horizontal=dx>=dy;
+    if ((horizontal && x0>x1) || (!horizontal && y0>y1)) {
+        word t=x0; x0=x1; x1=t; t=y0; y0=y1; y1=t;
+    }
+    word direction=1;
+    if ((horizontal && y1<y0) || (!horizontal && x1<x0)) direction=-1;
+    word major=dy; word minor=dx;
+    if (horizontal) { major=dx; minor=dy; }
+    word error=major>>1;
+    @cache for (word k=0; k<=major; k++) {
+        if (y0>=0 && y0<192) {
+            word* left=spans+y0; word* right=left+192;
+            if (x0<*left) *left=x0;
+            if (x0>*right) *right=x0;
+        }
+        error+=minor;
+        if (error>=major) {
+            error-=major;
+            if (horizontal) y0+=direction; else x0+=direction;
+        }
+        if (horizontal) x0++; else y0++;
+    }
+}
+
+// Private fast path: clockwise convex faces, all vertices inside the viewport.
+// These faces have a downward left chain and upward right chain.
+// The walk starts on one shared vertex and stops on the other, so only those
+// two rows merge. Interior rows belong to one edge and are stored once.
+// Each side and axis is a straight walk: the minor step is inc or dec, never
+// a value reloaded from the frame on every row.
+void collect_horizontal_left(word x0, word x1, word dx, word dy, word* span, bool down) {
+    word error = dx >> 1;
+    word first = x0;
+    // Do not test a run boundary or touch RAM for every edge pixel.
+    // This is the original error recurrence, including its >= tie.
+    @cache while (true) {
+        error += dy;
+        if (error >= dx || x0 == x1) break;
+        x0++;
+    }
+    if (first < *span) *span = first;
+    if (x0 == x1) return;
+    if (down) {
+        @cache while (true) {
+            error -= dx;
+            x0++;
+            span--;
+            first = x0;
+            while (true) {
+                error += dy;
+                if (error >= dx || x0 == x1) break;
+                x0++;
+            }
+            if (x0 == x1) {
+                if (first < *span) *span = first;
+                return;
+            }
+            *span = first;
+        }
+    } else {
+        @cache while (true) {
+            error -= dx;
+            x0++;
+            span++;
+            first = x0;
+            while (true) {
+                error += dy;
+                if (error >= dx || x0 == x1) break;
+                x0++;
+            }
+            if (x0 == x1) {
+                if (first < *span) *span = first;
+                return;
+            }
+            *span = first;
+        }
+    }
+}
+
+void collect_horizontal_right(word x0, word x1, word dx, word dy, word* span, bool down) {
+    word error = dx >> 1;
+    @cache while (true) {
+        error += dy;
+        if (error >= dx || x0 == x1) break;
+        x0++;
+    }
+    if (x0 > *span) *span = x0;
+    if (x0 == x1) return;
+    if (down) {
+        @cache while (true) {
+            error -= dx;
+            x0++;
+            span--;
+            while (true) {
+                error += dy;
+                if (error >= dx || x0 == x1) break;
+                x0++;
+            }
+            if (x0 == x1) {
+                if (x0 > *span) *span = x0;
+                return;
+            }
+            *span = x0;
+        }
+    } else {
+        @cache while (true) {
+            error -= dx;
+            x0++;
+            span++;
+            while (true) {
+                error += dy;
+                if (error >= dx || x0 == x1) break;
+                x0++;
+            }
+            if (x0 == x1) {
+                if (x0 > *span) *span = x0;
+                return;
+            }
+            *span = x0;
+        }
+    }
+}
+
+void collect_vertical_left(word x0, word y0, word y1, word dx, word dy, word* span, bool leftward) {
+    word error = dy >> 1;
+    word* last = span + (y1 - y0);
+    if (x0 < *span) *span = x0;
+    if (span == last) return;
+    error += dx;
+    if (error >= dy) {
+        error -= dy;
+        if (leftward) x0--; else x0++;
+    }
+    span++;
+    if (leftward) {
+        @cache while (span != last) {
+            *span = x0;
+            error += dx;
+            if (error >= dy) { error -= dy; x0--; }
+            span++;
+        }
+    } else {
+        @cache while (span != last) {
+            *span = x0;
+            error += dx;
+            if (error >= dy) { error -= dy; x0++; }
+            span++;
+        }
+    }
+    if (x0 < *span) *span = x0;
+}
+
+void collect_vertical_right(word x0, word y0, word y1, word dx, word dy, word* span, bool leftward) {
+    word error = dy >> 1;
+    word* last = span + (y1 - y0);
+    if (x0 > *span) *span = x0;
+    if (span == last) return;
+    error += dx;
+    if (error >= dy) {
+        error -= dy;
+        if (leftward) x0--; else x0++;
+    }
+    span++;
+    if (leftward) {
+        @cache while (span != last) {
+            *span = x0;
+            error += dx;
+            if (error >= dy) { error -= dy; x0--; }
+            span++;
+        }
+    } else {
+        @cache while (span != last) {
+            *span = x0;
+            error += dx;
+            if (error >= dy) { error -= dy; x0++; }
+            span++;
+        }
+    }
+    if (x0 > *span) *span = x0;
+}
+
+void collect(word x0, word y0, word x1, word y1, word* spans) {
+    word dx = x1 - x0; word dy = y1 - y0;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    if (dy==0) {
+        if (x0>x1) { word t=x0; x0=x1; x1=t; }
+        word* left=spans+y0; word* right=left+192;
+        if (x0<*left) *left=x0;
+        if (x1>*right) *right=x1;
+        return;
+    }
+    bool leftside = y1 > y0;
+    bool horizontal = dx >= dy;
+    if ((horizontal && x0 > x1) || (!horizontal && y0 > y1)) {
+        word t = x0; x0 = x1; x1 = t;
+        t = y0; y0 = y1; y1 = t;
+    }
+    word* span = spans + y0;
+    if (!leftside) span += 192;
+    if (horizontal) {
+        if (leftside) collect_horizontal_left(x0, x1, dx, dy, span, y1 < y0);
+        else collect_horizontal_right(x0, x1, dx, dy, span, y1 < y0);
+    } else if (leftside) {
+        collect_vertical_left(x0, y0, y1, dx, dy, span, x1 < x0);
+    } else {
+        collect_vertical_right(x0, y0, y1, dx, dy, span, x1 < x0);
+    }
+}
+
+void line(word x0, word y0, word x1, word y1, word ink) {
+    word dx = x1 - x0; word dy = y1 - y0;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    bool horizontal = dx >= dy;
+    if ((horizontal && x0 > x1) || (!horizontal && y0 > y1)) {
+        word t = x0; x0 = x1; x1 = t;
+        t = y0; y0 = y1; y1 = t;
+    }
+    word direction = 1;
+    if ((horizontal && y1 < y0) || (!horizontal && x1 < x0)) direction = -1;
+    word major = dy; word minor = dx;
+    if (horizontal) { major = dx; minor = dy; }
+    word error = major >> 1;
+    plot {
+        color ink;
+        @cache for (word k = 0; k <= major; k++) {
+            if (x0 >= 0 && x0 < 256 && y0 >= 0 && y0 < 192) {
+                at (x0, y0);
+                pixel;
+            }
+            error += minor;
+            if (error >= major) {
+                error -= major;
+                if (horizontal) y0 += direction; else x0 += direction;
+            }
+            if (horizontal) x0++; else y0++;
+        }
+    }
+}
+
+// Already-culled convex polygons; clip spans without moving their vertices.
+word paint(word* xs, word* ys, word vertices, word ink, bool wire, word* spans) {
+    if (wire) {
+        for (word i = 0; i < vertices; i++) {
+            word next = i+1; if (next==vertices) next=0;
+            line(xs[i], ys[i], xs[next], ys[next], ink);
+        }
+        return 1;
+    }
+    word top = 191; word bottom = 0;
+    bool clipped=false;
+    for (word i = 0; i < vertices; i++) {
+        word x=xs[i]; word y=ys[i];
+        if (y < top) top = y;
+        if (y > bottom) bottom = y;
+        if (x<0 || x>255) clipped=true;
+        if (y<0 || y>191) clipped=true;
+        else { spans[y]=x; spans[192+y]=x; }
+    }
+    if (top < 0) top = 0;
+    if (bottom > 191) bottom = 191;
+    if (top > bottom) return 0;
+    word* left = spans + top; word* right = spans + 192 + top;
+    if (clipped || top==bottom) {
+        // Keep fully clipped and horizontal/point degeneracy behavior, even
+        // outside the scene's proven in-viewport camera envelope.
+        @cache for (word y = top; y <= bottom; y++) { *left=256; *right=-1; left++; right++; }
+        for (word i=0; i<vertices; i++) {
+            word next=i+1; if (next==vertices) next=0;
+            collect_clipped(xs[i],ys[i],xs[next],ys[next],spans);
+        }
+    } else {
+        for (word i=0; i<vertices; i++) {
+            word next=i+1; if (next==vertices) next=0;
+            collect(xs[i],ys[i],xs[next],ys[next],spans);
+        }
+    }
+    left = spans + top; right = spans + 192 + top;
+    plot {
+        color ink;
+        if (clipped || top == bottom) {
+            for (word y = top; y <= bottom; y++) {
+                word start = *left; word end = *right;
+                if (start < 0) start = 0;
+                if (end > 255) end = 255;
+                word width = end - start + 1;
+                if (width > 0) {
+                    at (start, y);
+                    @cache for (word x = 0; x < width; x++) pixel;
+                }
+                left++; right++;
+            }
+        } else {
+            // In-viewport convex edges stay inside 0..255, so the span walk
+            // does not clip. One cache window covers every scanline's plot.
+            @cache for (word y = top; y <= bottom; y++) {
+                word start = *left; word end = *right;
+                word width = end - start + 1;
+                if (width > 0) {
+                    at (start, y);
+                    for (word x = 0; x < width; x++) pixel;
+                }
+                left++; right++;
+            }
+        }
+    }
+    return 1;
+}
+
+// Integer ring coordinates are not necessarily homothetic. The chosen diagonal
+// follows the band's convex hull. Even planar quads can fold after quantized
+// perspective projection, so independently cull the two selected triangles.
+// Fuse their fill only when both are visible AND their projection is convex.
+word quad_face(word* points, word a, word b, word c, word d,
+               word ink, bool wire, word* spans, bool bd) {
+    // Coordinates are loaded once. Their products finish before the paint
+    // arrays exist, and a culled quad never builds those arrays.
+    word ax = points[a+a]; word ay = points[a+a+1];
+    word bx = points[b+b]; word by = points[b+b+1];
+    word cx = points[c+c]; word cy = points[c+c+1];
+    word dx = points[d+d]; word dy = points[d+d+1];
+    word abx = bx-ax; word aby = by-ay;
+    word acx = cx-ax; word acy = cy-ay;
+    word adx = dx-ax; word ady = dy-ay;
+    word first; word second;
+    if (bd) {
+        first = abx*ady-aby*adx;
+        second = (acx-abx)*(ady-aby)-(acy-aby)*(adx-abx);
+    } else {
+        first = abx*acy-aby*acx;
+        second = acx*ady-acy*adx;
+    }
+    if (first>=0 && second>=0) return 0;
+    bool fused = false;
+    if (first<0 && second<0) {
+        word other;
+        if (bd) other = abx*acy-aby*acx;
+        else other = abx*ady-aby*adx;
+        // Both diagonals have the same total determinant. Word arithmetic
+        // preserves the original individual determinants, including their sign.
+        word remaining = first+second-other;
+        if (other<=0 && remaining<=0) fused = true;
+    }
+    word xs[4] = {ax, bx, cx, dx};
+    word ys[4] = {ay, by, cy, dy};
+    if (fused) return paint(&xs[0], &ys[0], 4, ink, wire, spans);
+    // Reuse the polygon's storage; a hidden triangle needs no temporary copy.
+    if (bd) {
+        word t=xs[2]; xs[2]=xs[3]; xs[3]=t;
+        t=ys[2]; ys[2]=ys[3]; ys[3]=t;
+    }
+    word count=0;
+    if (first<0) count=paint(&xs[0],&ys[0],3,ink,wire,spans);
+    if (second<0) {
+        if (bd) { xs[0]=xs[1]; ys[0]=ys[1]; xs[1]=xs[3]; ys[1]=ys[3]; }
+        else { xs[1]=xs[2]; ys[1]=ys[2]; xs[2]=xs[3]; ys[2]=ys[3]; }
+        count+=paint(&xs[0],&ys[0],3,ink,wire,spans);
+    }
+    return count;
+}
+
+// Planar board/box faces use AC. Repeated C/D indices represent a triangle.
+word face(word* points, word a, word b, word c, word d,
+          word ink, bool wire, word* spans) {
+    if (c!=d) return quad_face(points,a,b,c,d,ink,wire,spans,false);
+    word ax = points[a+a]; word ay = points[a+a+1];
+    word bx = points[b+b]; word by = points[b+b+1];
+    word cx = points[c+c]; word cy = points[c+c+1];
+    word area = (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);
+    if (area >= 0) return 0;
+    word xs[3] = {ax, bx, cx};
+    word ys[3] = {ay, by, cy};
+    return paint(&xs[0],&ys[0],3,ink,wire,spans);
+}
+
+// A bounded dot product with a fixed world-space light. L1 normalization is
+// quantized using comparisons, avoiding sqrt/division for every tiny facet.
+word shade(word dh, word dr, word horizontal, word material) {
+    word slope = dr; if (slope < 0) slope = -slope;
+    word denominator = dh + slope;
+    word light = horizontal * dh + 48 * dr;
+    word level = 4;
+    if (light < 40 * denominator) level = 3;
+    if (light < 16 * denominator) level = 2;
+    if (light < -8 * denominator) level = 1;
+    if (light < -32 * denominator) level = 0;
+    return material + level;
+}
+
+word box(word x, word y, word z, word width, word height, word depth,
+         word material, bool wire, word* camera, word* inverse, word* spans) {
+    word points[16];
+    for (word i = 0; i < 8; i++) {
+        word xx = -width; if ((i & 1) != 0) xx = width;
+        word yy = 0; if ((i & 2) != 0) yy = height;
+        word zz = -depth; if ((i & 4) != 0) zz = depth;
+        project(x+xx, y+yy, z+zz, camera, inverse, &points[i+i]);
+    }
+    word faces[24] = {0,2,3,1, 4,5,7,6, 0,4,6,2, 1,3,7,5, 0,1,5,4, 2,6,7,3};
+    word count = 0;
+    for (word i = 0; i < 6; i++) {
+        word ink = material+2;
+        if (i == 0 || i == 3) ink = material+1;
+        if (i == 5) ink = material+4;
+        count += face(&points[0], faces[i*4], faces[i*4+1], faces[i*4+2], faces[i*4+3], ink, wire, spans);
+    }
+    return count;
+}
+
+word main() {
+    use bitmap scene;
+    word yaw = *(volatile word*)0xF002 & 63;
+    word elevation = *(volatile word*)0xF004;
+    word zoom = *(volatile word*)0xF006;
+    bool wire = (*(volatile word*)0xF008 & 1) != 0;
+    *(volatile word*)0xF018 = 0;
+    if (elevation < 5) elevation = 5;
+    if (elevation > 10) elevation = 10;
+    if (zoom < 6) zoom = 6;
+    if (zoom > 16) zoom = 16;
+    word quarter[17] = {0,6,12,19,24,30,36,41,45,49,53,56,59,61,63,64,64};
+    word camera[5] = {sine(&quarter[0], yaw), sine(&quarter[0], yaw+16),
+        sine(&quarter[0], elevation), sine(&quarter[0], elevation+16), 400-zoom*8};
+    word inverse[512];
+    // At entry to each iteration, product is quotient*i. Across this bounded
+    // range floor(16384/i) falls by at most one, so one correction is exact.
+    word quotient=128; word product=16384;
+    @cache for (word i = 128; i < 512; i++) {
+        if (product>16384) { quotient--; product-=i; }
+        inverse[i]=quotient;
+        product+=quotient;
+    }
+    word spans[384];
+    word count = 0;
+
+    plot {
+        // Zero is opaque in this plot context: every frame clears the complete
+        // framebuffer, not just the previous geometry's bounding box.
+        options;
+        color 0;
+        for (word y = 0; y < 192; y++) {
+            at (0, y);
+            @cache for (word x = 0; x < 256; x++) pixel;
+        }
+    }
+
+    // Beveled plinth: lower/upper four-corner rings, then a gold top frame.
+    word border[16];
+    for (word i = 0; i < 4; i++) {
+        word xx = -70; if (i == 1 || i == 2) xx = 70;
+        word zz = -70; if (i >= 2) zz = 70;
+        project(xx, -5, zz, &camera[0], &inverse[0], &border[i+i]);
+        project(xx, 0, zz, &camera[0], &inverse[0], &border[8+i+i]);
+    }
+    for (word i = 0; i < 4; i++) {
+        word next = (i+1) & 3;
+        count += face(&border[0], next, i, i+4, next+4, 3, false, &spans[0]);
+    }
+    count += face(&border[0], 7,6,5,4, 3,false,&spans[0]);
+
+    word grid[162];
+    for (word z = 0; z <= 8; z++) {
+        for (word x = 0; x <= 8; x++) {
+            word vertex = (z*9+x)*2;
+            project(x*16-64, 0, z*16-64, &camera[0], &inverse[0], &grid[vertex]);
+        }
+    }
+    for (word z = 0; z < 8; z++) {
+        for (word x = 0; x < 8; x++) {
+            word a = z*9+x;
+            count += face(&grid[0], a+9,a+10,a+1,a, 1+((x^z)&1),false,&spans[0]);
+        }
+    }
+
+    // Symmetric profiles are shared by every instance. Types: pawn, rook,
+    // knight, bishop, queen, king. The knight's head leans toward the enemy.
+    word radii[36] = {5,6,3,2,4,0, 6,6,3,3,6,6, 6,6,3,2,4,2,
+        6,6,3,2,5,0, 6,6,3,2,6,3, 6,6,3,2,5,2};
+    word heights[36] = {0,2,4,10,15,21, 0,2,4,16,18,23, 0,2,4,13,18,22,
+        0,2,4,15,22,29, 0,2,4,17,23,29, 0,2,4,19,25,29};
+    // Convex-hull BD-diagonal masks, five six-sided bands per mesh type.
+    word diagonals[30] = {36,9,36,36,0, 0,9,0,36,0, 0,9,36,36,9,
+        0,9,36,0,0, 0,9,36,36,9, 0,9,36,0,0};
+    word back_rank[8] = {1,2,3,4,5,3,2,1};
+    word ring_x[6] = {64,32,-32,-64,-32,32};
+    word ring_z[6] = {0,55,55,0,-55,-55};
+    // Keep rounding on the complete original radius product, not on a split
+    // projection. Every instance shares these exact 7*6 coordinate pairs.
+    word ring_offsets[84];
+    for (word radius=0; radius<=6; radius++) {
+        for (word s=0; s<6; s++) {
+            word vertex=(radius*6+s)*2;
+            ring_offsets[vertex]=q6(radius*ring_x[s]);
+            ring_offsets[vertex+1]=q6(radius*ring_z[s]);
+        }
+    }
+    word normal_z[6] = {32,64,32,-32,-64,-32};
+    word light[6] = {-41,-20,21,41,20,-21};
+    word order[32]; unsigned word keys[32];
+    word eye_ground = q6(camera[4] * camera[3]);
+
+    // Order disjoint vertical footprints by horizontal eye distance, far first.
+    // Half-sized coordinates keep the squared key within unsigned 16 bits.
+    for (word i = 0; i < 32; i++) {
+        word team = i >> 4; word slot = i & 15;
+        word xx = (slot & 7)*16-56;
+        word zz = -56; if (slot >= 8) zz = -40;
+        if (team != 0) zz = -zz;
+        word rx = q6(xx*camera[1]+zz*camera[0]);
+        word rz = q6(zz*camera[1]-xx*camera[0]);
+        word half_x=rx>>1; word half_d=(eye_ground-rz)>>1;
+        unsigned word key=(unsigned word)(half_x*half_x)
+            + (unsigned word)half_d*(unsigned word)half_d;
+        word j = i;
+        while (j > 0 && keys[j-1] < key) { keys[j]=keys[j-1]; order[j]=order[j-1]; j--; }
+        keys[j] = key; order[j] = i;
+    }
+
+    word points[74];
+    // All shadows lie on the board. Paint them before any raised piece.
+    for (word i = 0; i < 32; i++) {
+        word team=i>>4; word slot=i&15;
+        word xx=(slot&7)*16-56; word zz=-56;
+        if (slot>=8) zz=-40;
+        if (team!=0) zz=-zz;
+        for (word s=0; s<6; s++)
+            project(xx+2+ring_offsets[72+s+s],0,zz+2+ring_offsets[73+s+s],&camera[0],&inverse[0],&points[s+s]);
+        count += face(&points[0],3,2,1,0,15,false,&spans[0]);
+        count += face(&points[0],0,5,4,3,15,false,&spans[0]);
+    }
+
+    // Shadows consumed the world offsets. Reuse their 84 words for the raw
+    // rotated offsets shared by every mesh, without component-wise rounding.
+    for (word vertex=0; vertex<84; vertex+=2) {
+        word x=ring_offsets[vertex]; word z=ring_offsets[vertex+1];
+        ring_offsets[vertex]=x*camera[1]+z*camera[0];
+        ring_offsets[vertex+1]=z*camera[1]-x*camera[0];
+    }
+
+    for (word item = 0; item < 32; item++) {
+        word piece = order[item]; word team = piece >> 4; word slot = piece & 15;
+        word xx = (slot & 7)*16-56; word zz = -56;
+        word piece_type = back_rank[slot & 7];
+        if (slot >= 8) { zz = -40; piece_type = 0; }
+        if (team != 0) zz = -zz;
+        word material = 4; word facing = 1;
+        if (team != 0) { material=9; facing=-1; }
+        word raw_x=xx*camera[1]+zz*camera[0];
+        word raw_z=zz*camera[1]-xx*camera[0];
+        word profile = piece_type*6;
+        // Pawn/bishop final rings and their caps are the same unleaned apex.
+        // Keep all six ring indices for the real conical band below them.
+        bool collapsed = piece_type == 0 || piece_type == 3;
+        word rings = 6; if (collapsed) rings = 5;
+        for (word ring = 0; ring < rings; ring++) {
+            word radius = radii[profile+ring]; word height = heights[profile+ring];
+            word lean_x=0; word lean_z=0;
+            if (piece_type == 2 && ring >= 3) {
+                word offset=(ring-3)*facing;
+                lean_x=offset*camera[0]; lean_z=offset*camera[1];
+            }
+            for (word s = 0; s < 6; s++) {
+                word vertex = (ring*6+s)*2;
+                word radial=(radius*6+s)*2;
+                project_raw(raw_x+lean_x+ring_offsets[radial], height, raw_z+lean_z+ring_offsets[radial+1],
+                    &camera[0],&inverse[0],&points[vertex]);
+            }
+        }
+        word cap = heights[profile+5];
+        if (piece_type == 4) cap += 3;
+        project_raw(raw_x,cap,raw_z,&camera[0],&inverse[0],&points[72]);
+        if (collapsed) {
+            word apex_x=points[72]; word apex_y=points[73];
+            for (word s=0; s<6; s++) {
+                points[60+s+s]=apex_x; points[61+s+s]=apex_y;
+            }
+        }
+        for (word band = 0; band < 5; band++) {
+            word dh = heights[profile+band+1]-heights[profile+band];
+            word dr = radii[profile+band]-radii[profile+band+1];
+            word mask=diagonals[piece_type*5+band]; word bit=1;
+            for (word s = 0; s < 6; s++) {
+                word next = s+1; if (next==6) next=0;
+                word a=band*6+s; word b=band*6+next;
+                word slope=dr;
+                if (piece_type==2 && band>=3) slope-=q6(normal_z[s]*facing);
+                word ink=shade(dh,slope,light[s],material);
+                count += quad_face(&points[0],b,a,a+6,b+6,ink,wire,&spans[0],(mask&bit)!=0);
+                bit+=bit;
+            }
+        }
+        if (!collapsed) {
+            for (word s = 0; s < 6; s++) {
+                word next=s+1; if(next==6) next=0;
+                word ink=shade(cap-heights[profile+5],radii[profile+5],light[s],material);
+                count += face(&points[0],30+next,30+s,36,36,ink,wire,&spans[0]);
+            }
+        }
+        if (piece_type == 5) {
+            // A real extruded cross, three nonintersecting convex solids.
+            count += box(xx,29,zz,1,4,1,material,wire,&camera[0],&inverse[0],&spans[0]);
+            count += box(xx,33,zz,4,2,1,material,wire,&camera[0],&inverse[0],&spans[0]);
+            count += box(xx,35,zz,1,3,1,material,wire,&camera[0],&inverse[0],&spans[0]);
+        }
+        if (piece_type == 1) {
+            // Four separate merlons: do not fill a concave crown as one polygon.
+            word teeth[4] = {0,1,2,3}; word tooth_keys[4];
+            for (word t=0; t<4; t++) {
+                word tx=-4; word tz=0;
+                if (t==1) { tx=0; tz=-3; }
+                if (t==2) tx=4;
+                if (t==3) { tx=0; tz=3; }
+                word key=tz*camera[1]-tx*camera[0];
+                word j=t;
+                while(j>0 && tooth_keys[j-1]>key) { tooth_keys[j]=tooth_keys[j-1]; teeth[j]=teeth[j-1]; j--; }
+                tooth_keys[j]=key; teeth[j]=t;
+            }
+            for (word t=0; t<4; t++) {
+                word tooth=teeth[t]; word tx=-4; word tz=0;
+                if (tooth==1) { tx=0; tz=-3; }
+                if (tooth==2) tx=4;
+                if (tooth==3) { tx=0; tz=3; }
+                count += box(xx+tx,23,zz+tz,1,4,1,material,wire,&camera[0],&inverse[0],&spans[0]);
+            }
+        }
+    }
+    flush;
+    if (*(volatile word*)0xF018 != 0) count=0;
+    *(volatile word*)0xF000 = count;
+    *(volatile word*)0xF010 = yaw;
+    *(volatile word*)0xF012 = elevation;
+    *(volatile word*)0xF014 = zoom;
+    *(volatile word*)0xF016 = (word)wire;
+    return count;
+}

@@ -22,6 +22,14 @@ selection and pipeline-aware machine scheduling. Os uses an explicit byte-size
 policy with bounded emitted-code candidate selection. O3/Ofast are
 unsupported and diagnosed.
 
+## Condition lowering
+
+At every level, `if`, `while` and conditional `for` tests lower `&&`, `||`
+and `!` directly to short-circuit control flow rather than temporary bool slots.
+Integer-to-bool casts preserve zero/nonzero tests; narrowing casts still execute.
+Expressions used as values still produce bool values. This changes no language
+semantics: operand evaluation, calls, volatile reads and faults retain their order.
+
 ## Selecting the mode
 
 ```sh
@@ -71,6 +79,49 @@ A CMake `Release` build optimizes the native C++ toolchain itself; it does not
 implicitly select O1 for DiscoC sources. Select the generated-code policy
 explicitly through the compiler flag or manifest.
 
+## Requiring spill-free allocation
+
+`--require-no-spills` makes compiler-generated spill storage an error for GSU
+source compiled in that invocation. It is off by default and has no TOML key,
+object metadata, object-format change or ABI change:
+
+```sh
+discc -O2 --require-no-spills main.dc -o main.o
+discc build -Os --require-no-spills
+discc -O2 --require-no-spills --check main.dc
+```
+
+The constraint checks the actual selected backend candidate's final IR-value
+spill homes and auxiliary DivMod result homes. Explicit local objects, ABI
+arguments and register saves are excluded: this is **not a stackless ABI** or
+a guarantee of no stack accesses. An address calculation for a local array can
+itself spill, even though the array's storage is excluded; for example, an O0
+`local[0] = 42` can still fail the constraint. It does not certify prebuilt
+objects subsequently linked with the result.
+
+Ordinary compilation, `--check` and `--emit-ir` run the selected code-generation
+allocation validation. The inspection modes do not write backend output files.
+`--emit-ast` and SPC700 compilation reject the option as unsupported rather than
+silently skipping validation.
+
+At Os, spill-free eligibility precedes byte comparison within the bounded
+candidate search, including per-function policy mixing. The final emitted
+winner owns its spill evidence; evidence from another alternative is not reused.
+Equal-byte ties use the deterministic speed proxy described below, then stable order.
+If no eligible candidate exists, compilation fails. The constraint can therefore
+select larger code: a tested two-word, 32-trip wrapping recurrence selects
+147 bytes with LOOP instead of the ordinary 121-byte spilling candidate.
+This is a constraint tradeoff, not a free size or speed optimization. With the
+flag omitted, candidate selection remains unchanged.
+
+In the previously recorded 36-case benchmark matrix, 19 strict cases have eligible
+candidates and 17 reject genuine spills. Eighteen eligible ordinary winners
+remain byte- and timing-identical; Os `memcpy` instead grows from 303 to 345
+bytes while measured Mesen GSU cycles fall from 65,605 to 54,955. Size,
+spill-freedom and execution cost are distinct objectives, not interchangeable
+metrics. The historical gem-chess snapshot failed the strict constraint; see
+its [measured tradeoffs](../examples/snes/gem_chess/README.md#historical-optimization-snapshot-2026-10-18).
+
 ## Size policy (-Os)
 
 Os minimizes emitted CODE plus DATA and necessary DATA alignment, not executed
@@ -93,16 +144,48 @@ graphics effects. Smaller code may execute more instructions or cycles.
   verified lowering, bounded branch relaxation and machine emission. When an
   automatic CACHE probe is present, also emit its no-auto-CACHE alternative:
   scheduling a useful delay-slot instruction can beat a CACHE occupying that
-  byte. There are at most sixteen emitted alternatives. Keep the
-  smallest actual CODE/DATA result; ties retain the earlier candidate. An O2
-  transformation is therefore still allowed when its complete candidate wins
-  on bytes. This is a bounded search, not a claim that every individual
-  transformation is byte-optimal. Larger units retain the compact O2-policy
-  fallback without candidate expansion.
+  byte. RAM-payload units also try at most two primary no-array-pool policies
+  (O2 and size, compacted, without shared division), not another Cartesian
+  search. Thus there are eight base IR policies, at most ten with these additions.
+  Retain an owned best function from the emitted alternatives, with its IR,
+  allocation, division and array-pool policies, then re-emit one mixed module.
+  Preserve this complete legacy whole-object winner before extending the search.
+  The working-tree extension anchors candidate-owned scheduled total/per-function
+  metrics to a fixed reference of that winner, not the greedy function map.
+  Reject worsening structural loop-weighted proxies before replacing function
+  snapshots and again before whole-object byte preference. Missing or invalid
+  function names/bounds/metrics reject the optional extension, not the legacy
+  winner. With `--require-no-spills`, complete spill-free eligibility takes
+  precedence over the proxy after metric validation; ordinary compilation does
+  not collect spill diagnostics or certify spill-freedom. The reference is
+  borrowed only synchronously; scoped cleanup releases phase/override/IR observers
+  on return and exceptions.
+  Two additional primaries use O2 or size allocation with private division and
+  near-pointer promotion only: checked pointer SSA remains available without
+  counted-loop conversion or initializer batching. The existing enabled/disabled
+  compaction policies retain their behavior. Re-emit an enriched mixed module
+  from the candidate-owned snapshots as well. Each policy and mixed module can
+  have a no-auto-CACHE alternative: at most 28 emitted alternatives, excluding
+  the unchanged bounded branch-relaxation retries. Strict spill-free eligibility
+  still precedes byte comparison, with diagnostics owned by the selected candidate.
+  The final whole-object comparison includes CODE, all DATA, deduplication and
+  required padding; per-function estimates cannot override it. Equal-byte
+  candidates prefer fewer structurally loop-weighted scheduled bytes, then
+  stable order. This speed proxy is not measured cycles. An O2 transformation
+  remains allowed when its complete candidate wins. This is bounded search,
+  not byte-optimality. Larger units retain the compact O2-policy fallback
+  without candidate expansion or immutable-array pools.
 - **Use static allocation costs.** The conservative size allocator counts
   static uses, transfers, PHI copies and caller preservation instead of
   weighting loop frequency. Its alternative must strictly reduce estimated
   fetch bytes; the final machine comparison includes real spills and copies.
+- **Avoid proven redundant transfers.** Working-tree Os inline signed/unsigned
+  division outside plot copies the divisor directly into R3 instead of staging
+  it in R4; plot, shared-kernel and O0/O1/O2 paths are unchanged. An already-proved
+  near-RAM offset can copy an authoritative allocated scalar WORD index directly
+  into R6, without R0. Spilled, boundary, regional, ephemeral, rematerialized,
+  byte, far and unproved cases retain their original path. Base materialization,
+  scaling, checks and fault order remain unchanged; CACHE ownership is unaffected.
 - **Pool repeated software division.** Eligible signed and unsigned word
   division/remainder sites can call separate private, same-unit divmod kernels.
   A single generic division keeps the inline sequence. A pool is selected only
@@ -128,7 +211,7 @@ graphics effects. Smaller code may execute more instructions or cycles.
   linker placement checks remain intact.
 
 `--emit-ir -Os` and `--check -Os` inspect/verify the conservative size IR.
-Machine emission may choose the smaller alternate O2-policy candidate;
+Machine emission may choose alternate O2-policy or mixed-function candidates;
 compiler assembly and final linked assembly still describe their actual
 selected bytes. Candidate search, suffix matching and branch widening are
 bounded and deterministic. No profile input, unchecked-memory mode, arbitrary
@@ -413,7 +496,9 @@ final committed revision before treating them as release-candidate evidence.
 - Keep short CFG/internal branches individually; widen only out-of-range
   branches and invert simple conditions when the false edge is fallthrough.
   Widening is monotonic, capped at eight emission attempts with a safe long-form
-  fallback. All branches retain their pipeline delay slots.
+  fallback. Each attempt collects widening requests across the whole module;
+  exhausted retries force long forms only in functions still requiring them.
+  All branches retain their pipeline delay slots.
 - Emit nontrivial SSA definitions once, in IR order. Allocate single-use and
   reused scalar results to R5/R7/R8, including checked-pointer/plot functions.
   Retain real aligned frame spills under register pressure.
@@ -437,8 +522,11 @@ final committed revision before treating them as release-candidate evidence.
   signed/unsigned branches. Comparisons used as values still produce bool.
 - Scale near-pointer offsets with checked shifts/add/sub for power-of-two
   strides instead of walking elements. Retain carry/borrow, alignment, null,
-  bank-window and fault checks. Far transitions and other strides keep the
-  explicit baseline algorithm.
+  bank-window and fault checks. Constant near offsets use one scaled ADD/SUB,
+  including non-power-of-two strides. Base representation checks precede
+  displacement overflow, followed by carry/borrow and complete result-span
+  checks unless proved redundant. Far transitions retain the explicit baseline
+  algorithm; other nonconstant strides keep their existing stepping path.
 - Elide repeated identical literal COLOR writes only within a basic block
   with unchanged POR. Still evaluate expressions; calls, emitted CMODE,
   GETC, block boundaries and implicit hardware-loop boundaries invalidate the
@@ -584,10 +672,19 @@ bounded machine scheduling. It has no LLVM dependency.
   scaled magnitude must fit a word. Numeric wrapping never becomes a guessed
   small interval. Unknown loads/calls, recursive pointer PHIs, over-aligned
   locals, far/ROM addresses and scaled-index recurrences retain their checks.
+- **Bounded multiply selection.** O2/Os use MULT only when both operands are
+  proved within -128..127, or UMULT when both are within 0..255. A small product
+  alone is insufficient because hardware truncates both inputs. Eligible
+  results go directly to allocated R5/R7/R8, using an immediate operand when
+  available. Full-word products retain LMULT; loading an allocated operand
+  directly into R6 avoids an unnecessary accumulator copy. No special-register
+  allocation, interprocedural range assumption, ABI or object-version change
+  is introduced.
 - **Local successful-check credit.** Within one emitted block, a successful
   access check of an immutable SSA near-RAM address can justify an equal or
   narrower access to that same value. Pointer-offset arithmetic must first
   pass its original carry/borrow, representation and result-span checks.
+  A checked near-RAM offset result supplies the same bounded-width credit.
   CFG block entries, PHI copies and calls discard the credit; a reloaded pointer or a
   cast has its own SSA identity. A byte check does not justify a word access.
 - **Adjacent transient values.** A single-use, nonallocated scalar or proved
@@ -605,10 +702,15 @@ bounded machine scheduling. It has no LLVM dependency.
   its physical R1 increment; no extra increment is introduced for a pixel.
 - **Stack-check reuse.** Track a lower-bound credit relative to the linker's
   common stack floor. The existing frame guard covers the two saved-register
-  pushes; later paired pushes/pops can reuse an established bound. Allocation
-  and pushes consume credit; cleanup restores it. Calls, SP replacement,
-  blocks, helper joins and hardware backedges fence it. No larger requirement
+  pushes; later paired pushes/pops can reuse a dominating bound only within
+  straight-line emission. Allocation and pushes consume credit; cleanup restores
+  it. Every CFG block entry and local-label binding must reset the credit,
+  including call-free loop bodies; calls and SP replacement also fence it.
+  Credit must not cross alternative control-flow arms. No larger requirement
   is hoisted before an observable effect or onto an untaken path.
+  The conservative reset repair is covered by the current
+  [local validation](testing.md#gem-chess-local-validation); older timing
+  snapshots below do not validate later control-flow changes.
 - **Divmod fusion.** A dominating word division/remainder can own both results
   when a later opposite operation uses the same resolved SSA operands and type.
   `divmod /` (or `%`) keeps the first operation's result; `divmod.result` selects
@@ -662,6 +764,134 @@ unproved accesses checked; it does not weaken safety or invent first-trip PHI
 facts. O2 can increase code size or lose cycles on a particular
 workload; benchmark both levels rather than assume a universal improvement.
 
+## Final storage and loop-state planning
+
+O2/Os plan storage on each owned candidate after SSA and CFG transformations,
+without changing analyzer symbol tables or parameter ABI offsets. Dead local
+homes disappear; whole-object CFG liveness permits noninterfering objects to
+share aligned homes. Partial stores do not kill a whole object's lifetime.
+Unknown flat RAM aliases, numeric/incoming pointers, escapes, calls, volatile
+accesses and unproved access bounds conservatively retain the original layout:
+absence of `&local` is not a no-alias contract. Planning is bounded to 256 local
+symbols, 256 blocks, 8,192 values, 16,000 instructions and two million liveness
+work units. A changed IR must be replanned from the original unplanned input.
+
+For copied RAM execution, eligible immutable local integer arrays can instead
+use private near-RAM DATA pools. They require one complete constant initializer
+dominating every read, no mutation/escape/volatile access, and proven complete
+in-object access widths. Eligible arrays have 4–256 byte/word/bool elements;
+eligibility alone is not profitability. Bounded O2/Os searches also compare
+unpooled emission. Reads remain ordinary RAM loads, never ROM-buffer GETB reads.
+The host must copy and preserve the entire linked CODE/padding/DATA payload,
+including pools, across calls and runs; it must not reuse it as working RAM.
+See the [loading contract](getting-started.md#load-and-execute).
+Planning is intrafunctional: it does not prove external writers absent.
+Raw/numeric pointers have no dynamic guard protecting pool DATA; overwriting
+a pool corrupts the reserved payload. Private symbol names are not physical
+memory protection. The selected near RAM bank must match the RAM program bank;
+relinking a pooled object into ROM or the wrong bank is diagnosed. Pool bounds
+are not frame bounds. Object format, calling ABI and ordinary DATA relocation
+rules remain unchanged.
+
+Tied two-address affinities prefer a dying input's register for its result
+without removing interference edges. PHI constants can materialize directly
+into their destination. Bounded closed hardware-loop regions may borrow R4/R6
+for invariant spilled scalar snapshots only when all selected operations,
+entry/PHI copies and slot writes prove the registers and homes safe. These are
+regional copies, not a new general allocation pool; unsupported regions retain
+frame loads. Internal call-clobber summaries propagate transitively through
+recursive call graphs. Unknown/external calls and exhausted analysis budgets
+retain the conservative clobber envelope, including hardware-loop state.
+
+Hardware LOOP targets can thread branch-only edges only when PHI copies and
+allocation-boundary stores/reloads are empty; required copies remain on-path.
+Comparisons against a scalar literal used only by two conditional branches may
+be recreated at the consumers from the same SSA snapshot. Producer evaluation,
+including a volatile load, is not duplicated; liveness is reconstructed before
+allocation. Automatic division CACHE remains an alternative, not a guarantee
+that caller cache state survives calls. See [regression coverage](testing.md#gsu-storage-and-candidate-planning-checks).
+
+### Historical storage/planning measurements (2026-10-20)
+
+These compare a frozen repair-only baseline with a later storage/planning
+snapshot, not a Git release or validation of the current source. Compiler
+SHA-256 identities are baseline
+`22323ADCD98AA247BA7D434430855D0B78137529B69486ED9862FD73A54394DD`
+and storage/planning snapshot
+`22C91A501E2EC91A210358B7EED608CF9F33A09BDAC820A2989A094A42CFCCB5`.
+Workloads, hosts, resource caps and independent analytic oracles are unchanged.
+Payload includes CODE, padding and DATA; cycle columns measure GSU entry to STOP.
+
+| Workload / policy | Payload bytes baseline → snapshot | GSU cycles baseline → snapshot |
+| --- | ---: | ---: |
+| Rotation O2, mean first 64 poses | 2,583 → 2,443 | 873,754.265625 → 838,703.75 |
+| Rotation Os, mean first 64 poses | 2,583 → 2,430 | 872,652.390625 → 1,012,974.25 |
+| Scaling O2, mean first 64 poses | 654 → 608 | 33,393.75 → 33,322.46875 |
+| Scaling Os, mean first 64 poses | 542 → 507 | 40,893.625 → 41,931.34375 |
+| Shapes O2, wire / filled means | 10,874 → 10,383 | 325,892 → 313,943 / 1,182,443 → 1,147,858 |
+| Shapes Os, wire / filled means | 10,807 → 10,035 | 331,676 → 317,821 / 1,214,695 → 1,174,261 |
+| Official arithmetic Os | 254 → 250 | 26,713 → 26,755 |
+
+Os rotation regresses 16.08% in cycles for 5.92% fewer payload bytes; scaling
+regresses 2.54%, and arithmetic 0.157%. These accepted size-first tradeoffs are
+not universal speed gains or proof of byte optimality. Rotation's conservative
+Os candidate loses two hardware LOOPs and repeats frame-pointer loads/checks;
+its pixel-region savings outweigh a larger clear region. No equally small,
+faster complete candidate was demonstrated. O0/O1 outputs remain unchanged;
+shapes O0/O1 retain their original bank/stack non-fits and are unmeasured.
+
+Mesen 2.2.1 (`20ba206cef5ba207c21203176d02cb9f43dda9fb`) used NTSC
+21,477,270 Hz, CLSR=1, normal multiply and cold instruction CACHE. Official
+benchmarks execute in ROM bank 00 with near RAM 70; demos execute in RAM 70.
+Do not aggregate unlike profiles or interpret these cycles as CPU/DMA time,
+display FPS or physical-hardware timing.
+
+Independent acceptance passed 381 Release and 381 Debug tests, 36 official
+native comparisons, placement/focused checks and all original Mesen functional
+and negative gates. The 117 serial emulator processes yielded 865 unique timing
+samples, 572 aligned differences and 404 exact stable-image comparisons.
+Image collection compares rotation/scaling by fixed phase and shapes by required
+named captures, not dynamic frame ordinals; the original analytic oracles remain
+unchanged.
+Local ignored evidence is retained in `build/7rt/` (`runtime-handoff.json`,
+`report.json`, `comparison.csv` and `per-sample-diff.csv`), not as a new release
+benchmark report.
+
+### Historical Os recovery measurements (2026-10-20)
+
+The later frozen recovery snapshot improves the storage/planning snapshot above;
+it predates the subsequent stack-credit control-flow repair and does not
+validate that repair or the current source. It is not a validated commit or
+release. Its compiler SHA-256 is
+`50EC301333B060512E4C0690B412722AD16502F846713331DC90F7B7FD02F5B6`.
+The same workloads, hosts, limits and independent oracles are retained.
+
+| Os workload | Payload bytes storage/planning → recovery | GSU cycles storage/planning → recovery |
+| --- | ---: | ---: |
+| Rotation, mean first 64 poses | 2,430 → 2,299 | 1,012,974.25 → 883,865.53125 |
+| Scaling, mean first 64 poses | 507 → 507 | 41,931.34375 → 41,931.34375 |
+| Shapes, wire / filled means | 10,035 → 10,015 | 317,821 → 316,981 / 1,174,261 → 1,171,741 |
+| Official arithmetic | 250 → 248 | 26,755 → 26,435 |
+| Official dense switch | 331 → 327 | 7,140 → 6,960 |
+| Official sparse switch | 334 → 330 | 7,090 → 6,910 |
+
+Rotation uses 12.745508% fewer cycles than the storage/planning snapshot, with
+no measured regression against it, including individual paired samples. This
+does not fully recover the repair-only baseline: rotation remains 1.284949%
+slower than its 872,652.390625 cycles, and scaling remains 2.537605% slower than
+its 40,893.625. Arithmetic is 278 cycles faster than that baseline. A rejected
+pointer-only experiment is not the baseline; recovery shapes is 91 bytes larger
+than that unaccepted 9,924-byte experiment.
+
+Measurements retain Mesen 2.2.1 and the NTSC/CLSR=1/cold-initial-CACHE profiles
+above: official ROM 00/near RAM 70 and demo RAM 70. GSU cycles are not CPU/DMA
+time or FPS. Shapes O0/O1 remain unexecuted original placement non-fits; no
+physical-hardware or new sanitizer result is implied. See the
+[recovery validation accounting](testing.md#os-recovery-validation-snapshot).
+Local evidence is `build/ofr/runtime-handoff.json`, `report.json`,
+`comparison.csv` and the separate `S2-comparison.csv`; historical reports above
+remain unchanged.
+
 ## Hardware constraints
 
 Selection was checked against the
@@ -683,9 +913,9 @@ Registers are not an interchangeable ARM-like pool:
 | R0 | Expression/result and selected RAM address |
 | R1 / R2 | Plot X / Y; otherwise arithmetic scratch; division preserves them inside plot |
 | R3 | Checks, addresses, scalar scratch and frame adjustments |
-| R4 | Far-pointer bank, multiply low result, division/check scratch |
+| R4 | Far-pointer bank, multiply low result, division/check scratch; proven regional loop copies only |
 | R5 / R7 / R8 | O1/O2 scalar allocation pool; caller-live values are saved |
-| R6 | Multiply operand, scratch and fail-stop category; not allocated |
+| R6 | Multiply operand, scratch and fail-stop category; proven regional loop copies only |
 | R7 / R8 hardware role | MERGE inputs; current operations do not emit MERGE, and future selection must reserve/model them |
 | R9 / R10 / R11 | Frame pointer / stack pointer / LINK return address |
 | R12 / R13 | Hardware LOOP counter / loop address; not allocated |
@@ -709,10 +939,12 @@ address used by LOAD/STORE, not an address operand or an address register.
 It writes the source low byte at that offset and the high byte at offset XOR 1
 using the current RAMBR. ALT1 does not make it a byte store. The backend
 therefore never selects it for byte, far-pointer or aggregate stores.
-It tracks the address by SSA value, also recognizing fresh plain Address
-nodes for the same declaration's stable SymbolId. Distinct pointer loads
-are not assumed equivalent. Value materialization happens before checking
-the latch: any resulting spill/reload invalidates the proof. Successful prior
+It tracks pointer SSA identities and fresh plain Address nodes for the same
+declaration's stable SymbolId, plus physical frame offsets for spill traffic.
+Distinct pointer loads are not assumed equivalent. Value materialization
+happens before checking the latch: intervening memory traffic updates or
+invalidates the physical-address proof. A spill word can reuse SBK only when
+the same frame offset is still latched in the same RAM bank. Successful prior
 word accesses justify reuse of their address checks; no check is removed for
 an unproven address. Volatile word accesses can use SBK without eliminating
 or reordering the read/write. Calls and CFG/implicit hardware-loop boundaries
@@ -942,6 +1174,12 @@ The post-allocation `GSUMachineScheduler` decodes complete physical instructions
 not operand bytes mistaken for opcodes. It remaps CODE symbols, relocation
 patches and relative branch destinations together, after branch relaxation.
 Its optional per-byte analysis is limited to one 64 KiB program bank.
+
+After slot/layout compaction, bounded relaxation can shorten a symbol-resolved
+non-call `IWT R15` to BRA when its signed-byte displacement fits. It preserves
+the existing delay slot and requires compatible plain selector state. Numeric
+unrelocated destinations, LINK calls, protected interior entries and unsafe
+relocations are excluded; symbols and remaining relocations are remapped together.
 
 - Fill eligible NOP slots with a one-byte INC/DEC, keeping branch register and
   flag dependencies intact. N/Z-dependent conditions cannot move INC/DEC.
@@ -1407,6 +1645,29 @@ stays approximately 6.70 FPS with the same 574 refresh intervals/510 repeats;
 there is no measured FPS gain. The
 [rotation summary](../benchmarks/results/rotation-compaction-summary.json)
 retains fingerprints and both independent timing/presentation windows.
+
+## Bounded stack-traffic and CACHE refinements
+
+The following guarded refinements reduce backend overhead without changing
+the ABI or removing required failure paths:
+
+- Eligible pixel-only hardware loops can back up loop state in R4/R6 instead
+  of pushing it. The bounded eligibility proof excludes conflicting effects;
+  low-stack fallback preserves the original first/second-save failure behavior.
+- Near-pointer checks can reuse proven immutable pointer-component facts.
+  Mutation, unsupported provenance and failed proofs retain checks; this is
+  not blanket pointer-check removal.
+- Direct CMP and cursor selection avoid redundant transfers only where the
+  selected registers and flags permit it. Private LOOP/PLOT delay-slot
+  scheduling retains the final and taken paths.
+- Word add/subtract can use a register left operand and frame-resident right
+  operand directly, preserving operand order and arithmetic semantics.
+
+The gem-chess source refinement also packs a 487-byte collector hot body and
+its frequent left-side join into the actual 512-byte CACHE window without
+added NOP padding. This is a bounded hot-loop layout, not a claim that the
+whole collector function fits in CACHE. Scene byte/cycle measurements and
+their provenance belong in the [example README](../examples/snes/gem_chess/README.md).
 
 ## Verification and remaining work
 

@@ -1,6 +1,8 @@
 #include "IRConditionalOptimizer.hpp"
 #include "IRGlobalOptimizer.hpp"
 #include "IRControlFlow.hpp"
+#include "IRCodeGenerator.hpp"
+#include "GSUInstructionModel.hpp"
 #include "Lexer.hpp"
 #include "Parser.hpp"
 #include "Optimizer.hpp"
@@ -69,6 +71,166 @@ template<class Test> void source(const std::string& text, Test test, bool hardwa
     const auto first = dumpIR(m); IRGlobalOptimizer::run(m, analyzer.getAllLocalSymbols());
     if (first != dumpIR(m)) throw std::runtime_error("Global O2 pipeline is not idempotent after SCCP: " + text + "\nFirst:\n" + first + "\nSecond:\n" + dumpIR(m));
 }
+template<class Test> void conditionalSource(const std::string& text, Test test, TargetKind target = TargetKind::GSU) {
+    Lexer lexer(text); const auto tokens = lexer.scanTokens(); Parser parser(tokens); auto ast = parser.parseProgram();
+    DataSegmentManager data; Analyzer analyzer(data, target); analyzer.analyze(ast);
+    std::vector<int> frames;
+    for (const auto& statement : ast)
+        if (const auto* function = dynamic_cast<const FunctionDeclStmt*>(statement.get()))
+            if (!function->is_prototype) frames.push_back(function->total_local_alloc_size);
+    IRLowerer lowerer(target); auto module = lowerer.lower(ast); IRVerifier::verify(module);
+    test(module, frames);
+}
+std::size_t logicalSlots(const IRModule& module) {
+    std::size_t result = 0;
+    for (const auto& function : module.functions) for (const auto& block : function.blocks)
+        for (const auto& instruction : block.instructions)
+            result += instruction.opcode == IROpcode::Address && instruction.operation == "temporary";
+    return result;
+}
+void directConditions() {
+    for (const auto target : {TargetKind::GSU, TargetKind::SPC700}) {
+        conditionalSource("word f(word a,word b,word c){if(!((a<b && !c) || (b==3 && a!=4)))return 1;else return 2;}",
+            [](const IRModule& module, const std::vector<int>& frames) {
+                require(logicalSlots(module) == 0 && count(module, IROpcode::Phi) == 0,
+                        "Condition-only logical expression allocated a boolean temporary");
+                require(count(module, IROpcode::CondBranch) == 4 && count(module, IROpcode::Unary) == 0,
+                        "Mixed logical conditions did not branch directly or invert negation targets");
+                require(module.functions[0].total_local_alloc_size == frames[0], "Conditional lowering grew the source frame");
+            }, target);
+        conditionalSource("word f(word a){if(!a)return 1;else return 2;}",
+            [](const IRModule& module, const std::vector<int>&) {
+                const auto& function = module.functions[0]; const auto& branch = function.blocks[0].instructions.back();
+                require(function.blocks.at(branch.targets[0].value).label == "if.else" &&
+                        function.blocks.at(branch.targets[1].value).label == "if.then", "Negation did not swap branch targets");
+            }, target);
+        conditionalSource("word f(word a){if((byte)a)return 1;return 2;}",
+            [](const IRModule& module, const std::vector<int>&) {
+                require(count(module, IROpcode::Cast) == 1, "Condition lowering discarded a non-truth-preserving narrowing cast");
+            }, target);
+        conditionalSource("bool f(word a,word b){bool value=a||b;return value && !a;}",
+            [](const IRModule& module, const std::vector<int>& frames) {
+                require(logicalSlots(module) == 2 && module.functions[0].total_local_alloc_size > frames[0],
+                        "Logical values lost their canonical boolean materialization");
+                require(count(module, IROpcode::Unary) == 1, "Value-producing negation was treated as control flow");
+            }, target);
+    }
+    conditionalSource("word f(word a,word b){plot{at(3,4);if(a && !b)pixel;"
+        "while(a && b){if(a || b)break;}for(word i=0;i<2 && a;i++){if(b || !a)continue;pixel;}flush;}return 0;}",
+        [](const IRModule& module, const std::vector<int>& frames) {
+            require(logicalSlots(module) == 0 && module.functions[0].total_local_alloc_size == frames[0],
+                    "Plot/loop conditions allocated boolean slots");
+            for (const auto& block : module.functions[0].blocks) for (const auto& instruction : block.instructions)
+                if (instruction.opcode == IROpcode::CondBranch)
+                    require(instruction.in_plot_context, "Short-circuit branch lost its plotting context");
+        });
+    bool rejected = false;
+    try { conditionalSource("word f(){if(false && 10/0)return 1;return 2;}", [](const IRModule&, const std::vector<int>&) {}); }
+    catch (const CompilerError& error) { rejected = error.getMessage().find("Division by zero") != std::string::npos; }
+    require(rejected, "Short-circuit lowering suppressed an existing source diagnostic");
+}
+std::vector<std::uint8_t> conditionalCode(const std::string& text, OptimizationLevel level) {
+    Lexer lexer(text); const auto tokens = lexer.scanTokens(); Parser parser(tokens); auto ast = parser.parseProgram();
+    DataSegmentManager data; Analyzer analyzer(data); analyzer.analyze(ast); IRLowerer lowerer;
+    const auto module = lowerer.lower(ast); IRVerifier::verify(module);
+    CompilerConfig config; config.optimization = level; config.code_start_address = 0x008000;
+    IRCodeGenerator backend(analyzer.getAllLocalSymbols(), analyzer.getFunctionSymbols(), data, config);
+    const auto object = backend.generate(module); auto bytes = object.code_section;
+    // These fixtures have only same-object code and stack-limit relocations.
+    // Reject any new relocation category instead of leaving unlinked operands.
+    for (const auto& relocation : object.relocation_table) {
+        bool found = false; std::uint32_t value = 0; const std::string prefix = "__disco_stack_limit_";
+        if (relocation.target_symbol_name.compare(0, prefix.size(), prefix) == 0) {
+            require(relocation.type == RelocationType::ADDR16_RAM, "Unexpected stack-limit relocation");
+            value = static_cast<std::uint32_t>(std::stoul(relocation.target_symbol_name.substr(prefix.size()))); found = true;
+        } else for (const auto& symbol : object.symbol_table) if (symbol.name == relocation.target_symbol_name) {
+            require(symbol.section == SymbolSection::CODE &&
+                (relocation.type == RelocationType::ADDR16_IWT || relocation.type == RelocationType::ADDR16_JAL),
+                "Unexpected conditional fixture relocation");
+            value = object.config.code_start_address + symbol.offset; found = true;
+        }
+        require(found && value <= 65535, "Missing/out-of-range conditional fixture relocation");
+        bytes.at(relocation.patch_offset + 1) = static_cast<std::uint8_t>(value);
+        bytes.at(relocation.patch_offset + 2) = static_cast<std::uint8_t>(value >> 8);
+    }
+    return bytes;
+}
+void seedWord(DiscoGSU::Machine& machine, std::uint32_t address, std::uint16_t value) {
+    machine.seed(address, static_cast<std::uint8_t>(value), false);
+    machine.seed(address + 1, static_cast<std::uint8_t>(value >> 8), false);
+}
+void conditionalExecution() {
+    // Entry STOP retains the saved R9/R11 header, unlike a returning callee.
+    constexpr std::uint16_t stopped_entry_stack = 0x1ffc;
+    const std::string effects = "bool probe(word tag,word value);word main(){word a=*(volatile word*)0x100;"
+        "word b=*(volatile word*)0x102;word c=*(volatile word*)0x104;*(volatile word*)0x110=0;"
+        "if(!((a && probe(1,b)) || (!b && probe(2,c))) && probe(3,a || c))return 31;return 47;}"
+        "bool probe(word tag,word value){*(volatile word*)0x110=*(volatile word*)0x110*4+tag;return (bool)value;}";
+    const std::string loops = "word main(){word n=*(volatile word*)0x100;word total=0;"
+        "for(word i=0;i<n && i<5;i++){if((i==1 || i==3) && n)continue;total+=i;"
+        "for(word k=0;k<2 && n;k++){if(k==0 || !n)continue;total++;}}"
+        "word j=0;while(j<4 && !(j>=n)){j++;if(!(j!=2) && n)continue;total+=10*j;}return total;}";
+    const std::string faults = "word main(){word gate=*(volatile word*)0x100;word divisor=*(volatile word*)0x102;"
+        "word* p=(word*)*(volatile u16*)0x104;*(volatile byte*)0x110=(byte)11;"
+        "if(gate && (10/divisor>0 || *p!=0))*(volatile byte*)0x111=(byte)22;"
+        "*(volatile byte*)0x112=(byte)33;return 42;}";
+    const std::string values = "bool both(word a,word b);bool identity(bool a);word main(){word a=*(volatile word*)0x100;"
+        "word b=*(volatile word*)0x102;bool value=a || b;value=identity(a && !b);"
+        "return (word)value+2*(word)both(a,b)+4*(word)identity(a || b);}"
+        "bool both(word a,word b){return a && b;}bool identity(bool a){return a;}";
+    for (const auto level : {OptimizationLevel::Baseline, OptimizationLevel::O1, OptimizationLevel::O2, OptimizationLevel::Size}) {
+        const auto effect_code = conditionalCode(effects, level), loop_code = conditionalCode(loops, level);
+        const auto fault_code = conditionalCode(faults, level), value_code = conditionalCode(values, level);
+        const auto narrow_code = conditionalCode("word main(){word a=*(volatile word*)0x100;if((byte)a)return 1;return 2;}", level);
+        for (const auto a : {0u, 1u, 256u, 65535u}) for (const auto b : {0u, 1u, 256u, 65535u}) {
+            DiscoGSU::Machine value_machine(value_code, 0x008000); seedWord(value_machine, 0x700100, static_cast<std::uint16_t>(a));
+            seedWord(value_machine, 0x700102, static_cast<std::uint16_t>(b)); value_machine.run();
+            require(value_machine.reg(0) == static_cast<unsigned>((a && !b) + 2*(a && b) + 4*(a || b)) && value_machine.reg(6) == 0,
+                    "Assignment/call/return logical values were not canonical booleans");
+            for (const auto c : {0u, 1u, 256u, 65535u}) {
+                unsigned trace = 0, calls = 0;
+                const auto probe = [&](unsigned tag, bool value) { trace = trace*4+tag; ++calls; return value; };
+                const bool selected = !((a && probe(1,b != 0)) || (!b && probe(2,c != 0))) && probe(3,a || c);
+                DiscoGSU::Machine machine(effect_code, 0x008000); seedWord(machine, 0x700100, static_cast<std::uint16_t>(a));
+                seedWord(machine, 0x700102, static_cast<std::uint16_t>(b)); seedWord(machine, 0x700104, static_cast<std::uint16_t>(c)); machine.run();
+                require(machine.reg(0) == (selected ? 31 : 47) && machine.word(0x700110) == trace,
+                        "Nested logical condition changed evaluation order or its selected branch");
+                require(machine.accesses(0x700110, false) == calls && machine.accesses(0x700110, true) == calls+1,
+                        "Short-circuit condition duplicated or speculated volatile call effects");
+                if (machine.accesses(0x700100, false) != 1 || machine.accesses(0x700102, false) != 1 ||
+                    machine.accesses(0x700104, false) != 1 || machine.reg(6) != 0 || machine.reg(10) != stopped_entry_stack)
+                    throw std::runtime_error("Logical condition damaged input observations, checked state or stack ownership: level=" +
+                        std::to_string(static_cast<unsigned>(level)) + " inputs=" + std::to_string(a) + "," + std::to_string(b) + "," +
+                        std::to_string(c) + " reads=" + std::to_string(machine.accesses(0x700100, false)) + "," +
+                        std::to_string(machine.accesses(0x700102, false)) + "," + std::to_string(machine.accesses(0x700104, false)) +
+                        " r6=" + std::to_string(machine.reg(6)) + " sp=" + std::to_string(machine.reg(10)));
+            }
+        }
+        for (const auto n : {0u, 1u, 2u, 4u, 7u}) {
+            unsigned expected = 0;
+            for (unsigned i=0; i<n && i<5; ++i) { if (i==1 || i==3) continue; expected += i+1; }
+            for (unsigned j=1; j<=4 && j<=n; ++j) if (j!=2) expected += 10*j;
+            DiscoGSU::Machine machine(loop_code, 0x008000); seedWord(machine, 0x700100, static_cast<std::uint16_t>(n)); machine.run();
+            require(machine.reg(0) == expected && machine.reg(6) == 0 && machine.reg(10) == stopped_entry_stack,
+                    "Direct for/while conditions changed nested continue targets or loop results");
+        }
+        for (unsigned scenario=0; scenario<4; ++scenario) {
+            DiscoGSU::Machine machine(fault_code, 0x008000); seedWord(machine, 0x700100, scenario == 0 ? 0 : 1);
+            seedWord(machine, 0x700102, scenario < 2 ? 0 : scenario == 2 ? 1 : 20); seedWord(machine, 0x700104, 0); machine.run();
+            const bool fault = scenario == 1 || scenario == 3;
+            require(machine.byte(0x700110) == 11 && machine.accesses(0x700110, true) == 1,
+                    "Condition fault moved before its volatile witness");
+            require(machine.byte(0x700112) == (fault ? 0 : 33) && (machine.reg(6) != 0) == fault,
+                    "Short-circuit condition speculated a fault or removed a required fail-stop");
+            require(machine.byte(0x700111) == (scenario == 2 ? 22 : 0), "Faulting/skipped condition executed its body");
+            if (!fault) require(machine.reg(0) == 42 && machine.reg(10) == stopped_entry_stack, "Skipped fault damaged normal return state");
+        }
+        for (const auto input : {0u, 1u, 256u, 65535u}) {
+            DiscoGSU::Machine machine(narrow_code, 0x008000); seedWord(machine, 0x700100, static_cast<std::uint16_t>(input)); machine.run();
+            require(machine.reg(0) == ((input & 255u) ? 1 : 2), "Condition bypassed byte-cast truncation");
+        }
+    }
+}
 void executableEdges() {
     Builder b(4);
     const auto condition = b.literal(0, 0); b.terminal(0, IROpcode::CondBranch, {condition}, {{1}, {2}});
@@ -124,6 +286,7 @@ void dispatch(std::int64_t selector, bool default_target, std::size_t expected_b
 }
 int main() {
     try {
+        directConditions(); conditionalExecution();
         executableEdges(); mixedPhis(); lateBackedge(); dispatch(5, true, 1, 20); dispatch(99, true, 1, 30); dispatch(99, false, 3, 0);
         source("word f(word x) { word a; if(x) a=255; else a=255; return (word)(byte)a; }", [](const IRModule& m) { returnedConstant(m, -1); });
         source("word f(word x) { word a; if(x) a=32767; else a=32767; return a+1; }", [](const IRModule& m) { returnedConstant(m, -32768); });

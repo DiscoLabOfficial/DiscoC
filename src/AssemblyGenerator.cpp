@@ -1,5 +1,6 @@
 #include "AssemblyGenerator.hpp"
 #include "GSUCodeLayout.hpp"
+#include "ABI.hpp"
 #include <iomanip>
 #include <map>
 #include <set>
@@ -109,7 +110,14 @@ std::string AssemblyGenerator::generate() const {
         if (symbol.name.empty()) throw std::runtime_error("Assembly export: empty symbol name.");
         if (symbol.name == GSUCodeLayout::CacheAlignmentSymbol) continue;
         const bool local = symbol.name.front() == '\x01';
-        const auto name = local ? uniqueName() : symbol.name;
+        auto name = local ? uniqueName() : symbol.name;
+        if (local && symbol.name.compare(0, std::string(GSUAbi::ImmutablePoolPrefix).size(), GSUAbi::ImmutablePoolPrefix) == 0) {
+            // Keep the guarded relocation namespace through .s round trips.
+            // The assembler reinstates the private marker for nonexports.
+            name = symbol.name.substr(1);
+            while (names.count(name)) name += "_";
+            names.insert(name);
+        }
         renamed.emplace(symbol.name, name);
         auto& labels = symbol.section == SymbolSection::CODE ? code_labels : symbol.section == SymbolSection::DATA ? data_labels : ram_labels;
         const auto size = symbol.section == SymbolSection::CODE ? m_object.code_section.size() : symbol.section == SymbolSection::DATA ? m_object.data_section.size() : m_object.ram_section.size();

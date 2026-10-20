@@ -511,8 +511,18 @@ elseif(CASE STREQUAL "graphics_interactive")
     run_command("${DISCC}" --target gsu --execution-memory ${execution_memory} --emit-asm "${source}" -o "${TEST_DIR}/shapes-compiler.s")
     run_command("${DISCAS}" "${TEST_DIR}/shapes-compiler.s" -o "${TEST_DIR}/shapes-asm.o")
     if(execution_memory STREQUAL "rom")
-        run_expected_failure_contains("program-bank boundary" "${DISCLD}" "${TEST_DIR}/shapes.o"
-            --origin 0x708000 --init-runtime --ram-bank 0 --stack-pointer 0xEFFE -o "${TEST_DIR}/too-large.bin")
+        set(ram_placement_diagnostic "program-bank boundary")
+        if(OPTIMIZATION STREQUAL "1")
+            # O1 now fits the half-bank window, but still covers the initial stack.
+            set(ram_placement_diagnostic "Initial stack word overlaps the linked payload")
+        endif()
+        foreach(object IN ITEMS shapes.o shapes-asm.o)
+            # Sixteen remaining bytes cannot hold this renderer, even as code shrinks.
+            run_expected_failure_contains("program-bank boundary" "${DISCLD}" "${TEST_DIR}/${object}"
+                --origin 0x70FFF0 --init-runtime --ram-bank 0 --stack-pointer 0xEFFE -o "${TEST_DIR}/too-large.bin")
+            run_expected_failure_contains("${ram_placement_diagnostic}" "${DISCLD}" "${TEST_DIR}/${object}"
+                --origin 0x708000 --init-runtime --ram-bank 0 --stack-pointer 0xEFFE -o "${TEST_DIR}/invalid-ram-placement.bin")
+        endforeach()
     endif()
     if(NOT OPTIMIZATION MATCHES "^[12s]$")
         foreach(object IN ITEMS shapes.o shapes-asm.o)

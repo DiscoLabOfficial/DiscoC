@@ -11,6 +11,9 @@
 struct LinearScanLocation {
     bool has_register = false;
     bool rematerializable = false;
+    // Live in a register outside a loop whose body reuses that register.
+    // The frame slot is only for the entry store and the exit reload.
+    bool boundary_spill = false;
     std::uint8_t physical_register = 0;
     std::size_t start = 0;
     std::size_t end = 0;
@@ -39,6 +42,12 @@ public:
 
     const LinearScanLocation* find(IRValueId value) const;
     const std::map<std::uint32_t, LinearScanLocation>& locations() const;
+    // Values to store at the end of a loop preheader, before the body reuses
+    // their registers. Empty when this block is not such a preheader.
+    const std::vector<std::uint32_t>& boundaryStores(std::uint32_t block) const;
+    // Values to reload at the start of a block reached only by leaving a loop
+    // that reused their registers.
+    const std::vector<std::uint32_t>& boundaryReloads(std::uint32_t block) const;
     // Registers with no live assigned value at this IR point. Includes result
     // interference and PHI edge uses; never lends special hardware registers.
     std::vector<std::uint8_t> spareRegisters(std::size_t position) const;
@@ -49,4 +58,6 @@ private:
     std::map<std::uint32_t, LinearScanLocation> m_locations;
     std::map<std::size_t, std::set<std::uint32_t>> m_call_live;
     std::map<std::size_t, std::vector<std::uint8_t>> m_spare_registers;
+    std::map<std::uint32_t, std::vector<std::uint32_t>> m_boundary_store;
+    std::map<std::uint32_t, std::vector<std::uint32_t>> m_boundary_reload;
 };

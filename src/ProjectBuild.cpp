@@ -31,6 +31,7 @@ void projectUsage() {
         "  --host-initialized-globals | --no-host-initialized-globals\n"
         "  --output-dir <directory> -o <binary> --emit-asm <file> --no-emit-asm\n"
         "  --check (frontend/IR only, no outputs or linking)\n"
+        "  --require-no-spills (GSU source allocation check, also in --check; not prebuilt objects)\n"
         "  -O | -O1 | -O0 | -O2 | -Os (compiler optimization; CLI overrides manifest defaults)\n"
         "  -Wall | -Werror | -W<category> | -Wno-<category>\n";
 }
@@ -41,7 +42,7 @@ int buildProject(const std::vector<std::string>& arguments) {
     try {
         if (arguments.size() < 2 || arguments.size() > 1024) throw std::runtime_error("Invalid project command.");
         std::string path, output_directory;
-        bool check = false;
+        bool check = false, require_no_spills = false;
         std::vector<std::string> compile_flags, link_flags;
         const std::set<std::string> shared = {"--target", "--origin", "--memory-mapping", "--execution-memory"};
         const std::set<std::string> link_values = {"--ram-bank", "--ram-origin", "--rom-bank", "--stack-pointer", "--entry", "--emit-asm", "-o"};
@@ -62,7 +63,10 @@ int buildProject(const std::vector<std::string>& arguments) {
             } else if (flag.compare(0, 2, "-I") == 0)
                 compile_flags.insert(compile_flags.end(), {"--import-path", absolutePath(flag.substr(2))});
             else if (flag == "--check") check = true;
-            else if (shared.count(flag)) {
+            else if (flag == "--require-no-spills") {
+                require_no_spills = true;
+                compile_flags.push_back(flag);
+            } else if (shared.count(flag)) {
                 const auto value = next();
                 compile_flags.insert(compile_flags.end(), {flag, value});
                 link_flags.insert(link_flags.end(), {flag, value});
@@ -98,6 +102,8 @@ int buildProject(const std::vector<std::string>& arguments) {
             else if (compile[index] == "--import-path" || compile[index] == "-I") import_paths.push_back(absolutePath(compile.at(++index)));
             else if (optionTakesValue(compile[index], Consumer::Compiler)) ++index;
         }
+        if (require_no_spills && target != TargetKind::GSU)
+            throw std::runtime_error("Target 'spc700' does not support --require-no-spills: no code-generation backend is available.");
         if (!check && target != TargetKind::GSU)
             throw std::runtime_error("Target 'spc700' has a target model but no code-generation backend yet; use build --check.");
         CompilerConfig module_config; module_config.target = target;

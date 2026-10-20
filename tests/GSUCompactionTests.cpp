@@ -4,6 +4,7 @@
 #include "AssemblyGenerator.hpp"
 #include "Assembler.hpp"
 #include "GSUInstructionModel.hpp"
+#include "ABI.hpp"
 #include "Lexer.hpp"
 #include "Parser.hpp"
 #include "Optimizer.hpp"
@@ -15,7 +16,8 @@
 namespace {
 void require(bool b, const char* text) { if (!b) throw std::runtime_error(text); }
 struct Compilation { ObjectFile object; IRModule ir; };
-Compilation compile(const std::string& source, OptimizationLevel level, std::uint32_t origin, int minimum_frame_bytes = 0) {
+Compilation compile(const std::string& source, OptimizationLevel level, std::uint32_t origin, int minimum_frame_bytes = 0,
+                    bool retain_stack_loop_saves = false, bool check_backend_reuse = false) {
     Lexer lexer(source); auto tokens = lexer.scanTokens(); Parser parser(tokens); auto ast = parser.parseProgram();
     DataSegmentManager data; Analyzer analyzer(data); analyzer.analyze(ast); IRLowerer lowerer;
     auto ir = lowerer.lower(ast);
@@ -30,6 +32,22 @@ Compilation compile(const std::string& source, OptimizationLevel level, std::uin
         if (first != dumpIR(optimized)) throw std::runtime_error("Compaction/global pipeline is not idempotent\n" + source +
             "\nFirst:\n" + first + "Second:\n" + dumpIR(optimized));
     }
+    if (retain_stack_loop_saves) {
+        // A codegen-no-op scope marker deliberately excludes the narrow
+        // PLOT/CACHE-only register-save proof, without changing behavior or
+        // adding an SSA lifetime. This retains the previous checked path as
+        // an execution/fault-order reference, not another production option.
+        ir = optimized;
+        for (auto& function : ir.functions) for (auto& block : function.blocks) {
+            const auto end = std::find_if(block.instructions.begin(), block.instructions.end(),
+                [](const IRInstruction& i) { return i.opcode == IROpcode::HardwareLoopEnd; });
+            if (end == block.instructions.end()) continue;
+            IRInstruction fence; fence.opcode = IROpcode::PlotBegin;
+            fence.in_plot_context = end->in_plot_context; fence.source = end->source;
+            block.instructions.insert(end, std::move(fence));
+        }
+        IRVerifier::verify(ir);
+    }
     CompilerConfig config; config.optimization = level; config.code_start_address = origin;
     IRCodeGenerator backend(analyzer.getAllLocalSymbols(), analyzer.getFunctionSymbols(), data, config);
     auto object = backend.generate(ir);
@@ -38,12 +56,25 @@ Compilation compile(const std::string& source, OptimizationLevel level, std::uin
     require(round_trip.code_section == object.code_section, "Compact assembly round trip changed bytes");
     IRCodeGenerator again(analyzer.getAllLocalSymbols(), analyzer.getFunctionSymbols(), data, config);
     require(assembly == AssemblyGenerator(again.generate(ir)).generate(), "Compaction is nondeterministic");
+    if (check_backend_reuse) require(assembly == AssemblyGenerator(backend.generate(ir)).generate(),
+        "Division lowering retained candidate/selector state across backend reuse");
     return {std::move(object), std::move(optimized)};
 }
 std::vector<std::uint8_t> linked(const ObjectFile& object) {
     auto bytes = object.code_section;
+    if (!object.data_section.empty())
+        while ((object.config.code_start_address + bytes.size()) % object.data_alignment) bytes.push_back(0);
+    const auto data_offset = bytes.size();
+    bytes.insert(bytes.end(), object.data_section.begin(), object.data_section.end());
     for (const auto& relocation : object.relocation_table) {
         bool found = false;
+        if (relocation.target_symbol_name == GSUAbi::NearRamBankSymbol) {
+            require(relocation.type == RelocationType::ADDR24_BANK, "Invalid near-RAM bank fixture relocation");
+            // This fixture runs with near-RAM selector 0, whose physical bank
+            // byte is $70, matching the real linker's bank-context symbol.
+            bytes.at(relocation.patch_offset + 1) = 0x70;
+            continue;
+        }
         const std::string prefix = "__disco_stack_limit_";
         if (relocation.target_symbol_name.compare(0, prefix.size(), prefix) == 0) {
             const auto required = static_cast<unsigned>(std::stoul(relocation.target_symbol_name.substr(prefix.size())));
@@ -52,10 +83,13 @@ std::vector<std::uint8_t> linked(const ObjectFile& object) {
             bytes.at(relocation.patch_offset + 2) = static_cast<std::uint8_t>(required >> 8); found = true;
         }
         for (const auto& symbol : object.symbol_table) if (symbol.name == relocation.target_symbol_name) {
-            require(symbol.section == SymbolSection::CODE &&
-                (relocation.type == RelocationType::ADDR16_IWT || relocation.type == RelocationType::ADDR16_JAL),
+            const bool pool = symbol.section == SymbolSection::DATA && relocation.type == RelocationType::ADDR16_RAM &&
+                symbol.name.compare(0, std::string(GSUAbi::ImmutablePoolPrefix).size(), GSUAbi::ImmutablePoolPrefix) == 0 &&
+                (object.config.code_start_address >> 16) == 0x70 && symbol.offset < object.data_section.size();
+            require(pool || (symbol.section == SymbolSection::CODE &&
+                (relocation.type == RelocationType::ADDR16_IWT || relocation.type == RelocationType::ADDR16_JAL)),
                 "Unexpected compaction fixture relocation");
-            const auto value = object.config.code_start_address + symbol.offset;
+            const auto value = object.config.code_start_address + symbol.offset + (pool ? data_offset : 0);
             bytes.at(relocation.patch_offset + 1) = static_cast<std::uint8_t>(value);
             bytes.at(relocation.patch_offset + 2) = static_cast<std::uint8_t>(value >> 8); found = true;
         }
@@ -91,6 +125,175 @@ void reject(IRModule m, const char* expected) {
         require(e.getMessage().find(expected) != std::string::npos, "Wrong compact IR diagnostic"); return;
     }
     throw std::runtime_error("Malformed compact IR was accepted");
+}
+void pointerPromotionPolicies() {
+    const std::string source = "word main(){word* p=(word*)0x400;for(word i=0;i<32;i++){p[i]=0;}"
+        "word seed=*((volatile word*)0x100);word sum=seed;plot{at(4,3);color 2;"
+        "for(word i=0;i<64;i++){sum+=i^seed;pixel;}flush;return sum+cursor.x;}}";
+    Lexer lexer(source); auto tokens = lexer.scanTokens(); Parser parser(tokens); auto ast = parser.parseProgram();
+    DataSegmentManager data; Analyzer analyzer(data); analyzer.analyze(ast); IRLowerer lowerer;
+    const auto original = lowerer.lower(ast);
+    for (const auto level : {OptimizationLevel::O2, OptimizationLevel::Size}) {
+        auto conservative = original, promoted = original, compacted = original;
+        IRGlobalOptimizer::run(conservative, analyzer.getAllLocalSymbols(), level, IRCompactionPolicy::Disabled);
+        IRGlobalOptimizer::run(promoted, analyzer.getAllLocalSymbols(), level, IRCompactionPolicy::PointerPromotionOnly);
+        const auto first = dumpIR(promoted);
+        IRGlobalOptimizer::run(promoted, analyzer.getAllLocalSymbols(), level, IRCompactionPolicy::PointerPromotionOnly);
+        require(first == dumpIR(promoted), "Pointer-only global pipeline is not idempotent");
+        IRVerifier::verify(promoted);
+        IRGlobalOptimizer::run(compacted, analyzer.getAllLocalSymbols(), level, IRCompactionPolicy::Enabled);
+        const auto pointerLoads = [](const IRModule& module) {
+            unsigned loads = 0;
+            for (const auto& f : module.functions) for (const auto& b : f.blocks) for (const auto& i : b.instructions)
+                loads += i.opcode == IROpcode::LoadIndirect && i.type.pointer_level != 0;
+            return loads;
+        };
+        require(pointerLoads(conservative) != 0 && pointerLoads(promoted) == 0,
+            "Pointer-only policy did not independently promote the bounded clear base");
+        require(count(promoted, IROpcode::PointerOffset) != 0 && count(promoted, IROpcode::HardwareLoop) == 0 &&
+            count(promoted, IROpcode::HardwareLoopEnd) == 0 && count(promoted, IROpcode::MemoryInitialize) == 0,
+            "Pointer-only policy ran counted-loop/initializer compaction or lost the checked index");
+        if (level == OptimizationLevel::O2) require(count(compacted, IROpcode::HardwareLoop) >= 2,
+            "Pointer-only fixture did not distinguish enabled counted-loop compaction");
+    }
+    // Reuse the existing rejection boundaries: escaped/aliased
+    // cells, indefinite assignment, and conditional incoming pointer checks.
+    for (const std::string unsafe : {
+        "void escape(word** p);word f(word* p){escape(&p);return *p;}",
+        "void alias(word** p,word** q);word f(word* p){alias(&p,&p);return *p;}",
+        "word f(word take){word* p;if(take)p=(word*)0x400;return *p;}",
+        "word f(word* p,word take){if(take)return *p;return 7;}"}) {
+        try {
+            Lexer local_lexer(unsafe); const auto local_tokens = local_lexer.scanTokens(); Parser local_parser(local_tokens);
+            auto local_ast = local_parser.parseProgram(); DataSegmentManager local_data; Analyzer local_analyzer(local_data);
+            local_analyzer.analyze(local_ast); IRLowerer local_lowerer; const auto module = local_lowerer.lower(local_ast);
+            for (const auto level : {OptimizationLevel::O2, OptimizationLevel::Size}) {
+                auto result = module;
+                IRGlobalOptimizer::run(result, local_analyzer.getAllLocalSymbols(), level, IRCompactionPolicy::PointerPromotionOnly);
+                unsigned retained = 0;
+                for (const auto& f : result.functions) for (const auto& b : f.blocks) for (const auto& i : b.instructions)
+                    retained += i.opcode == IROpcode::LoadIndirect && i.type.pointer_level != 0;
+                require(retained != 0, "Pointer-only promotion crossed an alias/escape/assignment/incoming-check boundary");
+                const auto first = dumpIR(result);
+                IRGlobalOptimizer::run(result, local_analyzer.getAllLocalSymbols(), level, IRCompactionPolicy::PointerPromotionOnly);
+                require(first == dumpIR(result), "Rejected pointer-only promotion is not idempotent");
+            }
+        } catch (const CompilerError& error) {
+            throw std::runtime_error("Pointer-only rejection fixture: " + unsafe + "\n" + error.getMessage());
+        }
+    }
+    for (const auto origin : {0x008000u, 0x70600fu}) {
+        const auto baseline = compile(source, OptimizationLevel::O1, origin);
+        const auto selected = compile(source, OptimizationLevel::Size, origin);
+        for (const auto input : {0u, 1u, 37u, 65535u}) {
+            DiscoGSU::Machine a(linked(selected.object), origin), b(linked(baseline.object), origin);
+            for (auto* machine : {&a, &b}) {
+                machine->seed(0x700100, static_cast<std::uint8_t>(input), false);
+                machine->seed(0x700101, static_cast<std::uint8_t>(input >> 8), false);
+                for (unsigned p = 0x400; p < 0x440; ++p) machine->seed(0x700000 + p, 0xa5, false);
+                machine->run();
+            }
+            std::uint16_t sum = static_cast<std::uint16_t>(input);
+            for (unsigned i = 0; i < 64; ++i) sum = static_cast<std::uint16_t>(sum + (i ^ input));
+            require(a.reg(0) == static_cast<std::uint16_t>(sum + 68) && a.reg(0) == b.reg(0) && a.reg(6) == 0 &&
+                a.reg(10) == b.reg(10) && a.reg(12) == b.reg(12) && a.reg(13) == b.reg(13),
+                "Pointer-only candidate search changed carried arithmetic or ABI state");
+            require(a.accesses(0x700100, false) == 1 && a.accesses(0x700100, true) == 0,
+                "Pointer-only candidate search changed volatile input multiplicity");
+            for (unsigned p = 0; p < 0x440; ++p) require(a.byte(0x700000 + p) == b.byte(0x700000 + p),
+                "Pointer-only candidate search changed clear/pixel RAM output");
+            for (unsigned p = 0x400; p < 0x440; ++p) require(a.byte(0x700000 + p) == 0,
+                "Pointer-only candidate search left a bounded clear incomplete");
+        }
+    }
+}
+void conditionalIncomingPointers() {
+    const std::string source = "word f(word* p,word take){*((volatile byte*)0x104)=(byte)11;"
+        "if(take)return *p;return 7;}";
+    const auto callable = [](const ObjectFile& object) {
+        auto bytes = linked(object);
+        const auto stop = object.config.code_start_address + static_cast<unsigned>(bytes.size());
+        bytes.insert(bytes.begin(), {0xfb, static_cast<std::uint8_t>(stop), static_cast<std::uint8_t>(stop >> 8)});
+        // R6 is caller-scratch on a successful non-entry return. Normalize it
+        // only in the return continuation; a checked fault STOP never arrives.
+        bytes.insert(bytes.end(), {0xa6, 0, 0, 1});
+        return bytes;
+    };
+    const auto baseline = compile(source, OptimizationLevel::O1, 0x008003);
+    for (const auto level : {OptimizationLevel::O2, OptimizationLevel::Size}) {
+        const auto optimized = compile(source, level, 0x008003);
+        for (const unsigned take : {0u,1u}) for (const unsigned pointer : {0u,1u,0x400u,0xffffu}) {
+            DiscoGSU::Machine a(callable(optimized.object), 0x008000), b(callable(baseline.object), 0x008000);
+            for (auto* machine : {&a,&b}) {
+                machine->seed(0x702002, static_cast<std::uint8_t>(pointer), false);
+                machine->seed(0x702003, static_cast<std::uint8_t>(pointer >> 8), false);
+                machine->seed(0x702004, static_cast<std::uint8_t>(take), false);
+                machine->seed(0x700400, 123, false); machine->run();
+            }
+            const bool fault = take && pointer != 0x400;
+            const unsigned expected_fault = fault ? (pointer == 0 ? 2 : 1) : 0;
+            if (!(a.reg(6) == expected_fault && a.reg(6) == b.reg(6) &&
+                a.byte(0x700104) == 11 && a.accesses(0x700104, true) == 1 &&
+                b.byte(0x700104) == 11 && b.accesses(0x700104, true) == 1))
+                throw std::runtime_error("Conditional pointer fixture: level=" + std::to_string(static_cast<unsigned>(level)) +
+                    " take=" + std::to_string(take) + " pointer=" + std::to_string(pointer) +
+                    " faults=" + std::to_string(a.reg(6)) + "/" + std::to_string(b.reg(6)) +
+                    " witnesses=" + std::to_string(a.byte(0x700104)) + "/" + std::to_string(b.byte(0x700104)) +
+                    " stores=" + std::to_string(a.accesses(0x700104,true)) + "/" + std::to_string(b.accesses(0x700104,true)));
+            if (!fault) require(a.reg(0) == (take ? 123 : 7) && a.reg(0) == b.reg(0) && a.reg(10) == b.reg(10),
+                "Conditional incoming pointer changed its successful result or stack");
+            require(a.accesses(0x700400, false) == (take && !fault ? 1u : 0u),
+                "Conditional incoming pointer unexpectedly accessed its pointee");
+        }
+    }
+}
+void pointerIndexCopyExecution() {
+    unsigned executed = 0, rejected = 0;
+    const std::string raw_bool_index = "word main(){bool i=(bool)*((volatile word*)0x100);"
+        "word* p=(word*)0x400;return p[i];}";
+    for (const auto level : {OptimizationLevel::O1,OptimizationLevel::Size}) {
+        bool diagnosed = false;
+        try { compile(raw_bool_index,level,0x008000u); }
+        catch (const CompilerError& error) {
+            require(error.getMessage() == "Array index must be an integer type.",
+                "Raw BOOL index produced the wrong diagnostic");
+            diagnosed = true; ++rejected;
+        }
+        require(diagnosed,"Raw BOOL index escaped the integer-index language boundary");
+    }
+    for (unsigned kind = 0; kind < 5; ++kind) {
+        const std::string type = kind == 0 ? "word" : kind == 1 ? "byte" : kind == 2 ? "u8" : kind == 3 ? "bool" : "word";
+        const std::string expression = kind == 0 || kind == 4 ? "(word)*((volatile word*)0x100)&31" :
+            kind == 3 ? "(bool)*((volatile word*)0x100)" : "*((volatile " + type + "*)0x100)";
+        const std::string source = "word main(){" + type + " i=" + expression + ";*((volatile word*)0x104)=11;" +
+            (kind == 4 ? "far word* p=(far word*)0x710400;" : "word* p=(word*)0x400;") +
+            "word r=p[" + (kind == 3 ? "(word)i" : "i") + "];*((volatile word*)0x106)=r;return r;}";
+        for (const auto origin : {0x008000u,0x70600fu}) {
+            const auto selected = compile(source,OptimizationLevel::Size,origin,0,false,true);
+            const auto baseline = compile(source,OptimizationLevel::O1,origin);
+            for (const unsigned input : {0u,1u,127u,128u,255u,32768u,65535u}) {
+                const int index = kind == 0 || kind == 4 ? static_cast<int>(input & 31) :
+                    kind == 3 ? (input != 0) : kind == 1 && (input & 255) >= 128 ? static_cast<int>(input & 255) - 256 : static_cast<int>(input & 255);
+                const auto address = static_cast<std::uint32_t>((kind == 4 ? 0x710400 : 0x700400) + index * 2);
+                DiscoGSU::Machine a(linked(selected.object),origin), b(linked(baseline.object),origin);
+                for (auto* machine : {&a,&b}) {
+                    machine->seed(0x700100,static_cast<std::uint8_t>(input),false);
+                    machine->seed(0x700101,static_cast<std::uint8_t>(input >> 8),false);
+                    machine->seed(address,0x34,false); machine->seed(address+1,0x12,false); machine->run();
+                }
+                require(a.reg(0) == 0x1234 && a.reg(0) == b.reg(0) && a.reg(6) == 0 && a.reg(10) == b.reg(10) &&
+                    a.ramBank() == b.ramBank() && a.romBank() == b.romBank() && a.reg(12) == b.reg(12) && a.reg(13) == b.reg(13),
+                    "Pointer index copy changed word/byte/bool/far normalization, banks or ABI");
+                require(a.word(0x700104) == 11 && a.word(0x700106) == 0x1234 &&
+                    a.accesses(0x700100,false) == 1 && a.accesses(address,false) == 1,
+                    "Pointer index copy changed volatile input, witness or checked memory access");
+                ++executed;
+            }
+        }
+    }
+    require(executed == 70 && rejected == 2,"Pointer index copy coverage did not complete");
+    std::cout << "Pointer index copy: " << executed << " ROM/RAM semantic comparisons and "
+        << rejected << " raw BOOL-index diagnostics\n";
 }
 void dynamicLoops() {
     const std::string span = "word main(){word n=*((volatile word*)0x100);word r=10;plot{at(4,3);color 2;"
@@ -293,14 +496,130 @@ void sizeDivisionCache() {
     }
 }
 
+void sizeDivisionDivisorCopy() {
+    unsigned executions = 0;
+    for (const bool is_unsigned : {false,true}) for (unsigned projection = 0; projection < 4; ++projection) {
+        const std::string type = is_unsigned ? "u16" : "word";
+        const std::string quotient = type + " q=a/b;", remainder = type + " r=a%b;";
+        const std::string source = "word main(){" + type + " a=*((volatile " + type + "*)0x100);" +
+            type + " b=*((volatile " + type + "*)0x102);*((volatile word*)0x104)=11;" +
+            (projection == 0 ? quotient : projection == 1 ? remainder : projection == 2 ? quotient + remainder : remainder + quotient) +
+            (projection != 1 ? "*((volatile word*)0x106)=(word)q;" : "") +
+            (projection != 0 ? "*((volatile word*)0x108)=(word)r;" : "") +
+            "return (word)(" + (projection == 0 ? "q" : projection == 1 ? "r" : "q^r") + ");}";
+        for (const auto base : {0x008010u, 0x706010u}) for (unsigned alignment = 0; alignment < 16; ++alignment) {
+            const auto origin = base + alignment;
+            const auto selected = compile(source, OptimizationLevel::Size, origin, 0, false, true);
+            const auto baseline = compile(source, OptimizationLevel::O1, origin);
+            require(count(selected.ir, IROpcode::DivMod) == (projection >= 2 ? 1u : 0u) &&
+                count(selected.ir, IROpcode::DivModResult) == (projection >= 2 ? 1u : 0u),
+                "Division-copy fixture lost its single/fused projection distinction");
+            const std::vector<std::uint8_t> direct{0x21,0x13,0x20,0x11,0xa6,0,0xb3,0x3f,0x66};
+            require(std::search(selected.object.code_section.begin(), selected.object.code_section.end(),
+                direct.begin(), direct.end()) != selected.object.code_section.end(),
+                "Non-plot Os division did not copy R1 directly to R3 before replacing R1");
+            const auto seeded = [](const ObjectFile& object) {
+                auto bytes = linked(object); bytes.insert(bytes.begin(), {0xfc,0xef,0xbe,0xfd,0xfe,0xca}); return bytes;
+            };
+            for (const auto& values : {std::make_pair(0u,13u),std::make_pair(1u,1u),std::make_pair(65535u,3u),
+                std::make_pair(32768u,65535u),std::make_pair(32768u,1u),std::make_pair(32767u,32768u),
+                std::make_pair(1u,32768u),std::make_pair(65535u,65535u),std::make_pair(149u,0u)}) {
+                DiscoGSU::Machine a(seeded(selected.object), origin - 6), b(seeded(baseline.object), origin - 6);
+                for (auto* machine : {&a,&b}) {
+                    machine->seed(0x700100, static_cast<std::uint8_t>(values.first), false);
+                    machine->seed(0x700101, static_cast<std::uint8_t>(values.first >> 8), false);
+                    machine->seed(0x700102, static_cast<std::uint8_t>(values.second), false);
+                    machine->seed(0x700103, static_cast<std::uint8_t>(values.second >> 8), false);
+                    for (unsigned p = 0x106; p < 0x10a; ++p) machine->seed(0x700000 + p, 0xa5, false);
+                    machine->run();
+                }
+                ++executions;
+                require(a.reg(6) == b.reg(6) && a.reg(6) == (values.second ? 0u : 6u) &&
+                    a.word(0x700104) == 11 && a.accesses(0x700104,true) == 1 &&
+                    a.accesses(0x700100,false) == 1 && a.accesses(0x700102,false) == 1 &&
+                    a.ramBank() == b.ramBank() && a.romBank() == b.romBank() &&
+                    a.reg(12) == 0xbeef && a.reg(13) == 0xcafe,
+                    "Direct divisor copy changed checked fault/witness/input/bank/LOOP state");
+                const auto convert = [&](unsigned value) {
+                    return !is_unsigned && value >= 0x8000 ? static_cast<int>(value) - 65536 : static_cast<int>(value);
+                };
+                if (values.second) {
+                    // Compute in a wider host type: -32768/-1 is representable
+                    // here before the target's modular word conversion.
+                    const auto q = static_cast<std::uint16_t>(convert(values.first) / convert(values.second));
+                    const auto r = static_cast<std::uint16_t>(convert(values.first) % convert(values.second));
+                    const auto result = projection == 0 ? q : projection == 1 ? r : static_cast<std::uint16_t>(q ^ r);
+                    require(a.reg(0) == result && a.reg(0) == b.reg(0) && a.reg(10) == b.reg(10) &&
+                        a.word(0x700106) == (projection != 1 ? q : 0xa5a5) &&
+                        a.word(0x700108) == (projection != 0 ? r : 0xa5a5),
+                        "Direct divisor copy changed signed/unsigned quotient/remainder projections or stack");
+                } else require(a.word(0x700106) == 0xa5a5 && a.word(0x700108) == 0xa5a5,
+                    "Divide-by-zero reached a result/projection store");
+                for (unsigned p = 0x104; p < 0x10a; ++p) require(a.byte(0x700000 + p) == b.byte(0x700000 + p),
+                    "Direct divisor copy changed witnessed result RAM");
+            }
+        }
+    }
+    // Controls stay on the legacy plot staging and private shared-helper ABI.
+    for (const bool plot : {false,true}) for (const bool is_unsigned : {false,true}) {
+        const std::string type = is_unsigned ? "u16" : "word";
+        const std::string source = "word main(){" + type + " a=*((volatile " + type + "*)0x100);" +
+            type + " b=*((volatile " + type + "*)0x102);*((volatile word*)0x104)=11;" +
+            (plot ? "plot{at(7,3);color 2;" : "") + type + " q=a/b;" + type +
+            (plot ? " r=a%b;" : " r=(a^(" + type + ")23130)/b;") +
+            "*((volatile word*)0x106)=(word)q;*((volatile word*)0x108)=(word)r;" +
+            (plot ? "pixel;flush;return (word)(q^r)+cursor.x*16+cursor.y;}}" : "return (word)(q^r);}");
+        for (const auto origin : {0x00800fu,0x706007u}) {
+            const auto selected = compile(source, OptimizationLevel::Size, origin, 0, false, true);
+            const auto baseline = compile(source, OptimizationLevel::O1, origin);
+            if (plot) {
+                const std::vector<std::uint8_t> legacy{0x24,0x13,0x20,0x11};
+                require(std::search(selected.object.code_section.begin(), selected.object.code_section.end(),
+                    legacy.begin(),legacy.end()) != selected.object.code_section.end(),
+                    "Plot division lost the R4-staged divisor after coordinate pushes");
+            } else {
+                const auto helper = std::string(1,'\x01') + "__disco_os_divmod_" + (is_unsigned ? "u" : "s");
+                require(std::count_if(selected.object.symbol_table.begin(),selected.object.symbol_table.end(),
+                    [&](const SymbolEntry& symbol) { return symbol.name == helper; }) == 1,
+                    "Repeated-division control lost its private shared helper");
+            }
+            for (const auto& values : {std::make_pair(32768u,65535u),std::make_pair(65535u,3u),std::make_pair(149u,0u)}) {
+                DiscoGSU::Machine a(linked(selected.object),origin), b(linked(baseline.object),origin);
+                for (auto* machine : {&a,&b}) {
+                    machine->seed(0x700100,static_cast<std::uint8_t>(values.first),false);
+                    machine->seed(0x700101,static_cast<std::uint8_t>(values.first >> 8),false);
+                    machine->seed(0x700102,static_cast<std::uint8_t>(values.second),false);
+                    machine->seed(0x700103,static_cast<std::uint8_t>(values.second >> 8),false); machine->run();
+                }
+                ++executions;
+                require(a.reg(6) == b.reg(6) && a.reg(6) == (values.second ? 0u : 6u) &&
+                    a.word(0x700104) == 11 && a.accesses(0x700104,true) == 1 &&
+                    a.accesses(0x700100,false) == 1 && a.accesses(0x700102,false) == 1,
+                    "Plot/shared division control changed fault/witness/input state");
+                if (values.second) require(a.reg(0) == b.reg(0) && a.reg(10) == b.reg(10) &&
+                    a.word(0x700106) == b.word(0x700106) && a.word(0x700108) == b.word(0x700108) &&
+                    (!plot || (a.reg(1) == 8 && a.reg(2) == 3 && a.graphicsState("--plots") == 1 && a.graphicsState("--rpix") == 1)),
+                    "Plot/shared division control changed results, coordinates, flush or stack");
+                for (unsigned p = 0; p < 0x10a; ++p) require(a.byte(0x700000+p) == b.byte(0x700000+p),
+                    "Plot/shared division control changed external RAM or pixels");
+            }
+        }
+    }
+    std::cout << "Direct divisor copy: " << executions << " signed/unsigned projection/fault executions across ROM/RAM all16 alignments\n";
+}
+
 void inlineHardwareScopes() {
     // These are verified IR contracts, not source patterns: the AST optimizer
     // intentionally declines nested/calling countdown loops. Both implicit
     // counters and the caller's pre-existing R12/R13 must survive lowering.
-    for (const bool calls : {false, true}) {
-        const std::string source = calls
+    for (const unsigned call_kind : {0u, 1u, 2u, 3u}) {
+        const bool calls = call_kind != 0;
+        std::string source = calls
             ? "word step(); word main(){volatile word total=0;total+=step();return total;}"
             : "word main(){volatile word total=0;total++;return total;}";
+        if (call_kind == 2) source += "word step(){return *(volatile word*)0x100+2;}";
+        if (call_kind == 3) source += "word helper(){word s=0;for(word j=0;j<8;j++)s+=j;return s;}"
+            "word step(){return helper()-26;}";
         Lexer lexer(source); const auto tokens = lexer.scanTokens(); Parser parser(tokens); auto ast = parser.parseProgram();
         DataSegmentManager data; Analyzer analyzer(data); analyzer.analyze(ast); Optimizer optimizer; optimizer.optimize(ast);
         IRLowerer lowerer; auto ir = lowerer.lower(ast);
@@ -335,7 +654,7 @@ void inlineHardwareScopes() {
                 CompilerConfig config; config.optimization = level; config.code_start_address = origin;
                 IRCodeGenerator backend(analyzer.getAllLocalSymbols(), analyzer.getFunctionSymbols(), data, config);
                 auto object = backend.generate(ir);
-                if (calls) {
+                if (call_kind == 1) {
                     // An external callee deliberately clobbers both loop
                     // registers; a compiler-generated callee would preserve
                     // them itself and could mask missing caller protection.
@@ -343,6 +662,24 @@ void inlineHardwareScopes() {
                         static_cast<std::uint32_t>(object.code_section.size())});
                     object.code_section.insert(object.code_section.end(),
                         {0xfc, 0x11, 0x11, 0xfd, 0x22, 0x22, 0xa0, 2, 0x9b, 1});
+                }
+                if (level == OptimizationLevel::O2 && call_kind >= 2) {
+                    std::size_t end = object.code_section.size();
+                    for (const auto& symbol : object.symbol_table) if (symbol.section == SymbolSection::CODE &&
+                        (symbol.name == "step" || symbol.name == "helper")) end = std::min<std::size_t>(end, symbol.offset);
+                    unsigned preservation_prefixes = 0;
+                    for (std::size_t n = 0; n < end;) {
+                        const auto op = object.code_section[n];
+                        preservation_prefixes += op == 0x2c;
+                        n += op >= 0xf0 ? 3 : ((op >= 0xa0 && op <= 0xaf) || (op >= 5 && op <= 15)) ? 2 : 1;
+                    }
+                    // Scheduling may place WITH R12 in a guard's delay slot
+                    // while its matching STW is at the success label. Count
+                    // both save/load prefixes as instructions, not adjacent
+                    // byte strings that would miss that valid pipeline plan.
+                    if (preservation_prefixes != (call_kind == 2 ? 4u : 6u))
+                        throw std::runtime_error("Internal/transitive callee summary did not select precise caller LOOP preservation: kind=" +
+                            std::to_string(call_kind) + " prefixes=" + std::to_string(preservation_prefixes));
                 }
                 require(Assembler().assemble(AssemblyGenerator(object).generate()).code_section == object.code_section,
                     "Nested inline scope assembly changed bytes");
@@ -353,6 +690,149 @@ void inlineHardwareScopes() {
                         machine.reg(12) == 0xbeef && machine.reg(13) == 0xcafe,
                     "Nested inline/calling LOOP failed to restore implicit counters, addresses or stack");
             }
+    }
+}
+
+void registerBackedPixelScopes() {
+    const std::string source = "word main(){word n=*((volatile word*)0x100);"
+        "*((volatile word*)0x300)=17;plot{at(4,3);color 2;"
+        "for(word y=0;y<3;y++){for(word x=0;x<n;x++){pixel;}cursor.y++;}"
+        "flush;return cursor.x;}}";
+    for (const auto origin : {0x008006u, 0x70600fu}) {
+        const auto fast = compile(source, OptimizationLevel::O2, origin);
+        const auto stack = compile(source, OptimizationLevel::O2, origin, 0, true);
+        require(count(fast.ir, IROpcode::HardwareLoop) != 0, "Pixel-save fixture lost its hardware scope");
+        const auto run_bytes = [](const ObjectFile& object) {
+            auto bytes = linked(object);
+            bytes.insert(bytes.begin(), {0xfc, 0xef, 0xbe, 0xfd, 0xfe, 0xca});
+            return bytes;
+        };
+        for (const auto n : {0u, 1u, 3u, 127u, 0x8000u, 0xffffu}) {
+            DiscoGSU::Machine a(run_bytes(fast.object), origin - 6), b(run_bytes(stack.object), origin - 6);
+            for (auto* machine : {&a, &b}) {
+                machine->configureStackWindow(0x701000, 0x702002);
+                machine->seed(0x700100, static_cast<std::uint8_t>(n), false);
+                machine->seed(0x700101, static_cast<std::uint8_t>(n >> 8), false);
+                machine->run();
+            }
+            require(a.reg(0) == b.reg(0) && a.reg(1) == b.reg(1) && a.reg(2) == b.reg(2) &&
+                a.reg(6) == 0 && a.reg(10) == b.reg(10) && a.reg(12) == 0xbeef && a.reg(13) == 0xcafe,
+                "Register-backed pixel scope changed cursor, ABI or fault state");
+            for (unsigned p = 0x100; p < 0x400; ++p)
+                require(a.byte(0x700000 + p) == b.byte(0x700000 + p), "Register-backed pixel scope changed pixels/witnesses");
+            if (n && n < 0x8000) {
+                if (!(a.metrics().stack_stores + 6 == b.metrics().stack_stores &&
+                    a.metrics().stack_loads + 6 == b.metrics().stack_loads))
+                    throw std::runtime_error("Pixel scope traffic mismatch at n=" + std::to_string(n) +
+                        " stores=" + std::to_string(a.metrics().stack_stores) + "/" + std::to_string(b.metrics().stack_stores) +
+                        " loads=" + std::to_string(a.metrics().stack_loads) + "/" + std::to_string(b.metrics().stack_loads) +
+                        "\n" + dumpIR(fast.ir));
+                require(a.metrics().instructions < b.metrics().instructions,
+                    "Register-backed pixel scope increased executed instructions");
+            } else {
+                require(a.metrics().stack_stores == b.metrics().stack_stores && a.metrics().stack_loads == b.metrics().stack_loads,
+                    "Untaken pixel scope added stack work");
+            }
+            if (origin == 0x008006u && n == 3)
+                std::cout << "Pixel-save three-row fixture: bytes=" << fast.object.code_section.size() << "/" << stack.object.code_section.size()
+                    << " instructions=" << a.metrics().instructions << "/" << b.metrics().instructions
+                    << " stack-stores=" << a.metrics().stack_stores << "/" << b.metrics().stack_stores
+                    << " stack-loads=" << a.metrics().stack_loads << "/" << b.metrics().stack_loads << '\n';
+        }
+        // Both push boundaries, including odd SP alignment faults in the
+        // prologue. Failed paths must preserve the first push's exact word,
+        // SP, original loop registers and the preceding volatile witness.
+        unsigned setup_faults = 0, successful = 0;
+        for (std::uint16_t sp = 0; sp <= 96; ++sp) {
+            DiscoGSU::Machine a(run_bytes(fast.object), origin - 6, sp), b(run_bytes(stack.object), origin - 6, sp);
+            for (auto* machine : {&a, &b}) { machine->seed(0x700100, 3, false); machine->run(); }
+            require(a.reg(6) == b.reg(6) && a.reg(10) == b.reg(10) &&
+                a.reg(12) == b.reg(12) && a.reg(13) == b.reg(13) && a.word(0x700300) == b.word(0x700300),
+                "Pixel-save capacity path reordered a checked fault or damaged scope ownership");
+            if (a.reg(6)) {
+                for (unsigned p = 0; p <= 96; ++p)
+                    require(a.byte(0x700000 + p) == b.byte(0x700000 + p),
+                        "Low-stack fallback changed the first saved word before fault");
+                if (a.word(0x700300) == 17) ++setup_faults;
+            } else ++successful;
+        }
+        require(setup_faults >= 2 && successful != 0, "Pixel-save fixture missed setup fault boundaries or fast success");
+    }
+}
+
+void physicalComparisons() {
+    for (const bool is_unsigned : {false,true}) {
+        const std::string type = is_unsigned ? "unsigned word" : "word";
+        const std::string source = "word main(){" + type + " a=*(volatile " + type + "*)0x100;" + type +
+            " b=*(volatile " + type + "*)0x102;word r=(word)(a<b);r+=(word)(a<=b)*2;"
+            "r+=(word)(a>b)*4;r+=(word)(a>=b)*8;r+=(word)(a==b)*16;r+=(word)(a!=b)*32;"
+            "if(a<=b)r+=64;if(a>b)r+=128;return r;}";
+        for (const auto level : {OptimizationLevel::O1, OptimizationLevel::O2, OptimizationLevel::Size}) {
+            const auto compiled = compile(source, level, 0x008000);
+            for (const unsigned a : {0u,1u,2u,127u,128u,255u,32767u,32768u,65535u})
+                for (const unsigned b : {0u,1u,2u,127u,128u,255u,32767u,32768u,65535u}) {
+                    DiscoGSU::Machine machine(linked(compiled.object), 0x008000);
+                    machine.seed(0x700100,static_cast<std::uint8_t>(a),false);
+                    machine.seed(0x700101,static_cast<std::uint8_t>(a >> 8),false);
+                    machine.seed(0x700102,static_cast<std::uint8_t>(b),false);
+                    machine.seed(0x700103,static_cast<std::uint8_t>(b >> 8),false); machine.run();
+                    const auto convert = [&](unsigned value) {
+                        return is_unsigned || value < 32768 ? static_cast<int>(value) : static_cast<int>(value) - 65536;
+                    };
+                    const int x = convert(a), y = convert(b);
+                    const auto expected = (x < y) + 2*(x <= y) + 4*(x > y) + 8*(x >= y) +
+                        16*(x == y) + 32*(x != y) + 64*(x <= y) + 128*(x > y);
+                    require(machine.reg(0) == expected && machine.reg(6) == 0,
+                        "Physical/reversed CMP changed signed/unsigned boolean or branch semantics");
+                }
+        }
+    }
+}
+
+void allocatedFrameArithmetic() {
+    for (unsigned variant = 0; variant < 3; ++variant) {
+        const bool calls = variant == 2;
+        const std::string update = variant == 1
+            ? "word next=r-a;r=next+r;r+=b;r-=c;r+=d;"
+            : std::string("r+=a;") + (calls ? "r=step(r);" : "") + "r-=b;r+=c;r-=d;";
+        const std::string source = std::string(calls ? "word step(word n);" : "") +
+            "word main(){word a=*(volatile word*)0x100;word b=*(volatile word*)0x102;"
+            "word c=*(volatile word*)0x104;word d=*(volatile word*)0x106;word r=*(volatile word*)0x108;"
+            "word flags=0;for(word i=0;i<7;i++){" + update +
+            "if(r<0)flags++;if(r==0)flags+=2;}*(volatile word*)0x10a=flags;return r;}" +
+            (calls ? "@cache word step(word n){return n+1;}" : "");
+        for (const auto level : {OptimizationLevel::O1,OptimizationLevel::O2,OptimizationLevel::Size}) {
+            const auto compiled = compile(source, level, 0x008000);
+            if (calls) require(count(compiled.ir,IROpcode::Call) != 0, "Frame arithmetic call-boundary fixture was inlined");
+            if (level == OptimizationLevel::O2) {
+                // R0 is the frame-home form when the RHS spilled. A wider pool
+                // can keep that RHS in a register and subtract it directly.
+                const auto assembly = AssemblyGenerator(compiled.object).generate();
+                require(assembly.find("sub r") != std::string::npos,
+                    "Frame arithmetic fixture did not select an allocated subtract");
+            }
+            for (const unsigned initial : {0u,1u,2u,127u,128u,255u,32767u,32768u,65535u})
+                for (const unsigned a : {0u,1u,2u,127u,128u,255u,32767u,32768u,65535u}) {
+                    DiscoGSU::Machine machine(linked(compiled.object),0x008000);
+                    const unsigned inputs[] = {a,65535u-a,32768u,1u,initial};
+                    for (unsigned n=0;n<5;++n) {
+                        machine.seed(0x700100+n*2,static_cast<std::uint8_t>(inputs[n]),false);
+                        machine.seed(0x700101+n*2,static_cast<std::uint8_t>(inputs[n] >> 8),false);
+                    }
+                    machine.run();
+                    auto result = static_cast<std::uint16_t>(initial);
+                    unsigned flags = 0;
+                    for (unsigned n=0;n<7;++n) {
+                        const auto next = variant == 1
+                            ? 2*static_cast<int>(result)-static_cast<int>(a)+static_cast<int>(inputs[1])-32768+1
+                            : static_cast<int>(result)+static_cast<int>(a)+(calls ? 1 : 0)-static_cast<int>(inputs[1])+32768-1;
+                        result = static_cast<std::uint16_t>(next);
+                        flags += (result >= 32768) + 2*(result == 0);
+                    }
+                    require(machine.reg(0)==result && machine.reg(6)==0 && machine.reg(10)==0x1ffc && machine.word(0x70010a)==flags,
+                        "Frame RHS selection changed wrap, aliased destination, predicates, loop or call-boundary semantics");
+                }
+        }
     }
 }
 
@@ -440,6 +920,7 @@ void cacheWindowsAndCheckedAddresses() {
     const std::string checked = "word main(){word* p=(word*)*((volatile u16*)0x100);word i=*((volatile word*)0x102);"
         "*((volatile byte*)0x104)=(byte)11;word* q=p+i;word v=*q;*q=v+1;return *q;}";
     for (const auto& input : {std::make_pair(0x200u, 1u), std::make_pair(0x200u, 0xffffu),
+                            std::make_pair(0x200u, 0x8000u), std::make_pair(0x200u, 0x7fffu),
                             std::make_pair(0xfffeu, 1u), std::make_pair(0u, 1u), std::make_pair(0x201u, 1u)}) {
         const auto baseline = compile(checked, OptimizationLevel::O1, 0x008000);
         for (const auto level : {OptimizationLevel::O2, OptimizationLevel::Size}) {
@@ -505,7 +986,8 @@ void frameProofBoundary() {
     // without exceeding the frontend's valid local-declaration size limit.
     const auto reserved = compile("u16 main(){volatile byte padding[2];padding[0]=1;"
         "u16 a=*((volatile u16*)0x100);u16 b=*((volatile u16*)0x102);u16 c=*((volatile u16*)0x104);"
-        "u16 d=*((volatile u16*)0x106);u16* p=(u16*)0x400+(word)(d&3);*p=123;return a+b+c+d;}",
+        "u16 d=*((volatile u16*)0x106);u16 e=*((volatile u16*)0x108);u16 f=*((volatile u16*)0x10a);"
+        "u16* p=(u16*)0x400+(word)(d&3);*p=123;return a+b+c+d+e+f;}",
         OptimizationLevel::O2, 0x008000, 65520);
     const auto& function = reserved.ir.functions.at(0);
     require(function.total_local_alloc_size == 65520, "Reserved frame disappeared during SSA promotion");
@@ -537,8 +1019,14 @@ void frameProofBoundary() {
 }
 int main() {
     try {
+        pointerPromotionPolicies();
+        conditionalIncomingPointers();
+        pointerIndexCopyExecution();
         standaloneCountdowns();
         inlineHardwareScopes();
+        registerBackedPixelScopes();
+        physicalComparisons();
+        allocatedFrameArithmetic();
         cursorAndTransientValues(); cacheWindowsAndCheckedAddresses(); frameProofBoundary();
         const std::string table = "word main(){word a[17]={0,6,12,19,24,30,36,41,45,49,53,56,59,61,63,64,64};"
             "word i=(word)*((volatile u8*)0x100)&3; word total=0; for(word n=0;n<17;n++) total+=a[n]; return total+(i-i);}";
@@ -584,7 +1072,7 @@ int main() {
         const auto live_out = compile("word main(){word r=0;for(word i=0;i<16;i++){r+=i;}return r;}", OptimizationLevel::O2, 0x008000);
         require(count(live_out.ir, IROpcode::HardwareLoop) == 1, "Loop with repaired live-out SSA value was not converted");
         execution("word main(){word r=0;for(word i=0;i<16;i++){r+=i;}return r;}", 120);
-        dynamicLoops(); sizeCountdownsAndFlags(); sizeDivisionCache();
+        dynamicLoops(); sizeCountdownsAndFlags(); sizeDivisionCache(); sizeDivisionDivisorCopy();
         execution("word main(){word a=9;word b=9;word* p=&a;if(*((volatile u8*)0x100))p=&b;return *p;}", 9);
         const auto volatile_table = compile("word main(){volatile word a[4]={1,2,3,4};return a[0];}", OptimizationLevel::O2, 0x008000);
         require(count(volatile_table.ir, IROpcode::MemoryInitialize) == 0, "Volatile stores were batched");

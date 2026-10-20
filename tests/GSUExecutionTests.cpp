@@ -10,6 +10,7 @@
 #include <vector>
 #include "GSUGraphicsModel.hpp"
 #include "GSUInstructionModel.hpp"
+#include "GemChessRasterOracle.hpp"
 
 namespace {
 
@@ -84,6 +85,13 @@ void checkIncrementalTriangleEdges() {
 }
 
 void selfTest() {
+    GemChessRasterOracle::selfTest();
+    for (const auto limit : {std::size_t{0},std::size_t{100000001}}) {
+        Machine invalidLimit({0,1},0x8000);
+        bool rejected=false;
+        try { invalidLimit.run(limit); } catch (const std::invalid_argument&) { rejected=true; }
+        require(rejected && invalidLimit.metrics().instructions==0,"Invalid model instruction limit executed or was accepted");
+    }
     checkIncrementalTriangleEdges();
     checkGraphicsAddressBoundaries();
     Machine highByte({0xf0, 0x00, 0x80, 0xc0, 0x0b, 0x03, 0x01, 0xd0, 0x01, 0, 1}, 0x8000);
@@ -300,12 +308,100 @@ std::vector<std::uint8_t> readPayload(const char* path) {
     return bytes;
 }
 
+void checkCompiledGemRaster(const std::vector<std::uint8_t>& payload, std::uint32_t origin, bool private_kernel=false) {
+    std::size_t cases = 0;
+    std::uint64_t max_instructions=0;
+    const auto edges=private_kernel?GemChessRasterOracle::runtimePrivateEdges():GemChessRasterOracle::runtimeEdges();
+    for (auto edge : edges) for (unsigned reverse = 0; reverse < 2; ++reverse) {
+        if (reverse) { std::swap(edge[0], edge[2]); std::swap(edge[1], edge[3]); }
+        const auto expected = GemChessRasterOracle::reference(edge);
+        Machine machine(payload, origin);
+        const auto seed = [&](std::uint32_t address, std::uint16_t value) {
+            machine.seed(address, static_cast<std::uint8_t>(value), false);
+            machine.seed(address + 1, static_cast<std::uint8_t>(value >> 8), false);
+        };
+        for (std::size_t i = 0; i < edge.size(); ++i)
+            seed(0x700100 + static_cast<std::uint32_t>(i) * 2, static_cast<std::uint16_t>(edge[i]));
+        seed(0x700ffe, 0x1357); seed(0x701300, 0x2468);
+        try { machine.run(100000000); }
+        catch (const std::runtime_error& error) {
+            throw std::runtime_error("Gem edge case="+std::to_string(cases)+" "+GemChessRasterOracle::describe(edge)+
+                " pc="+std::to_string(machine.reg(15))+" instructions="+std::to_string(machine.metrics().instructions)+": "+error.what());
+        }
+        max_instructions=std::max(max_instructions,machine.metrics().instructions);
+        require(machine.reg(0) == 42 && machine.reg(6) == 0 && machine.reg(10) == 0x1ffc,
+                "Compiled gem raster failed normal return, fault or stack check");
+        require(machine.word(0x700ffe) == 0x1357 && machine.word(0x701300) == 0x2468,
+                "Compiled gem raster wrote outside its 384-word span storage");
+        for (std::size_t y = 0; y < 192; ++y) {
+            const auto address = static_cast<std::uint32_t>(y) * 2;
+            if (machine.word(0x701000 + address) != static_cast<std::uint16_t>(expected.left[y]) ||
+                machine.word(0x701180 + address) != static_cast<std::uint16_t>(expected.right[y]))
+                throw std::runtime_error("Compiled gem raster differs at y=" + std::to_string(y) + ": " +
+                    GemChessRasterOracle::describe(edge));
+        }
+        ++cases;
+    }
+    std::cout << "Compiled gem raster: " << cases << " edges/reversals, all 384 span words and boundary sentinels passed; maximum instructions=" << max_instructions << '\n';
+}
+
+void checkCompiledGemPaint(const std::vector<std::uint8_t>& payload, std::uint32_t origin) {
+    std::size_t cases=0;
+    std::uint64_t max_instructions=0;
+    for (auto polygon : GemChessRasterOracle::runtimePolygons()) for (unsigned rotation=0;rotation<polygon.size();++rotation) {
+        std::rotate(polygon.begin(),polygon.begin()+1,polygon.end());
+        for (const bool wire : {false,true}) {
+            const auto ink=static_cast<std::uint8_t>(1+cases%15);
+            const auto expected=GemChessRasterOracle::framebuffer(polygon,wire,ink);
+            Machine machine(payload,origin); machine.configureScreen(0x21,24);
+            const auto seed=[&](std::uint32_t address,std::uint16_t value) {
+                machine.seed(address,static_cast<std::uint8_t>(value),false);
+                machine.seed(address+1,static_cast<std::uint8_t>(value>>8),false);
+            };
+            seed(0x700100,static_cast<std::uint16_t>(polygon.size())); seed(0x700102,ink); seed(0x700104,wire?1:0);
+            for (std::size_t i=0;i<polygon.size();++i) {
+                seed(0x700108+static_cast<std::uint32_t>(i)*2,static_cast<std::uint16_t>(polygon[i][0]));
+                seed(0x700110+static_cast<std::uint32_t>(i)*2,static_cast<std::uint16_t>(polygon[i][1]));
+            }
+            // Dirty all rows so vertex-only initialization cannot accidentally
+            // pass by reading zero-initialized or previously matching spans.
+            for (unsigned i=0;i<384;++i) seed(0x701000+i*2,0x5a5a);
+            seed(0x700ffe,0x1357); seed(0x701300,0x2468);
+            seed(0x705ffe,0x3579); seed(0x70c000,0x468a);
+            try { machine.run(100000000); }
+            catch (const std::runtime_error& error) {
+                throw std::runtime_error("Gem paint case="+std::to_string(cases)+" wire="+std::to_string(wire)+
+                    " pc="+std::to_string(machine.reg(15))+" instructions="+std::to_string(machine.metrics().instructions)+": "+error.what());
+            }
+            max_instructions=std::max(max_instructions,machine.metrics().instructions);
+            require(machine.reg(0)==42 && machine.reg(6)==0 && machine.reg(10)==0x1ffc,
+                    "Compiled gem paint failed normal return, fault or stack check");
+            require(machine.word(0x700ffe)==0x1357 && machine.word(0x701300)==0x2468,
+                    "Compiled gem paint wrote outside its span storage");
+            require(machine.word(0x705ffe)==0x3579 && machine.word(0x70c000)==0x468a,
+                    "Compiled gem paint wrote outside its 24-KiB framebuffer");
+            for (std::size_t i=0;i<expected.size();++i)
+                if (machine.byte(0x706000+static_cast<std::uint32_t>(i))!=expected[i])
+                    throw std::runtime_error("Compiled gem paint differs: case="+std::to_string(cases)+
+                        " wire="+std::to_string(wire)+" framebuffer-byte="+std::to_string(i));
+            ++cases;
+        }
+    }
+    std::cout << "Compiled gem paint: " << cases << " clockwise/degenerate polygon modes/rotations; every 24-KiB framebuffer byte passed; maximum instructions=" << max_instructions << '\n';
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string(argv[1]) == "--self-test") {
             selfTest();
+        } else if (argc == 4 && std::string(argv[1]) == "--gem-raster") {
+            checkCompiledGemRaster(readPayload(argv[2]), number(argv[3], 0xffffff));
+        } else if (argc == 4 && std::string(argv[1]) == "--gem-raster-private") {
+            checkCompiledGemRaster(readPayload(argv[2]), number(argv[3], 0xffffff),true);
+        } else if (argc == 4 && std::string(argv[1]) == "--gem-paint") {
+            checkCompiledGemPaint(readPayload(argv[2]), number(argv[3], 0xffffff));
         } else {
             if (argc < 6) {
                 throw std::runtime_error("usage: runner payload origin [--initial-sp value] [--initial-ram-bank 0|1] [--word address expected | --register index expected]...");

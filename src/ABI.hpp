@@ -15,6 +15,9 @@ constexpr std::uint8_t FarBankRegister = 4;
 constexpr std::uint8_t AddressFaultRegister = 6;
 constexpr const char* NearRamBankSymbol = "__disco_near_ram_bank";
 constexpr const char* NearRomBankSymbol = "__disco_near_rom_bank";
+// Private DATA in a payload copied to the selected near RAM execution bank.
+// Linkers must reject these RAM relocations for ROM or mismatched placement.
+constexpr const char* ImmutablePoolPrefix = "\x01" "__disco_pool_";
 constexpr std::uint8_t FramePointerRegister = 9;
 constexpr std::uint8_t StackPointerRegister = 10;
 constexpr std::uint8_t LinkRegister = 11;

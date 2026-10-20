@@ -95,6 +95,12 @@ add_toolchain_regression(gsu_size_optimization_execution gsu_size_optimization)
 add_toolchain_regression(gsu_size_policy_execution gsu_size_policy)
 add_toolchain_regression(gsu_value_optimization_execution gsu_value_optimization)
 add_toolchain_regression(gsu_sbk gsu_sbk)
+# Compile the current scene kernels, not an oracle-only or copied collector.
+# Keep this registry shared by CTest and the direct/prebuilt test runner.
+foreach(mode IN ITEMS raster raster_private paint)
+    add_toolchain_regression(gem_chess_${mode}_O2 gem_chess_${mode} 2)
+    add_toolchain_regression(gem_chess_${mode}_Os gem_chess_${mode} s)
+endforeach()
 # Reuse the same independent execution assertions, diagnostics and byte-exact
 # assembler round trips under O1/O2/Os. Each case owns a separate output directory.
 foreach(case IN ITEMS gsu_call_execution switch_abi gsu_contributor_correctness comparison_semantics ir_branch_relaxation ir_switch_relaxation

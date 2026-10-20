@@ -135,6 +135,130 @@ bool sameValueType(const Type& left, const Type& right) {
             (samePointerLayers(left, right) && left.space == right.space));
 }
 
+// Independent content-liveness check for overlapping homes. Metadata does not
+// authorize a new alias rule: unknown RAM paths and observable identities are
+// rejected whenever a plan pools or shares storage.
+void verifyStorageInterference(const IRFunction& function) {
+    if (!function.storage_layout_valid) return;
+    using Live = std::set<SymbolId>;
+    std::set<std::pair<SymbolId, SymbolId>> overlapping;
+    for (auto a = function.storage_layout.begin(); a != function.storage_layout.end(); ++a) {
+        if (a->second.stackOffset >= 0) continue;
+        const auto size_a = ((a->second.type.sizeInBytes * std::max(1, a->second.type.array_size) + 1) / 2) * 2 +
+            std::max(std::max(2, a->second.type.alignment), storageAlignment(a->second.type)) - 2;
+        for (auto b = std::next(a); b != function.storage_layout.end(); ++b) {
+            if (b->second.stackOffset >= 0) continue;
+            const auto size_b = ((b->second.type.sizeInBytes * std::max(1, b->second.type.array_size) + 1) / 2) * 2 +
+                std::max(std::max(2, b->second.type.alignment), storageAlignment(b->second.type)) - 2;
+            if (a->second.stackOffset < b->second.stackOffset + size_b && b->second.stackOffset < a->second.stackOffset + size_a)
+                overlapping.emplace(a->first, b->first);
+        }
+    }
+    if (overlapping.empty() && function.immutable_local_arrays.empty()) return;
+    const Token source(TokenType::UNKNOWN, function.name, 1, 1);
+    const auto reject = [&]() { throw CompilerError("IR verifier: pooled/shared storage has an alias or lifetime conflict.", source); };
+    if (function.value_count > 8192 || function.blocks.size() > 256) reject();
+    std::vector<SymbolId> owners(static_cast<std::size_t>(function.value_count) + 1);
+    std::vector<const IRInstruction*> values(owners.size(), nullptr);
+    std::vector<bool> zero(owners.size(), false);
+    std::size_t count = 0;
+    for (const auto& parameter : function.parameters)
+        if (parameter.type.pointer_level && parameter.type.space == AddressSpace::RAM) reject();
+    for (const auto& block : function.blocks) for (const auto& instruction : block.instructions) {
+        if (++count > 16000) reject();
+        if (instruction.result.isValid()) values.at(instruction.result.value) = &instruction;
+        if (instruction.opcode == IROpcode::Call || instruction.opcode == IROpcode::Load || instruction.opcode == IROpcode::Store) reject();
+        if (instruction.opcode == IROpcode::Address && instruction.operation.empty() && instruction.symbol_id.isValid()) {
+            owners.at(instruction.result.value) = instruction.symbol_id; zero.at(instruction.result.value) = true;
+            const auto pool = function.immutable_local_arrays.find(instruction.symbol_id);
+            if (pool != function.immutable_local_arrays.end()) {
+                auto element = pool->second.type; element.array_size = 0;
+                if (!sameValueType(element, pointeeType(instruction.type))) reject();
+            }
+        }
+    }
+    for (unsigned round = 0; round < 64; ++round) {
+        bool changed = false;
+        for (const auto& block : function.blocks) for (const auto& instruction : block.instructions) {
+            if (!instruction.result.isValid() || owners.at(instruction.result.value).isValid() || instruction.operands.empty()) continue;
+            const auto owner = owners.at(instruction.operands[0].value);
+            if (!owner.isValid()) continue;
+            if ((instruction.opcode == IROpcode::Address && instruction.operation == "member") ||
+                instruction.opcode == IROpcode::PointerOffset) {
+                owners.at(instruction.result.value) = owner;
+                bool same = instruction.opcode == IROpcode::Address && instruction.immediate == 0;
+                if (instruction.opcode == IROpcode::PointerOffset) {
+                    const auto* index = values.at(instruction.operands[1].value);
+                    same = instruction.operands.size() == 2 && index && index->opcode == IROpcode::Constant && index->immediate == 0;
+                }
+                zero.at(instruction.result.value) = same && zero.at(instruction.operands[0].value); changed = true;
+            }
+        }
+        if (!changed) break;
+    }
+    struct Event { SymbolId symbol; bool read = false, write = false, kill = false; };
+    std::vector<std::vector<Event>> events(function.blocks.size());
+    std::vector<std::set<std::size_t>> successors(function.blocks.size());
+    std::vector<Live> uses(function.blocks.size()), defs(function.blocks.size()), in(function.blocks.size()), out(function.blocks.size());
+    for (const auto& block : function.blocks) for (const auto& instruction : block.instructions) {
+        if (instruction.opcode != IROpcode::Phi)
+            for (const auto target : instruction.targets) successors.at(block.id.value).insert(target.value);
+        for (std::size_t operand = 0; operand < instruction.operands.size(); ++operand) {
+            const auto owner = owners.at(instruction.operands[operand].value);
+            if (!owner.isValid()) continue;
+            const bool derived = operand == 0 && instruction.result.isValid() && owners.at(instruction.result.value).isValid() &&
+                (instruction.opcode == IROpcode::Address || instruction.opcode == IROpcode::PointerOffset);
+            const bool read = operand == 0 && instruction.opcode == IROpcode::LoadIndirect;
+            const bool write = operand == 0 && (instruction.opcode == IROpcode::StoreIndirect || instruction.opcode == IROpcode::MemoryInitialize);
+            if ((!derived && !read && !write) || (write && function.immutable_local_arrays.count(owner))) reject();
+        }
+        Event event;
+        if (instruction.opcode == IROpcode::LoadIndirect || instruction.opcode == IROpcode::StoreIndirect || instruction.opcode == IROpcode::MemoryInitialize) {
+            event.symbol = owners.at(instruction.operands[0].value);
+            const auto* pointer = values.at(instruction.operands[0].value);
+            if (!event.symbol.isValid() && pointer && pointer->type.space == AddressSpace::RAM) reject();
+            const auto local = function.storage_layout.find(event.symbol);
+            if (local != function.storage_layout.end() && local->second.stackOffset < 0) {
+                event.read = instruction.opcode == IROpcode::LoadIndirect; event.write = !event.read;
+                const auto width = static_cast<std::int64_t>(instruction.type.sizeInBytes) *
+                    (instruction.opcode == IROpcode::MemoryInitialize ? static_cast<std::int64_t>(instruction.initialization_values.size()) : 1);
+                event.kill = event.write && zero.at(instruction.operands[0].value) &&
+                    width == static_cast<std::int64_t>(local->second.type.sizeInBytes) * std::max(1, local->second.type.array_size);
+                if (event.read && !defs[block.id.value].count(event.symbol)) uses[block.id.value].insert(event.symbol);
+                if (event.kill) defs[block.id.value].insert(event.symbol);
+            }
+        }
+        events[block.id.value].push_back(event);
+    }
+    std::size_t work = 0; bool changed = true;
+    while (changed) {
+        changed = false;
+        for (std::size_t reverse = function.blocks.size(); reverse > 0; --reverse) {
+            const auto block = reverse - 1; Live next_out;
+            for (const auto next : successors[block]) next_out.insert(in[next].begin(), in[next].end());
+            auto next_in = uses[block];
+            for (const auto value : next_out) if (!defs[block].count(value)) next_in.insert(value);
+            work += next_in.size() + next_out.size() + 1;
+            if (work > 2000000) reject();
+            if (next_in != in[block] || next_out != out[block]) { in[block] = std::move(next_in); out[block] = std::move(next_out); changed = true; }
+        }
+    }
+    const auto conflict = [&](SymbolId a, SymbolId b) {
+        if (b < a) std::swap(a, b);
+        if (a != b && overlapping.count({a, b})) reject();
+    };
+    for (const auto& block : function.blocks) {
+        auto live = out[block.id.value];
+        for (const auto a : live) for (const auto b : live) conflict(a, b);
+        const auto& code = events[block.id.value];
+        for (auto event = code.rbegin(); event != code.rend(); ++event) {
+            if (event->write) for (const auto other : live) conflict(event->symbol, other);
+            if (event->kill) live.erase(event->symbol);
+            if (event->read) { for (const auto other : live) conflict(event->symbol, other); live.insert(event->symbol); }
+        }
+    }
+}
+
 } // namespace
 
 bool IRInstruction::isTerminator() const {
@@ -161,6 +285,8 @@ void IRVerifier::verify(const IRModule& module) {
             fail("IR verifier: target lacks far-data capability.", source);
     };
     for (const auto& function : module.functions) {
+        if (function.storage_layout_valid && module.target != TargetKind::GSU)
+            fail("IR verifier: owned storage planning requires the GSU target.", Token(TokenType::UNKNOWN, function.name, 1, 1));
         check_type(function.return_type, Token(TokenType::UNKNOWN, function.name, 1, 1));
         for (const auto& parameter : function.parameters) check_type(parameter.type, parameter.name);
         if (function.is_cached && !supportsCapability(module.target, TargetCapability::InstructionCache))
@@ -212,6 +338,58 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
     verifyPointerType(function.return_type, Token(TokenType::UNKNOWN, "", 0, 0), MaxPointerDepth);
     for (const auto& parameter : function.parameters)
         verifyPointerType(parameter.type, Token(TokenType::UNKNOWN, "", 0, 0), MaxPointerDepth);
+
+    const Token storage_source(TokenType::UNKNOWN, function.name, 1, 1);
+    if (!function.storage_layout_valid && (!function.storage_layout.empty() || !function.immutable_local_arrays.empty()))
+        fail("IR verifier: storage metadata requires a valid owned layout.", storage_source);
+    if (function.storage_layout_valid) {
+        if (function.total_local_alloc_size < 0 || function.total_local_alloc_size > 65530 ||
+            function.total_local_alloc_size % 2 || function.storage_layout.size() > 256 ||
+            function.immutable_local_arrays.size() > 256)
+            fail("IR verifier: invalid bounded local storage layout.", storage_source);
+        const auto object_bytes = [&](const Type& type) {
+            if (type.sizeInBytes <= 0 || type.sizeInBytes > 65528 || type.array_size < 0 ||
+                type.array_size > 65528 / type.sizeInBytes)
+                fail("IR verifier: invalid local object extent.", storage_source);
+            return type.sizeInBytes * std::max(1, type.array_size);
+        };
+        for (const auto& local : function.storage_layout) {
+            const auto& symbol = local.second;
+            verifyPointerType(symbol.type, storage_source, MaxPointerDepth);
+            const auto bytes = object_bytes(symbol.type);
+            const auto alignment = std::max(std::max(2, symbol.type.alignment), storageAlignment(symbol.type));
+            if (!local.first.isValid() || local.first != symbol.id || !symbol.stackOffset ||
+                symbol.stackOffset % 2 || alignment > 128 || (alignment & (alignment - 1)) ||
+                function.immutable_local_arrays.count(local.first))
+                fail("IR verifier: invalid local storage identity or alignment.", storage_source);
+            if (symbol.stackOffset < 0 &&
+                (symbol.stackOffset < -function.total_local_alloc_size + 2 ||
+                 static_cast<std::int64_t>(symbol.stackOffset) + ((static_cast<std::int64_t>(bytes) + 1) / 2) * 2 + alignment - 2 > 0))
+                fail("IR verifier: local storage exceeds the checked frame.", storage_source);
+        }
+        int parameter_offset = 6;
+        for (const auto& parameter : function.parameters) {
+            const auto local = function.storage_layout.find(parameter.symbol_id);
+            if (local == function.storage_layout.end() || local->second.stackOffset != parameter_offset ||
+                !sameValueType(local->second.type, parameter.type))
+                fail("IR verifier: storage layout changed parameter ABI offsets.", parameter.name);
+            parameter_offset += isFarPointer(parameter.type) ? 4 : 2;
+        }
+        std::size_t pool_bytes = 0;
+        for (const auto& entry : function.immutable_local_arrays) {
+            const auto& pool = entry.second; const auto& type = pool.type;
+            if (!entry.first.isValid() || !isIntegerType(type) || type.pointer_level || type.array_size < 4 ||
+                type.array_size > 256 || (type.sizeInBytes != 1 && type.sizeInBytes != 2) ||
+                type.sizeInBytes != (type.base == BaseType::WORD ? 2 : 1) ||
+                type.is_volatile || type.alignment > 2 || pool.bytes.size() != static_cast<std::size_t>(object_bytes(type)) ||
+                pool.bytes.size() > 65528 - pool_bytes)
+                fail("IR verifier: invalid immutable local array extent.", storage_source);
+            if (type.base == BaseType::BOOL && std::any_of(pool.bytes.begin(), pool.bytes.end(),
+                [](std::uint8_t byte) { return byte > 1; }))
+                fail("IR verifier: immutable bool array has an invalid representation.", storage_source);
+            pool_bytes += pool.bytes.size();
+        }
+    }
 
     struct Definition {
         std::size_t block = 0;
@@ -654,6 +832,9 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
                             instruction.immediate < -function.total_local_alloc_size || instruction.immediate % 2 != 0)) ||
                         (!instruction.operation.empty() && instruction.operation != "member" && instruction.operation != "temporary"))
                         fail("IR verifier: address has an invalid operation or operands.", instruction.source);
+                    if (function.storage_layout_valid && instruction.operation.empty() && instruction.symbol_id.isValid() &&
+                        !function.storage_layout.count(instruction.symbol_id) && !function.immutable_local_arrays.count(instruction.symbol_id))
+                        fail("IR verifier: local address is absent from its owned storage layout.", instruction.source);
                     break;
                 case IROpcode::PointerCompare:
                     if (instruction.operands.size() != 2 || instruction.type.base != BaseType::BOOL || instruction.type.pointer_level != 0 ||
@@ -802,6 +983,7 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
             }
         }
     }
+    verifyStorageInterference(function);
 }
 
 IRFunction& IRLowerer::currentFunction() {
@@ -915,6 +1097,39 @@ IRValueId IRLowerer::lowerExpression(Expr& expr) {
                             expr.token);
     }
     return m_last_value;
+}
+
+void IRLowerer::lowerCondition(Expr& expr, IRBlockId true_target, IRBlockId false_target) {
+    // The owning AST bounds expression depth. Keep only stable block IDs across
+    // recursive lowering, which may grow the function's block vector.
+    if (auto* binary = dynamic_cast<BinaryExpr*>(&expr)) {
+        if (binary->token.type == TokenType::AND_AND || binary->token.type == TokenType::OR_OR) {
+            const auto rhs = createBlock("condition.rhs");
+            if (binary->token.type == TokenType::AND_AND)
+                lowerCondition(*binary->left, rhs, false_target);
+            else
+                lowerCondition(*binary->left, true_target, rhs);
+            m_current_block = rhs;
+            lowerCondition(*binary->right, true_target, false_target);
+            return;
+        }
+    }
+    if (auto* unary = dynamic_cast<UnaryExpr*>(&expr)) {
+        if (unary->token.type == TokenType::BANG) {
+            lowerCondition(*unary->right, false_target, true_target);
+            return;
+        }
+    }
+    if (auto* cast = dynamic_cast<CastExpr*>(&expr)) {
+        // Converting an integer to bool preserves exactly its zero/nonzero
+        // condition. Other casts (notably byte narrowing) must still execute.
+        if (expr.result_type.base == BaseType::BOOL && expr.result_type.pointer_level == 0 &&
+            isIntegerType(cast->expression->result_type)) {
+            lowerCondition(*cast->expression, true_target, false_target);
+            return;
+        }
+    }
+    emitConditionalBranch(lowerExpression(expr), true_target, false_target, expr.token);
 }
 
 IRValueId IRLowerer::lowerAddress(Expr& expr) {
@@ -1266,12 +1481,10 @@ void IRLowerer::visit(FunctionDeclStmt& stmt) {
 void IRLowerer::visit(IfStmt& stmt) {
     requireFunction(stmt.token);
     const bool incoming_plot_context = m_plot_context;
-    const auto condition = lowerExpression(*stmt.condition);
     const auto then_block = createBlock("if.then");
     const auto else_block = stmt.elseBranch ? createBlock("if.else") : IRBlockId{};
     const auto end_block = createBlock("if.end");
-    emitConditionalBranch(condition, then_block, stmt.elseBranch ? else_block : end_block,
-                          stmt.token);
+    lowerCondition(*stmt.condition, then_block, stmt.elseBranch ? else_block : end_block);
 
     m_current_block = then_block;
     stmt.thenBranch->accept(*this);
@@ -1315,7 +1528,7 @@ void IRLowerer::visit(ForStmt& stmt) {
     emitBranch(condition_block, stmt.token);
     m_current_block = condition_block;
     if (stmt.is_cached) { IRInstruction cache; cache.opcode = IROpcode::Cache; cache.source = stmt.token; emitInstruction(std::move(cache)); }
-    emitConditionalBranch(lowerExpression(*stmt.condition), body_block, end_block, stmt.token);
+    lowerCondition(*stmt.condition, body_block, end_block);
     m_current_block = body_block;
     m_break_targets.push_back(end_block); m_continue_targets.push_back(increment_block);
     stmt.body->accept(*this);
@@ -1349,8 +1562,7 @@ void IRLowerer::visit(WhileStmt& stmt) {
 
     m_current_block = condition_block;
     if (stmt.is_cached) { IRInstruction cache; cache.opcode = IROpcode::Cache; cache.source = stmt.token; emitInstruction(std::move(cache)); }
-    const auto condition = lowerExpression(*stmt.condition);
-    emitConditionalBranch(condition, body_block, end_block, stmt.token);
+    lowerCondition(*stmt.condition, body_block, end_block);
 
     m_break_targets.push_back(end_block);
     m_continue_targets.push_back(condition_block);
@@ -1578,6 +1790,13 @@ std::string dumpIR(const IRModule& module) {
     for (const auto& function : module.functions) {
         output << "function " << function.name << "() -> " << typeName(function.return_type)
                << " {\n";
+        if (function.storage_layout_valid) {
+            output << "  storage.frame " << function.total_local_alloc_size << '\n';
+            for (const auto& local : function.storage_layout)
+                output << "  storage.local #" << local.first.value << " offset=" << local.second.stackOffset << '\n';
+            for (const auto& pool : function.immutable_local_arrays)
+                output << "  storage.immutable #" << pool.first.value << " bytes=" << pool.second.bytes.size() << '\n';
+        }
         for (const auto& block : function.blocks) {
             output << "  " << block.label << " (b" << block.id.value << "):\n";
             for (const auto& instruction : block.instructions) {
