@@ -374,6 +374,26 @@ void metadataCases(Cases& cases) {
     cases.link("alignment-crosses-bank", {aligned}, {"--origin", "0x00fffd"}, "program-bank boundary");
 }
 
+void immutablePoolCases(Cases& cases) {
+    auto pool = entry(); pool.code_section = {0xf0, 0, 0, 0, 1}; pool.data_section = {0x34, 0x12};
+    pool.data_alignment = 2; pool.config.code_start_address = 0x706000;
+    const auto label = std::string(GSUAbi::ImmutablePoolPrefix) + "f.1";
+    pool.symbol_table.push_back({label, SymbolSection::DATA, 0});
+    pool.relocation_table.push_back({label, SymbolSection::CODE, 0, RelocationType::ADDR16_RAM});
+    const auto bytes = cases.link("pool-near-ram", {pool});
+    require(bytes.size() == 8 && bytes[1] == 0x06 && bytes[2] == 0x60,
+        "Private immutable pool did not resolve to its aligned copied RAM payload");
+    cases.link("pool-relink-rom", {pool}, {"--origin", "0x008000"}, "Immutable local-array pool requires");
+    cases.link("pool-wrong-near-bank", {pool}, {"--ram-bank", "1"}, "Immutable local-array pool requires");
+    auto ordinary = pool;
+    ordinary.symbol_table.back().name = std::string(1, '\x01') + "ordinary_data";
+    ordinary.relocation_table[0].target_symbol_name = ordinary.symbol_table.back().name;
+    cases.link("ordinary-data-not-pool", {ordinary}, {}, "RAM relocation must target static RAM");
+    auto wrong_section = pool; wrong_section.symbol_table.back().section = SymbolSection::RAM;
+    wrong_section.ram_section = {1, 0};
+    cases.link("pool-reject-wrong-section", {wrong_section}, {"--host-initialized-globals"}, "Immutable local-array pool requires");
+}
+
 void malformedCases(const std::filesystem::path& root) {
     const auto object = root / "malformed.o", output = root / "malformed.bin";
     const Bytes sentinel{0x95, 0x42}; writeBytes(output, sentinel);
@@ -415,7 +435,7 @@ int main() {
     try {
         TestTempDirectory temporary("linker-tests"); Cases cases(temporary.path());
         relocationCases(cases); runtimeCases(cases); runtimeEncodingCases(); runtimeImageCases(); metadataCases(cases); malformedCases(temporary.path());
-        aggregateBudgetCase(temporary.path());
+        immutablePoolCases(cases); aggregateBudgetCase(temporary.path());
         temporary.cleanup();
         return 0;
     } catch (const std::exception& error) {

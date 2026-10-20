@@ -1,0 +1,8 @@
+// Model fixture: initial SP=$2000, main FP=$1FFC. The numeric store must
+// overwrite table[0], not a dead/repacked slot or an immutable pool copy.
+word main() {
+    word table[4] = {11, 22, 33, 44};
+    word index = *(volatile word*)0x0100 & 3;
+    *(volatile word*)0x1FF4 = 99;
+    return table[index];
+}

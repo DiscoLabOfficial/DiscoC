@@ -3,6 +3,7 @@
 #include "GSUInstructionModel.hpp"
 #include "AssemblyGenerator.hpp"
 #include "Assembler.hpp"
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
@@ -36,7 +37,8 @@ void equivalent(const ObjectFile& before, const ObjectFile& after, bool compare_
             a.graphicsState("--por") == b.graphicsState("--por") &&
             a.graphicsState("--plots") == b.graphicsState("--plots") && a.graphicsState("--rpix") == b.graphicsState("--rpix"),
             "Scheduler changed graphics state/effects");
-    require(a.metrics().taken_branches == b.metrics().taken_branches, "Scheduler changed a branch decision");
+    require(a.metrics().taken_branches + a.metrics().jumps == b.metrics().taken_branches + b.metrics().jumps,
+        "Scheduler changed an executed control transfer");
     if (compare_memory) for (std::uint32_t p = 0x700000; p <= 0x71ffff; ++p)
         require(a.byte(p) == b.byte(p), "Scheduler changed RAM/framebuffer bytes");
     else require(a.metrics().stores == 0 && b.metrics().stores == 0 &&
@@ -117,6 +119,43 @@ void compactBranches() {
     }
 }
 
+void shortJumps() {
+    for (const unsigned gap : {0u, 1u, 126u, 127u, 128u}) {
+        auto o = object({1,0xff,0,0,1});
+        o.code_section.resize(5 + gap, 1);
+        o.symbol_table.push_back({"target", SymbolSection::CODE, static_cast<std::uint32_t>(o.code_section.size())});
+        o.code_section.insert(o.code_section.end(), {0xa0,31,0,1});
+        o.relocation_table.push_back({"target",SymbolSection::CODE,1,RelocationType::ADDR16_IWT});
+        const auto before = o;
+        const bool fits = gap <= 126;
+        const auto stats = GSUMachineScheduler::run(o);
+        require(stats.short_jumps == (fits ? 1u : 0u) && o.code_section.size() == before.code_section.size() - (fits ? 1u : 0u),
+            "Symbol-aware PC jump shortening ignored the exact signed-byte boundary");
+        require(o.relocation_table.size() == (fits ? 0u : 1u), "Shortened jump retained an absolute relocation");
+        equivalent(before,o,false);
+        require(Assembler().assemble(AssemblyGenerator(o).generate()).code_section == o.code_section,
+            "Shortened jump lost byte-exact assembly export");
+    }
+    for (const unsigned at : {127u,128u,129u}) {
+        auto o = object({0,1}); o.code_section.resize(at,1);
+        o.code_section.insert(o.code_section.end(), {0xff,0,0,1});
+        o.symbol_table.push_back({"target",SymbolSection::CODE,2});
+        o.relocation_table.push_back({"target",SymbolSection::CODE,at,RelocationType::ADDR16_IWT});
+        require(GSUMachineScheduler::run(o).short_jumps == (at <= 128 ? 1u : 0u),
+            "Backward PC jump shortening ignored the -128 boundary");
+    }
+    // A call's LINK #4 distance and ALT/source selectors are hard fences.
+    for (const auto& prefix : {std::vector<std::uint8_t>{0x94}, {0x3d}, {0x15}, {0xb5}}) {
+        auto o = object({1}); o.code_section.insert(o.code_section.end(),prefix.begin(),prefix.end());
+        const auto at = static_cast<std::uint32_t>(o.code_section.size());
+        o.code_section.insert(o.code_section.end(), {0xff,0,0,1,0,1});
+        o.symbol_table.push_back({"target",SymbolSection::CODE,at+4});
+        o.relocation_table.push_back({"target",SymbolSection::CODE,at,RelocationType::ADDR16_IWT});
+        require(GSUMachineScheduler::run(o).short_jumps == 0 && o.relocation_table.size() == 1,
+            "PC shortening crossed LINK/ALT/source/destination state");
+    }
+}
+
 void targetPrefixSlots() {
     for (const auto selector : {0x17,0xba}) for (const auto stack : {0x20feu,0x1ffeu}) {
         auto o = object({0xa0,8,0xfa,static_cast<std::uint8_t>(stack),static_cast<std::uint8_t>(stack >> 8),
@@ -153,10 +192,214 @@ void targetPrefixSlots() {
         }
     }
 }
+
+void privatePixelSlots() {
+    const std::string body = "\x01pixel#body";
+    auto original = object({0xfc,3,0,0xfd,0,0,1,0x4c,0x3c,1,0x3d,0x4c,0,1});
+    original.symbol_table.push_back({body,SymbolSection::CODE,7});
+    original.relocation_table.push_back({body,SymbolSection::CODE,3,RelocationType::ADDR16_IWT});
+    for (const unsigned count : {0u,1u,2u,65535u}) {
+        auto before = original;
+        before.code_section[1] = static_cast<std::uint8_t>(count);
+        before.code_section[2] = static_cast<std::uint8_t>(count >> 8);
+        auto after = before;
+        const auto statistics = GSUMachineScheduler::run(after);
+        require(statistics.private_pixel_loops == 1 && statistics.delay_slots == 1 &&
+            after.code_section.size() + 1 == before.code_section.size() &&
+            after.code_section[7] == 0x3c && after.code_section[8] == 0x4c && after.symbol_table[0].offset == 7,
+            "Private pixel entry did not retain its anchor on LOOP / useful PLOT slot");
+        equivalent(before, after);
+        DiscoGSU::Machine executed(linked(after), 0x008000); executed.run();
+        require(executed.graphicsState("--plots") == (count ? count : 65536u) && executed.reg(12) == 0 && executed.reg(1) == count,
+            "Private pixel slot changed first/final iteration or raw zero wrap");
+        require(Assembler().assemble(AssemblyGenerator(after).generate()).code_section == after.code_section,
+            "Private LOOP/PLOT assembly round trip changed bytes");
+        const auto saved = after;
+        require(GSUMachineScheduler::run(after).private_pixel_loops == 0 && after.code_section == saved.code_section,
+            "Private pixel scheduling was not idempotent");
+    }
+    for (unsigned fence = 0; fence < 8; ++fence) {
+        auto unsafe = original;
+        if (fence == 0) unsafe.symbol_table.push_back({"public_pixel",SymbolSection::CODE,7});
+        if (fence == 1) unsafe.symbol_table.push_back({"\x01loop_entry",SymbolSection::CODE,8});
+        if (fence == 2) unsafe.symbol_table.push_back({"\x01slot_entry",SymbolSection::CODE,9});
+        if (fence == 3) unsafe.relocation_table[0].type = RelocationType::ADDR16_JAL;
+        if (fence == 4) unsafe.code_section[6] = 0x3d;
+        if (fence == 5) unsafe.code_section.insert(unsafe.code_section.end(), {5,0xf7,1});
+        if (fence == 6) {
+            unsafe.code_section.insert(unsafe.code_section.begin() + 3, 0x3d);
+            unsafe.symbol_table[0].offset = 8; unsafe.relocation_table[0].patch_offset = 4;
+        }
+        if (fence == 7) {
+            unsafe.code_section.insert(unsafe.code_section.begin() + 6, 0x9b);
+            unsafe.symbol_table[0].offset = 8;
+        }
+        const auto saved = unsafe;
+        require(GSUMachineScheduler::run(unsafe).private_pixel_loops == 0 && unsafe.code_section == saved.code_section,
+            "Private pixel slot crossed an external/secondary entry, LINK/ALT state or non-R13 relocation");
+    }
 }
+}
+void pipelinePlan() {
+    auto split = object({0x01, 0x05, 0x02, 0x01, 0x00, 0xa5, 0x09, 0x00, 0x01});
+    const auto split_before = split;
+    require(GSUMachineScheduler::run(split).immediate_slots == 1 && split.code_section.size() == 8 &&
+            split.code_section[3] == 0xa5 && split.code_section[5] == 0x09,
+            "Unconditional BRA did not leave only the IBT opcode in its delay slot");
+    equivalent(split_before, split, false);
+    DiscoGSU::Machine split_machine(linked(split), 0x008000); split_machine.run();
+    require(split_machine.reg(5) == 9, "Split IBT did not write its immediate");
+
+    auto adjacent = object({0x01, 0x05, 0x01, 0x01, 0xa5, 0x09, 0x00, 0x01});
+    const auto adjacent_before = adjacent;
+    require(GSUMachineScheduler::run(adjacent).immediate_slots == 1 && adjacent.code_section[3] == 0xa5 &&
+            adjacent.code_section[4] == 0x09, "Adjacent IBT was not split across BRA's delay slot");
+    equivalent(adjacent_before, adjacent, false);
+
+    auto fallthrough = object({0x01, 0x05, 0x02, 0x01, 0x01, 0xa5, 0x09, 0x00, 0x01});
+    const auto fallthrough_before = fallthrough;
+    require(GSUMachineScheduler::run(fallthrough).immediate_slots == 0 &&
+            fallthrough.code_section == fallthrough_before.code_section,
+            "A fall-through immediate was split into a delay slot");
+    auto conditional = object({0x01, 0x09, 0x02, 0x01, 0x00, 0xa5, 0x09, 0x00, 0x01});
+    const auto conditional_before = conditional;
+    require(GSUMachineScheduler::run(conditional).immediate_slots == 0 &&
+            conditional.code_section == conditional_before.code_section,
+            "A conditional branch split an immediate that both paths execute");
+
+    auto entry = object({0x01, 0x05, 0x02, 0x01, 0x00, 0xd5, 0x05, 0x01, 0x01, 0x00, 0x01});
+    entry.symbol_table.push_back({"\x01head", SymbolSection::CODE, 5});
+    const auto entry_before = entry;
+    const auto entry_stats = GSUMachineScheduler::run(entry);
+    require(entry_stats.entry_slots == 1 && entry.code_section.size() == 10 && entry.code_section[7] == 0xd5,
+            "An INC entry immediately before BRA did not become that BRA's delay slot");
+    equivalent(entry_before, entry, false);
+    DiscoGSU::Machine entry_machine(linked(entry), 0x008000); entry_machine.run();
+    require(entry_machine.reg(5) == 1, "Retargeted INC entry did not run once");
+
+    auto nested = object({0x02});
+    nested.code_section.insert(nested.code_section.end(), 2, 0x01);
+    nested.code_section.insert(nested.code_section.end(), {0x02, 0x00, 0x01});
+    nested.symbol_table.push_back({GSUCodeLayout::CacheAlignmentSymbol, SymbolSection::CODE, 0});
+    const auto nested_before = nested;
+    require(GSUMachineScheduler::run(nested).nested_caches == 1, "Proven same-CBR/clear-selector CACHE was kept");
+    require(std::count(nested.code_section.begin(), nested.code_section.end(), 0x02) == 1,
+            "Nested CACHE opcode remained in the window");
+    equivalent(nested_before, nested, false);
+
+    auto spaced = object({0x02});
+    spaced.code_section.insert(spaced.code_section.end(), 520, 0x01);
+    spaced.code_section.insert(spaced.code_section.end(), {0x02, 0x00, 0x01});
+    require(GSUMachineScheduler::run(spaced).nested_caches == 0 &&
+            std::count(spaced.code_section.begin(), spaced.code_section.end(), 0x02) == 2,
+            "A CACHE outside the previous 512-byte window was removed");
+
+    auto function_entry = nested_before;
+    function_entry.symbol_table.push_back({"inner", SymbolSection::CODE, 3});
+    require(GSUMachineScheduler::run(function_entry).nested_caches == 0 &&
+            std::count(function_entry.code_section.begin(), function_entry.code_section.end(), 0x02) == 2,
+            "A public entry CACHE inside another window was removed");
+}
+void nestedCacheDelaySlots() {
+    for (const auto branch : {std::uint8_t{5}, std::uint8_t{9}}) for (const auto input : {0u, 1u}) {
+        auto o = object({2,0xf0,static_cast<std::uint8_t>(input),0,0xa3,0,0xb0,0x3f,0x63,
+            branch,5,2,0xa5,0x44,0,1,0xa0,42,0,1});
+        const auto before = o;
+        const auto stats = GSUMachineScheduler::run(o);
+        require(stats.nested_caches == 0 && o.code_section.size() == before.code_section.size(),
+            "Unproven effective-PC CACHE delay slot was changed");
+        require(o.code_section[11] == 2, "Branch CACHE delay slot lost its CBR effect or one-byte pipeline boundary");
+        equivalent(before, o, false);
+        DiscoGSU::Machine machine(linked(o),0x008000); machine.run();
+        const bool taken = branch == 5 || input == 0;
+        require(machine.reg(0) == (taken ? 42 : input) && machine.reg(5) == (taken ? 0 : 0x44),
+            "CACHE removal split a following immediate on a taken/untaken branch");
+    }
+    for (const auto trips : {1u, 2u, 7u}) {
+        auto o = object({2,0xac,static_cast<std::uint8_t>(trips),0xfd,0,0,0xd5,0x3c,2,0xa0,42,0,1});
+        o.symbol_table.push_back({"\x01loop-cache-slot",SymbolSection::CODE,6});
+        o.relocation_table.push_back({"\x01loop-cache-slot",SymbolSection::CODE,3,RelocationType::ADDR16_IWT});
+        const auto before = o;
+        require(GSUMachineScheduler::run(o).nested_caches == 0 && o.code_section[8] == 2,
+            "LOOP's effective-PC CACHE lost its CBR effect or required delay-slot byte");
+        equivalent(before, o, false);
+        DiscoGSU::Machine machine(linked(o),0x008000); machine.run();
+        require(machine.reg(5) == trips && machine.reg(0) == 42,
+            "CACHE removal changed LOOP's taken/final iteration pipeline");
+    }
+    auto transfers = object({2,5,3,2,5,2,1,1,0,1});
+    const auto before = transfers;
+    GSUMachineScheduler::run(transfers); equivalent(before, transfers, false);
+}
+
+void cacheProvenance() {
+    // IBT's opcode moves into BRA's slot, but its #02 operand remains at the
+    // target. Numeric equality with CACHE must not turn that operand into code.
+    auto immediate = object({2,5,2,1,0,0xa5,2,0,1});
+    immediate.symbol_table.push_back({GSUCodeLayout::CacheAlignmentSymbol, SymbolSection::CODE, 0});
+    const auto immediate_before = immediate;
+    const auto split = GSUMachineScheduler::run(immediate);
+    require(split.immediate_slots == 1 && split.nested_caches == 0 && immediate.code_section[5] == 2,
+        "CACHE elimination interpreted a split immediate #02 operand as executable code");
+    equivalent(immediate_before, immediate, false);
+    DiscoGSU::Machine immediate_machine(linked(immediate), 0x008000); immediate_machine.run();
+    require(immediate_machine.reg(5) == 2, "Split immediate #02 lost its literal value");
+
+    for (const bool aligned : {false, true}) {
+        auto window = object({2}); window.code_section.insert(window.code_section.end(), 20, 1);
+        window.code_section.insert(window.code_section.end(), {2,0,1});
+        if (aligned) window.symbol_table.push_back({GSUCodeLayout::CacheAlignmentSymbol, SymbolSection::CODE, 0});
+        const auto before = window;
+        require(GSUMachineScheduler::run(window).nested_caches == 0 && window.code_section == before.code_section,
+            "Different-CBR CACHE was removed merely because its PC was inside the old 512-byte window");
+        DiscoGSU::Machine a(linked(before), 0x008000), b(linked(window), 0x008000); a.run(); b.run();
+        require(a.cacheBase() == b.cacheBase() && a.cacheRequests() == b.cacheRequests(),
+            "CACHE scheduling changed the final effective CBR/window");
+    }
+    auto selectors = object({0xa5,9,2,0x25,2,0x17,0,1});
+    selectors.symbol_table.push_back({GSUCodeLayout::CacheAlignmentSymbol, SymbolSection::CODE, 0});
+    const auto selectors_before = selectors;
+    require(GSUMachineScheduler::run(selectors).nested_caches == 0 && selectors.code_section == selectors_before.code_section,
+        "CACHE selector reset was removed between WITH and TO");
+    equivalent(selectors_before, selectors, false);
+    for (const auto& bytes : {std::vector<std::uint8_t>{2,0xa0,1,0xa5,7,0xb5,2,0x50,0,1},
+            std::vector<std::uint8_t>{2,0xa0,1,0x3e,2,0x50,0,1}}) {
+        auto active = object(bytes);
+        active.symbol_table.push_back({GSUCodeLayout::CacheAlignmentSymbol, SymbolSection::CODE, 0});
+        const auto before = active;
+        require(GSUMachineScheduler::run(active).nested_caches == 0 && active.code_section == before.code_section,
+            "Same-CBR CACHE lost its active FROM/ALT selector reset");
+        equivalent(before, active, false);
+        DiscoGSU::Machine machine(linked(active), 0x008000); machine.run();
+        require(machine.reg(0) == 2, "CACHE did not clear an active FROM/ALT before ADD R0");
+    }
+
+    for (const bool public_entry : {false, true}) {
+        auto entry = object({2,1,1,1,2,0,1});
+        entry.symbol_table.push_back({GSUCodeLayout::CacheAlignmentSymbol, SymbolSection::CODE, 0});
+        entry.symbol_table.push_back({public_entry ? "main" : "\x01private-entry", SymbolSection::CODE, 3});
+        const auto before = entry;
+        require(GSUMachineScheduler::run(entry).nested_caches == 0 && entry.code_section == before.code_section,
+            "CACHE proof crossed a public/private entry that can bypass its predecessor CACHE");
+        DiscoGSU::Machine from_entry(std::vector<std::uint8_t>(entry.code_section.begin() + 3, entry.code_section.end()), 0x008003);
+        from_entry.run(); require(from_entry.cacheRequests() == 1, "Independent entry lost its only executed CACHE");
+    }
+    auto call = object({2,0x94,0xff,0,0,1,2,0,1});
+    call.code_section.resize(520, 1);
+    call.symbol_table.push_back({GSUCodeLayout::CacheAlignmentSymbol, SymbolSection::CODE, 0});
+    call.symbol_table.push_back({"\x01" "callee", SymbolSection::CODE, 520});
+    call.relocation_table.push_back({"\x01" "callee", SymbolSection::CODE, 2, RelocationType::ADDR16_IWT});
+    call.code_section.insert(call.code_section.end(), {2,0x9b,1});
+    const auto call_before = call;
+    require(GSUMachineScheduler::run(call).nested_caches == 0, "CACHE proof crossed a call that can change CBR");
+    equivalent(call_before, call, false);
+    DiscoGSU::Machine caller(linked(call), 0x008000); caller.run();
+    require(caller.cacheRequests() == 3 && caller.cacheBase() == 0x8000, "Call continuation did not restore its CACHE window");
+}
+
 int main() {
     try {
-        conditionSlots(); targetPrefixSlots(); compactBranches();
+        conditionSlots(); targetPrefixSlots(); compactBranches(); shortJumps(); privatePixelSlots(); pipelinePlan(); nestedCacheDelaySlots(); cacheProvenance();
         auto bra = object({0xf0,0,0,0xd0,5,2,1,1,0,1}); auto before = bra;
         require(GSUMachineScheduler::run(bra).delay_slots == 1 && bra.code_section.size() == 9,
                 "Safe one-byte BRA delay slot was not filled"); equivalent(before, bra);
@@ -169,7 +412,8 @@ int main() {
         auto guard = object({0xfa,0,0x20,0xea,0x0c,5,1,0xff,0,0,1,0,1});
         guard.symbol_table.push_back({"exit",SymbolSection::CODE,11});
         guard.relocation_table.push_back({"exit",SymbolSection::CODE,7,RelocationType::ADDR16_IWT}); before = guard;
-        require(GSUMachineScheduler::run(guard).delay_slots == 1 && guard.code_section[6] == 0xff,
+        const auto guard_stats = GSUMachineScheduler::run(guard);
+        require(guard_stats.delay_slots == 1 && guard_stats.short_jumps == 1 && guard.code_section[6] == 5,
                 "A filled conditional slot was moved again into the following jump's slot"); equivalent(before, guard);
         for (auto opcode : {8,9,10,11,6,7}) {
             auto unsafe = object({0xf0,0,0,0xd0,static_cast<std::uint8_t>(opcode),2,1,1,0,1}); before = unsafe;

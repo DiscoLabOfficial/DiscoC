@@ -42,6 +42,15 @@ public:
         return {literalBytes(static_cast<std::uint16_t>(displacement)) + (far ? 13u : 4u), far ? 4u : 2u};
     }
     static GSUCost preserveCall() { return {8, 4}; } // checked pushes/guard costs may add more.
+    static std::uint64_t scalarCallBytes(std::size_t arguments) {
+        // Real canonical LINK/IWT/NOP, scalar STW/DEC/DEC arguments and
+        // caller cleanup. Guards, materialization and live saves can only add
+        // bytes, so this is a conservative emitted call-site lower bound.
+        const auto area = GSUCost::saturatedMultiply(arguments, 2);
+        const auto cleanup = area == 0 ? 0u : area <= 15 ? 3u :
+            literalBytes(static_cast<std::uint16_t>(std::min<std::uint64_t>(65535, area))) + 2u;
+        return GSUCost::saturatedAdd(5u + cleanup, GSUCost::saturatedMultiply(arguments, 3));
+    }
     static bool scalar(const Type& type) {
         return !type.pointer_level && !type.array_size &&
             (type.base == BaseType::WORD || type.base == BaseType::BYTE || type.base == BaseType::BOOL);
@@ -78,8 +87,15 @@ public:
                     if (dest && !dest->rematerializable) result.add(dest->has_register ? copy() : spillStore(displacement(*dest), isFarPointer(i.type)), edge_weight);
                 }
             } else {
-                for (const auto v : i.operands) result.add(read(v), weight);
-                if (dest && !dest->rematerializable) result.add(dest->has_register ? copy() : spillStore(displacement(*dest), isFarPointer(i.type)), weight);
+                const bool tied = dest && dest->has_register && !i.operands.empty() &&
+                    sameLocation(i.result, i.operands.front()) &&
+                    ((i.opcode == IROpcode::Unary && (i.operation == "~" || i.operation == "!" || i.operation == "-")) ||
+                     (i.opcode == IROpcode::Binary && (i.operation == "+" || i.operation == "-" ||
+                      i.operation == "&" || i.operation == "|" || i.operation == "^")));
+                for (std::size_t n = 0; n < i.operands.size(); ++n)
+                    if (!tied || n) result.add(read(i.operands[n]), weight);
+                if (dest && !dest->rematerializable && !tied)
+                    result.add(dest->has_register ? copy() : spillStore(displacement(*dest), isFarPointer(i.type)), weight);
                 if (i.opcode == IROpcode::Call) for (const auto& entry : allocator.locations())
                     if (entry.second.has_register && allocator.liveAcrossCall(IRValueId{entry.first}, position)) result.add(preserveCall(), weight);
             }

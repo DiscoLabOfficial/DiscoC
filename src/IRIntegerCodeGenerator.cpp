@@ -49,6 +49,7 @@ bool IRCodeGenerator::emitAllocatedOperation(const IRInstruction& instruction, s
         const auto& pointer = producer(id, instruction.source).type;
         const auto* address = m_register_allocator.find(id);
         if (pointer.space == AddressSpace::RAM && !isFarPointer(pointer) && address && address->has_register &&
+            address->physical_register <= 11 &&
             provenAddress(id, pointer, instruction.type.sizeInBytes)) {
             m_spill_cache.clobber(destination);
             emitByte(static_cast<std::uint8_t>(0x10 | destination));
@@ -56,6 +57,32 @@ bool IRCodeGenerator::emitAllocatedOperation(const IRInstruction& instruction, s
             emitByte(static_cast<std::uint8_t>(0x40 | address->physical_register));
             m_last_ram_word_address = usesByteStorage(instruction.type) ? IRValueId{} : id;
             return true;
+        }
+    }
+    if (globallyOptimized() && instruction.opcode == IROpcode::PointerOffset && instruction.operands.size() == 2 &&
+        (instruction.operation == "+" || instruction.operation == "-") && !isFarPointer(instruction.type) &&
+        m_address_proof.provesOffset(instruction)) {
+        const auto* base = m_register_allocator.find(instruction.operands[0]);
+        std::int64_t index = 0;
+        if (base && base->has_register && base->physical_register <= 11 && constantValue(instruction.operands[1], index)) {
+            auto displacement = index * static_cast<std::int64_t>(instruction.immediate);
+            if (instruction.operation == "-") displacement = -displacement;
+            if (displacement != 0 && displacement >= -15 && displacement <= 15) {
+                m_spill_cache.clobber(destination);
+                if (base->physical_register == destination && (displacement == 1 || displacement == -1)) {
+                    emitByte(static_cast<std::uint8_t>((displacement == 1 ? 0xd0 : 0xe0) | destination));
+                    return true;
+                }
+                if (base->physical_register == destination) emitByte(static_cast<std::uint8_t>(0x20 | destination));
+                else {
+                    emitByte(static_cast<std::uint8_t>(0x10 | destination));
+                    emitByte(static_cast<std::uint8_t>(0xb0 | base->physical_register));
+                }
+                const auto magnitude = static_cast<unsigned>(displacement < 0 ? -displacement : displacement);
+                emitByte(0x3e);
+                emitByte(static_cast<std::uint8_t>((displacement < 0 ? 0x60 : 0x50) | magnitude));
+                return true;
+            }
         }
     }
     const auto& op = instruction.operation;
@@ -69,7 +96,13 @@ bool IRCodeGenerator::emitAllocatedOperation(const IRInstruction& instruction, s
     const bool constant = binary ? constantValue(instruction.operands[1], literal) : op == "!";
     if (unary && op == "!") literal = 1;
     const auto* right = binary && !constant ? m_register_allocator.find(instruction.operands[1]) : nullptr;
-    if (binary && !constant && (!right || !right->has_register || (!globallyOptimized() && !m_materialized_values.count(instruction.operands[1].value)))) return false;
+    const bool frame_right = globallyOptimized() && binary && !constant && (op == "+" || op == "-") &&
+        instruction.type.base == BaseType::WORD && instruction.type.sizeInBytes == 2 && instruction.type.pointer_level == 0 &&
+        usesRegisterAllocation(instruction.operands[0]) && m_spill_offsets.count(instruction.operands[1].value) &&
+        producer(instruction.operands[1], instruction.source).type.base == BaseType::WORD &&
+        producer(instruction.operands[1], instruction.source).type.pointer_level == 0;
+    if (binary && !constant && !frame_right && (!right || !right->has_register ||
+        (!globallyOptimized() && !m_materialized_values.count(instruction.operands[1].value)))) return false;
     const bool immediate = constant && literal >= 0 && literal <= 15 &&
         ((op != "&" && op != "|" && op != "^") || literal != 0);
     if (constant && literal == 1 && source->physical_register == destination &&
@@ -86,6 +119,13 @@ bool IRCodeGenerator::emitAllocatedOperation(const IRInstruction& instruction, s
     // destination saves no moves and can force an extra Rn -> R0 reload.
     if ((constant || unary) && m_accumulator_value.value == instruction.operands[0].value) return false;
     if (constant && !immediate) emitRegisterLiteral(scratchRegister(), static_cast<std::uint16_t>(literal));
+    // The RHS has already been evaluated into its authoritative frame home.
+    // Load it before selecting the destination, as on the fallback path;
+    // the live LHS and result registers cannot be borrowed by the spill cache.
+    // ADD/SUB accept R0, unlike the bitwise register forms. A word result
+    // needs no narrowing, and the caller records only the allocated result,
+    // never an R0 snapshot of it (R0 still holds the RHS).
+    if (frame_right) materialize(instruction.operands[1]);
     m_spill_cache.clobber(destination);
     if (source->physical_register == destination) emitByte(static_cast<std::uint8_t>(0x20 | destination));
     else { emitByte(static_cast<std::uint8_t>(0x10 | destination)); emitByte(static_cast<std::uint8_t>(0xb0 | source->physical_register)); }
@@ -97,7 +137,9 @@ bool IRCodeGenerator::emitAllocatedOperation(const IRInstruction& instruction, s
             if (!instruction.type.is_unsigned) { emitByte(static_cast<std::uint8_t>(0x20 | destination)); emitByte(0x95); }
         }
     } else {
-        const auto operand = static_cast<std::uint8_t>(constant ? immediate ? literal : scratchRegister() : right->physical_register);
+        std::uint8_t operand = 0;
+        if (constant) operand = static_cast<std::uint8_t>(immediate ? literal : scratchRegister());
+        else if (!frame_right) operand = right->physical_register;
         if (op == "^" || (unary && op == "!")) emitByte(immediate ? 0x3f : 0x3d);
         else if (immediate) emitByte(0x3e);
         const auto base = static_cast<std::uint8_t>(op == "+" ? 0x50 : op == "-" ? 0x60 : op == "&" ? 0x70 : 0xc0);
@@ -223,9 +265,15 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
     // Fixed sixteen-step restoring division. R1 carries dividend/quotient,
     // R2 the remainder, R3 the divisor, R4 the count. R12/R13 are untouched
     // so this is safe inside hardware loops. Preserve plotting coordinates.
-    emitMove(Register::R4_LMULT_LO, scratch); // Stack guards use R3; retain the divisor across pushes.
-    if (m_isInPlottingContext) { emitPush(1); emitPush(2); }
-    emitMove(Register::R3, 4);
+    if (sizeOptimized() && !m_isInPlottingContext) {
+        // No coordinate pushes can clobber R3 here. Copy the divisor before
+        // R1 becomes the dividend; signed sign pushes save R3 into R4 below.
+        emitMove(Register::R3, scratch);
+    } else {
+        emitMove(Register::R4_LMULT_LO, scratch); // Stack guards use R3; retain the divisor across pushes.
+        if (m_isInPlottingContext) { emitPush(1); emitPush(2); }
+        emitMove(Register::R3, 4);
+    }
     emitMove(Register::R1_PIXEL_X, 0);
     emitRegisterLiteral(6, 0);
     emitByte(0xb3); emitByte(0x3f); emitByte(0x66);
@@ -256,15 +304,13 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
     emitRegisterLiteral(4, 16);
     const auto loop = localLabel(), subtract = localLabel(), keep = localLabel();
     // Sixteen iterations amortize the cold fetch of this bounded kernel.
-    // Os can replace the guard's selector-reset NOP with CACHE without adding
+    // Global policies can replace the guard's selector-reset NOP with CACHE without adding
     // bytes. Its prefetched PC is the taken success target, and this bounded
     // kernel follows it within one cache window. Explicit cache ownership
     // still wins; calls have no cache-base preservation ABI. The backedge
     // skips CACHE itself.
-    if (sizeOptimized() && !m_manual_cache)
+    if (globallyOptimized() && !m_manual_cache)
         m_object_file.code_section.at(division_guard_slot) = static_cast<std::uint8_t>(OpCode::CACHE);
-    if (globallyOptimized() && !sizeOptimized() && !m_manual_cache)
-        emitByte(static_cast<std::uint8_t>(OpCode::CACHE));
     bindLabel(loop);
     emitByte(0xb1); emitByte(0x11); emitByte(0x51); // Shift quotient/input into carry.
     emitByte(0xb2); emitByte(0x12); emitByte(0x3d); emitByte(0x52); // ADC R2.

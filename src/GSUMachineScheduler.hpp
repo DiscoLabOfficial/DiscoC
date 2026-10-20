@@ -12,6 +12,11 @@ public:
         unsigned rom_operations = 0;
         unsigned cache_padding = 0;
         unsigned compact_branches = 0;
+        unsigned short_jumps = 0;
+        unsigned private_pixel_loops = 0;
+        unsigned entry_slots = 0;
+        unsigned immediate_slots = 0;
+        unsigned nested_caches = 0;
     };
     static Statistics run(ObjectFile& object);
 };

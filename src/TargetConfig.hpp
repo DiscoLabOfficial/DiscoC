@@ -56,6 +56,8 @@ struct CompilerConfig {
     std::uint32_t code_start_address = 0x8000;
     bool optimize_loop_setup = false;
     OptimizationLevel optimization = OptimizationLevel::Baseline;
+    // Invocation-only allocation constraint, not serialized placement/ABI metadata.
+    bool require_no_spills = false;
     bool warn_on_cache_overflow = true;
     BitmapConfig bitmap;
 };

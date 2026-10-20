@@ -3,6 +3,7 @@
 #include "ABI.hpp"
 #include "Opcodes.hpp"
 #include "GSUCostModel.hpp"
+#include "ConstantEvaluator.hpp"
 
 void IRCodeGenerator::emitPointerValueCheck(const Type& type, int width) {
     const auto validate = localLabel(), done = localLabel();
@@ -13,7 +14,10 @@ void IRCodeGenerator::emitPointerValueCheck(const Type& type, int width) {
         emitLocalJump(validate, 8);
     }
     emitLocalJump(done); // Null is a storable/comparable value, not an address.
-    bindLabel(validate); emitAddressCheck(type, width); bindLabel(done);
+    bindLabel(validate);
+    emitAddressCheck(type, width, globallyOptimized() && !isFarPointer(type)
+        ? AddressComponents::NonNull : AddressComponents::Unknown);
+    bindLabel(done);
 }
 
 bool IRCodeGenerator::needsPointerSpill(const IRInstruction& instruction) const {
@@ -113,6 +117,8 @@ std::string IRCodeGenerator::localLabel() {
 void IRCodeGenerator::bindLabel(const std::string& name) {
     m_spill_cache.clear();
     m_accumulator_value = IRValueId{};
+    m_last_ram_word_address = IRValueId{};
+    // Alternative local paths must not accumulate each other's stack pops.
     m_stack_check_credit.reset();
     m_object_file.symbol_table.push_back({name, SymbolSection::CODE,
         static_cast<std::uint32_t>(m_object_file.code_section.size())});
@@ -138,14 +144,16 @@ void IRCodeGenerator::emitLocalJump(const std::string& name, std::uint8_t condit
     emitByte(1);
 }
 
-void IRCodeGenerator::emitAddressCheck(const Type& pointer, int width) {
+void IRCodeGenerator::emitAddressCheck(const Type& pointer, int width, AddressComponents known) {
     // R0 is the offset, R4 the bank for a far value. Checks leave both intact.
     // No bank is switched until every check succeeds, so failures cannot send
     // a subsequent stack access into the foreign data bank.
-    if (!isFarPointer(pointer)) { emitCompare(Register::R0, 0); emitGuard(OpCode::BNE, 2); }
+    const bool nonnull = known == AddressComponents::NonNull || known == AddressComponents::NonNullAligned;
+    const bool aligned = known == AddressComponents::Aligned || known == AddressComponents::NonNullAligned;
+    if (!isFarPointer(pointer) && !nonnull) { emitCompare(Register::R0, 0); emitGuard(OpCode::BNE, 2); }
     if (width > 1) {
         const auto alignment = storageAlignment(pointeeType(pointer));
-        if (alignment > 1) {
+        if (alignment > 1 && !aligned) {
         // Verified type layouts have a power-of-two alignment <= 128.
         emitRegisterLiteral(3, static_cast<std::uint16_t>(alignment - 1)); emitByte(0xb0); emitByte(0x13); emitByte(0x73); // R3 = R0 & (alignment - 1)
         emitGuard(OpCode::BEQ, 1);
@@ -170,12 +178,23 @@ void IRCodeGenerator::emitAddressCheck(const Type& pointer, int width) {
 
 void IRCodeGenerator::emitWordSpillStore(IRValueId value, std::uint8_t source) {
     const auto cached = m_accumulator_value;
+    const auto offset = m_spill_offsets.at(value.value);
+    if (globallyOptimized() && m_last_ram_word_address.has_frame &&
+        m_last_ram_word_address.frame_offset == offset) {
+        // Slot identity is physical, not SSA identity: noninterfering values
+        // may reuse one frame word. All bank/stack/CFG fences clear this latch.
+        if (source) emitByte(static_cast<std::uint8_t>(0x20 | source));
+        emitByte(0x90);
+        m_accumulator_value = cached;
+        return;
+    }
     m_last_ram_word_address = IRValueId{};
     // Explicitly target R3: neither R0 nor the allocated source is changed.
     // In particular R6 remains available for a parallel-copy cycle.
     emitRegisterLiteral(3, static_cast<std::uint16_t>(m_spill_offsets.at(value.value)));
     emitByte(0xb9); emitByte(0x13); emitByte(0x53);
     emitStore(Register::R3, source, false);
+    if (globallyOptimized()) m_last_ram_word_address.rememberFrame(offset);
     if (globallyOptimized()) m_accumulator_value = cached;
 }
 
@@ -191,11 +210,11 @@ void IRCodeGenerator::ensureAddressChecked(IRValueId value, int width) {
 
 void IRCodeGenerator::emitSpill(IRValueId value, bool load) {
     const auto cached = m_accumulator_value;
-    m_last_ram_word_address = IRValueId{};
     const auto& type = producer(value, Token(TokenType::UNKNOWN, "", 0, 0)).type;
     // Preserve the baseline and far-pair encodings, whose bank word also
     // participates in address selection. Optimized word stores keep R0.
     if (!load && optimized() && !isFarPointer(type)) { emitWordSpillStore(value, 0); return; }
+    m_last_ram_word_address = IRValueId{};
     if (!load) emitMove(Register::R6_LMULT_HI, 0);
     emitRegisterLiteral(3, static_cast<std::uint16_t>(m_spill_offsets.at(value.value)));
     emitByte(0xb9); emitByte(0x13); emitByte(0x53); // R3 = FP + signed frame displacement.
@@ -204,7 +223,11 @@ void IRCodeGenerator::emitSpill(IRValueId value, bool load) {
         else emitStore(Register::R3, 4, false);
         emitByte(0xd3); emitByte(0xd3);
     }
-    if (load) emitByte(0x43); // offset/scalar -> R0
+    if (load) {
+        emitByte(0x43); // offset/scalar -> R0
+        if (globallyOptimized() && !isFarPointer(type))
+            m_last_ram_word_address.rememberFrame(m_spill_offsets.at(value.value));
+    }
     else {
         emitStore(Register::R3, 6, false);
         emitMove(Register::R0, 6);
@@ -229,17 +252,79 @@ void IRCodeGenerator::retainSpillCopy(IRValueId value, bool after_load) {
     m_spill_cache.record(static_cast<std::uint8_t>(reg), value);
 }
 
+bool IRCodeGenerator::emitConstantPointerOffset(const IRInstruction& instruction) {
+    if (!optimized() || instruction.operands.size() != 2 ||
+        (instruction.operation != "+" && instruction.operation != "-")) return false;
+    const auto& pointer = producer(instruction.operands[0], instruction.source).type;
+    if (isFarPointer(pointer)) return false; // Far byte stepping has canonical bank-window transitions.
+    std::int64_t index = 0;
+    if (!constantValue(instruction.operands[1], index)) return false;
+    index = ConstantEvaluator::convert(index, producer(instruction.operands[1], instruction.source).type);
+    const auto stride = instruction.immediate;
+    auto displacement = index * stride; // Verified scalar/stride bounds fit int64_t.
+    if (instruction.operation == "-") displacement = -displacement;
+    materialize(instruction.operands[0]);
+    ensureAddressChecked(instruction.operands[0], static_cast<int>(stride));
+    // Base representation errors must still precede an offset overflow.
+    if (displacement < -65535 || displacement > 65535) { emitAddressFault(3); return true; }
+    if (!displacement) return true;
+    const bool proved = globallyOptimized() && m_address_proof.provesOffset(instruction);
+    const bool subtract = displacement < 0;
+    const auto magnitude = static_cast<std::uint16_t>(subtract ? -displacement : displacement);
+    if (magnitude <= 15) {
+        emitByte(0x3e); emitByte(static_cast<std::uint8_t>((subtract ? 0x60 : 0x50) | magnitude));
+    } else {
+        emitRegisterLiteral(3, magnitude); emitByte(subtract ? 0x63 : 0x53);
+    }
+    if (proved) return true;
+    emitGuard(subtract ? OpCode::BCS : OpCode::BCC, 3);
+    if (pointer.space == AddressSpace::ROM && subtract) {
+        const auto full = localLabel();
+        emitNearBank(4, AddressSpace::ROM); emitCompare(Register::R4_LMULT_LO, 0x40); emitLocalJump(full, 13);
+        emitCompare(Register::R0, 0x8000); emitGuard(OpCode::BCS, 3); bindLabel(full);
+    }
+    auto known = AddressComponents::Unknown;
+    if (globallyOptimized() && pointer.space == AddressSpace::RAM &&
+        magnitude % storageAlignment(pointeeType(pointer)) == 0) {
+        // The base has just been checked. An aligned displacement preserves
+        // its alignment; positive addition without carry cannot produce null.
+        // Subtraction may land exactly at zero, so its null guard remains.
+        known = subtract ? AddressComponents::Aligned : AddressComponents::NonNullAligned;
+    }
+    emitAddressCheck(pointer, static_cast<int>(stride), known);
+    if (globallyOptimized() && pointer.space == AddressSpace::RAM && m_checked_addresses.size() < 1024)
+        m_checked_addresses[instruction.result.value] = static_cast<int>(stride);
+    return true;
+}
+
 void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
+    if (emitConstantPointerOffset(instruction)) return;
     const auto& pointer = producer(instruction.operands[0], instruction.source).type;
     const auto& index_type = producer(instruction.operands[1], instruction.source).type;
     const auto stride = static_cast<std::uint16_t>(instruction.immediate);
-    materialize(instruction.operands[1]);
-    if (index_type.sizeInBytes == 1 && !index_type.is_unsigned) emitByte(0x95);
-    emitMove(Register::R6_LMULT_HI, 0); // Signed displacement/count, retained across pointer materialization.
+    const auto index = instruction.operands[1];
+    const auto* index_home = m_register_allocator.find(index);
+    const bool direct_index = sizeOptimized() && instruction.operands.size() == 2 &&
+        pointer.space == AddressSpace::RAM && !isFarPointer(pointer) &&
+        index_type.base == BaseType::WORD && index_type.sizeInBytes == 2 &&
+        index_type.pointer_level == 0 && index_type.array_size == 0 &&
+        index.value != m_emitting_value.value && !m_ephemeral_values.count(index.value) &&
+        regionalRegister(index) < 0 && usesRegisterAllocation(index) && index_home &&
+        !index_home->rematerializable && !index_home->boundary_spill && m_address_proof.provesOffset(instruction);
+    if (direct_index) {
+        // The allocated word is authoritative, with no byte normalization,
+        // regional/frame home or deferred definition to materialize first.
+        // R6 survives the unchanged base materialization and address checks.
+        emitMove(Register::R6_LMULT_HI, index_home->physical_register);
+    } else {
+        materialize(index);
+        if (index_type.sizeInBytes == 1 && !index_type.is_unsigned) emitByte(0x95);
+        emitMove(Register::R6_LMULT_HI, 0); // Signed displacement/count, retained across pointer materialization.
+    }
     materialize(instruction.operands[0]);
     // Reloading a spill uses R3, not R6. All checked-address values are eager
     // frame values, so there can be no intervening call/rematerialized load.
-    if (!provenAddress(instruction.operands[0], pointer, stride)) emitAddressCheck(pointer, stride);
+    ensureAddressChecked(instruction.operands[0], stride);
     if (globallyOptimized() && m_address_proof.provesOffset(instruction)) {
         // The signed displacement is used as a raw word. Two's-complement
         // ADD/SUB is correct here because the proof excludes address wrap,
@@ -263,7 +348,9 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
             emitNearBank(4, AddressSpace::ROM); emitCompare(Register::R4_LMULT_LO, 0x40); emitLocalJump(full, 13);
             emitCompare(Register::R0, 0x8000); emitGuard(OpCode::BCS, 3); bindLabel(full);
         }
-        emitAddressCheck(pointer, stride);
+        emitAddressCheck(pointer, stride,
+            globallyOptimized() && pointer.space == AddressSpace::RAM && !subtract
+                ? AddressComponents::NonNull : AddressComponents::Unknown);
         if (globallyOptimized() && pointer.space == AddressSpace::RAM && !isFarPointer(pointer) && m_checked_addresses.size() < 1024)
             m_checked_addresses[instruction.result.value] = stride;
         return;
@@ -298,7 +385,12 @@ void IRCodeGenerator::emitPointerOffset(const IRInstruction& instruction) {
             step(instruction.operation == "+");
         }
         bindLabel(done);
-        emitAddressCheck(pointer, stride);
+        auto known = AddressComponents::Unknown;
+        if (globallyOptimized() && pointer.space == AddressSpace::RAM &&
+            stride % storageAlignment(pointeeType(pointer)) == 0)
+            known = index_type.is_unsigned && instruction.operation == "+"
+                ? AddressComponents::NonNullAligned : AddressComponents::Aligned;
+        emitAddressCheck(pointer, stride, known);
         if (globallyOptimized() && pointer.space == AddressSpace::RAM && m_checked_addresses.size() < 1024)
             m_checked_addresses[instruction.result.value] = stride;
         return;

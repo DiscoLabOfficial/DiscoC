@@ -121,6 +121,13 @@ The [interactive OBJ demo](tests/graphics/interactive_shapes/README.md) adds a
 cube and an icosahedral sphere: D-Pad rotation, A to toggle wireframe/filled faces,
 and Select + Up/Down to resize, using OBJ/4bpp at approximately 21 MHz.
 
+### Gem Chess Scene
+
+The [gem-chess demo](examples/snes/gem_chess/README.md) renders an 8×8 board and
+32 faceted pieces with an orbiting camera in a BG1 bitmap. See its
+[Mesen preview](examples/snes/gem_chess/preview.png), build instructions and
+measurement limits. It is a scene viewer, not a chess rules engine or a real-time game.
+
 **The example SNES ROMs contain no Nintendo proprietary code, commercial game
 assets, or Nintendo SDK components.** These are emulator demonstrations, not
 physical-hardware validation.

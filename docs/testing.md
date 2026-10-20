@@ -337,6 +337,31 @@ seed-3/result-2019 snapshot contract, not the function-call benchmark source.
 
 ## GSU optimization regressions
 
+Focused no-spill backend tests cover final IR-value and auxiliary DivMod homes,
+spill-free explicit scalar-local storage and ABI arguments, and rejection of
+genuine spilling address intermediates. Os candidate tests distinguish the
+ordinary 121-byte spilling recurrence from the strict 147-byte LOOP candidate;
+81 boundary-seed pairs execute both candidates through direct and assembled
+paths, preserving results and ABI state. The
+[`--require-no-spills` contract](optimization.md#requiring-spill-free-allocation)
+does not exclude compiler-generated intermediates merely because their source
+object is a local array. Existing ordinary compilation remains the control.
+
+The stack-traffic pass additionally verifies 6,212 independent observations,
+65 strict-option/API/output-preservation gates and all 36 ordinary native
+benchmark cases. Fresh MinGW/GCC Debug and Release runs each pass 379/379 CTest
+tests without skips. A real volatile comparison check replaces a stale BEQ
+assertion on a constant-folded fixture, preserving existing opcode-family,
+assembly roundtrip and R6 assertions. The permanent matrix executes six value and six
+branch predicates, signed/unsigned, on 9×9 boundary pairs at O0/O1/O2/Os through
+direct and assembled paths: 648 runs, 1,296 masks and 15,552 truth checks. A
+deliberately wrong mask is independently rejected.
+
+All 36 ordinary benchmark cases also pass optional Mesen verification. Strict
+candidate eligibility and its measured size/cycle tradeoff are recorded in the
+[optimization contract](optimization.md#requiring-spill-free-allocation);
+model instruction counts are a separate metric.
+
 `gsu_optimization` checks default/O0 byte identity, the `-O`/O1 alias, strict
 TOML boolean validation and CLI precedence, source-import propagation,
 mixed-level objects, and byte-exact compiler/final assembly exports.
@@ -428,7 +453,10 @@ but not after faults. Zero/nonzero stack floors, entry alignment, a minimal
 O2 array frame, an untaken call, and O2 callers with O0/O1/O2 callees are
 checked independently. Assembly asserts that the entry guard stays while its
 two redundant O2 saved-register push checks disappear. Direct build helpers
-include the proof test unit.
+include the proof test unit. Stack-credit reuse requires straight-line
+dominance; every CFG block entry and local-label binding must fence it, even
+in call-free loops. The conservative reset repair has 540 stack-boundary cases
+covering successful returns and fail-stop behavior.
 
 `gsu_size_optimization_unit` checks conditional/remainder-first divmod fusion,
 matching/dominance/type exclusions, malformed projections, bounded/idempotent
@@ -694,6 +722,79 @@ measurements use the optional Mesen harness.
 An invalid pointer-parameter test retains its preceding volatile witness before
 the alignment fail-stop. Os must select the smaller software span when LOOP's
 ABI setup costs more bytes; O2 still requires the profitable automatic CACHE.
+Pointer-only promotion tests require repeat-pass idempotence and checked pointer
+SSA without counted-loop/initializer conversion. Alias, escape, assignment and
+incoming-pointer fault boundaries remain covered; ROM/RAM execution compares
+volatile multiplicity, observable RAM and ABI state against O1.
+Os direct-divisor and allocated-index copy cases check signed/unsigned results,
+witnessed failures and ROM/RAM execution while retaining plot staging and
+unsupported-index fallbacks. These structural checks do not establish timing.
+
+## GSU storage and candidate-planning checks
+
+`ir_storage_optimizer_unit` checks dead-home reclamation, disjoint CFG lifetime
+sharing, retained interference, aggregate alignment, unchanged parameter and
+analyzer offsets, malformed-home rejection and repeat-plan idempotence.
+Flat numeric aliases, incoming/escaped pointers, volatile/partial/out-of-bounds
+accesses and bounded-analysis exhaustion retain conservative storage. Pool
+tests check complete little-endian images, disabled capability and mutable or
+partial-initializer fallbacks; scalar-bound queries reject invalid IDs safely.
+
+`gsu_seven_backend_unit` executes conditional snapshots without repeating
+volatile reads, nested/transitive/recursive calls and hardware loops, physical
+SBK spill updates, and the real numeric stack-alias read/write fixtures at
+O1/O2/Os. Results, access counts, stack/LOOP state, banks, fault state and RAM
+sentinels remain asserted. O2/Os cases require profitable immutable pools;
+an Os pool also exercises the actual linker, compiler assembly and
+final-assembly byte-exact reconstruction.
+ROM/wrong-bank placement and ordinary DATA-as-RAM relocations remain negative
+cases in linker coverage. Strict multi-function Os tests require the exact
+selected spill-free candidate and reproduce it on the same backend instance,
+even when larger than the ordinary winner. These are functional/encoding
+checks, not measured-cycle or physical-hardware claims.
+Mixed-candidate coverage also retains the complete legacy payload incumbent,
+including cross-function shared DATA, division ownership and alignment, before
+adding pointer-only alternatives; backend-instance reuse remains checked.
+Extension guardrails check complete-winner total/per-function proxy references,
+missing-evidence rejection and conditional strict spill eligibility. Fresh,
+reused and post-exception invocations must retain deterministic owned results.
+
+### Os recovery validation snapshot
+
+The historical uncommitted Os recovery snapshot passed independent Release
+381/381 and Debug 381/381 with no failures, skips or incomplete tests, five C++14 `-Werror` checks
+and 10,424 paired cases. Final Mesen functional gates passed without changing
+the workloads, hosts, capacity limits or analytic oracles.
+
+The 46 runtime groups contain five freshly measured groups and 41
+identity-qualified historical references, not 46 fresh executions. There were
+36 new Mesen processes: 28 guards and eight workload processes. Three pure
+snapshot checkers are not timing samples. The final 572-sample timing dataset
+contains 76 fresh samples and 496 references; 404 image pairs comprise 68 fresh
+and 336 referenced pairs. Rotation/scaling images pair by fixed phase; shapes
+uses required named captures, never dynamic frame ordinals. Original shapes
+O0/O1 placement non-fits remain unexecuted. Evidence and identity proofs are
+retained under `build/ofr/`; this is emulator validation, not physical hardware
+or new sanitizer coverage. This does not validate later source changes or the
+current full gem-chess scene. See the [historical recovery and remaining baseline gaps](optimization.md#historical-os-recovery-measurements-2026-10-20).
+
+### Gem-chess local validation
+
+The 2026-10-20 local source snapshot passed Release 387/387 and Debug 387/387
+with no failures, skips or incomplete tests, retaining all 381 previous tests
+and adding six gem-chess cases. Full prebuilt and direct paths passed, as did
+strict C++14 syntax checks for 14 production translation units and two runners.
+The actual-source raster, private-raster and paint corpora execute 432, 568 and
+536 cases respectively per O2/Os policy, with independent raster expectations
+and byte-exact build/assembly paths. This includes the conservative stack-credit
+reset repair; the older recovery results above do not validate that repair.
+
+Current O2 full-scene Mesen positive/negative and ten-capture checks also passed
+under the original 120-second CLI and external bounds with unchanged frame caps.
+The confirming bounded runs supersede an initial run with a 180-second CLI
+limit; that earlier attempt remains preserved. Full-scene Os Mesen execution
+is unrun. No physical-hardware, new sanitizer or CI result is implied. Exact
+source/tool identities and scope are in the [scene validation snapshot](../examples/snes/gem_chess/README.md#local-validation-snapshot-2026-10-20).
 
 ## Optional libFuzzer target
 

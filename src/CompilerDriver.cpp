@@ -24,6 +24,8 @@ void usage() {
         "  --project <manifest>      Alias for build --config\n"
         "  --target <gsu|spc700>      Select target (default gsu)\n"
         "  --check                   Analyze and verify IR without emitting code\n"
+        "  --require-no-spills       Reject GSU compiler-generated spill homes, including in --check/--emit-ir\n"
+        "                            Source units only, not prebuilt objects; local/ABI storage is allowed\n"
         "  -O | -O1                  Optimize GSU code (default -O0 baseline)\n"
         "  -O0                       Retain baseline GSU code generation\n"
         "  -O2                       CFG/SSA, global registers, loops and bounded inlining\n"
@@ -88,6 +90,7 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
             else if (argument == "--emit-ir") emit_ir = true;
             else if (argument == "--emit-asm") emit_asm = true;
             else if (argument == "--check") check = true;
+            else if (argument == "--require-no-spills") config.require_no_spills = true;
             else if (argument == "-O" || argument == "-O1") config.optimization = OptimizationLevel::O1;
             else if (argument == "-O0") config.optimization = OptimizationLevel::Baseline;
             else if (argument == "-O2") config.optimization = OptimizationLevel::O2;
@@ -109,6 +112,10 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
             }
         }
         if (input.empty()) throw std::runtime_error("No input file specified.");
+        if (config.require_no_spills && emit_ast)
+            throw std::runtime_error("--require-no-spills is unsupported with --emit-ast; use --check or --emit-ir for allocation validation.");
+        if (config.require_no_spills && config.target != TargetKind::GSU)
+            throw std::runtime_error("Target 'spc700' does not support --require-no-spills: no code-generation backend is available.");
         applyPlacement(config, placement);
         ModuleLoader loader;
         if (!modules) {
@@ -159,6 +166,12 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
         IRLowerer lowerer(config.target); auto ir = lowerer.lower(program);
         ir.bitmap = analyzer.getBitmapConfig();
         IRVerifier::verify(ir);
+        if (config.require_no_spills && (emit_ir || check)) {
+            // Validate the same original IR and final backend candidate as an
+            // ordinary emission, before inspection-only optimization changes it.
+            IRCodeGenerator generator(analyzer.getAllLocalSymbols(), analyzer.getFunctionSymbols(), data, config);
+            generator.generate(ir);
+        }
         if ((emit_ir || check) && isGlobalOptimization(config.optimization))
             IRGlobalOptimizer::run(ir, analyzer.getAllLocalSymbols(), config.optimization);
         if (emit_ir) {

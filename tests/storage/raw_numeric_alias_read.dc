@@ -1,0 +1,7 @@
+// Model fixture: initial SP=$2000, main FP=$1FFC. The first local array's
+// original analyzer offset is -8, so $1FF4 aliases its first element.
+word main() {
+    word table[4] = {11, 22, 33, 44};
+    word index = *(volatile word*)0x0100 & 3;
+    return table[index] + *(volatile word*)0x1FF4;
+}

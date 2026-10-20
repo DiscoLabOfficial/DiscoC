@@ -432,6 +432,10 @@ int runLinker(std::vector<std::string> arguments) {
                         throw std::runtime_error("Linker Error: Undefined local symbol '" + local_name + "'.");
                     }
                     const auto* local_symbol = local->second;
+                    if (reloc.target_symbol_name.compare(0, std::string(GSUAbi::ImmutablePoolPrefix).size(),
+                        GSUAbi::ImmutablePoolPrefix) == 0 && (local_symbol->section != SymbolSection::DATA ||
+                        local_symbol->offset >= obj.data_section.size()))
+                        throw std::runtime_error("Immutable local-array pool requires a nonempty private DATA target.");
                     target_section = local_symbol->section;
                     target_is_instruction = target_section == SymbolSection::CODE && local_symbol->offset < obj.code_section.size();
                     const auto base = local_symbol->section == SymbolSection::CODE
@@ -472,7 +476,14 @@ int runLinker(std::vector<std::string> arguments) {
                 }
                 if (config.target == TargetKind::GSU) {
                     if (reloc.type == RelocationType::ADDR16_RAM) {
-                        if (target_section != SymbolSection::RAM)
+                        const bool pool = reloc.target_symbol_name.compare(0, std::string(GSUAbi::ImmutablePoolPrefix).size(),
+                            GSUAbi::ImmutablePoolPrefix) == 0;
+                        if (pool && (target_section != SymbolSection::DATA ||
+                            GsuMemoryMap::region(config.code_start_address) != GsuMemoryMap::Region::Ram ||
+                            GsuMemoryMap::region(target_addr) != GsuMemoryMap::Region::Ram ||
+                            (config.code_start_address >> 16) != 0x70u + ram_bank))
+                            throw std::runtime_error("Immutable local-array pool requires copied RAM payload placement in the selected near RAM bank.");
+                        if (target_section != SymbolSection::RAM && !pool)
                             throw std::runtime_error("RAM relocation must target static RAM or a stack limit.");
                         if ((target_addr >> 16) != 0x70u + ram_bank)
                             throw std::runtime_error("RAM relocation target is outside the near RAM bank.");

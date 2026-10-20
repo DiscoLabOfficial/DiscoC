@@ -90,8 +90,10 @@ public:
             (static_cast<std::uint16_t>(ram_.at(index ^ 1u)) << 8));
     }
 
-    void run() {
-        for (std::size_t step = 0; step < 10000000; ++step) {
+    void run(std::size_t instruction_limit = 10000000) {
+        if (!instruction_limit || instruction_limit > 100000000)
+            throw std::invalid_argument("GSU instruction limit must be in 1..100000000");
+        for (std::size_t step = 0; step < instruction_limit; ++step) {
             const auto opcode = pipeline_;
             pipeline_ = fetch();
             pc_written_ = false;

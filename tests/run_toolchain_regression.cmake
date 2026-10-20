@@ -74,7 +74,9 @@ function(run_expected_failure_contains pattern)
     endif()
 endfunction()
 
-if(CASE STREQUAL "gsu_contributor_correctness")
+if(CASE MATCHES "^gem_chess_(raster|raster_private|paint)$")
+    include("${ROOT_DIR}/tests/run_gem_chess_regression.cmake")
+elseif(CASE STREQUAL "gsu_contributor_correctness")
     include("${ROOT_DIR}/tests/run_contributor_correctness_regression.cmake")
 elseif(CASE STREQUAL "gsu_size_policy")
     include("${ROOT_DIR}/tests/run_size_policy_regression.cmake")
@@ -332,14 +334,87 @@ elseif(CASE STREQUAL "comparison_semantics")
        NOT assembly MATCHES "bcc" OR NOT assembly MATCHES "bcs")
         message(FATAL_ERROR "Signed/unsigned comparison branches are incomplete:\n${assembly}")
     endif()
-    if(NOT assembly MATCHES "beq" OR (NOT OPTIMIZATION MATCHES "^[12s]$" AND NOT assembly MATCHES "bne"))
-        message(FATAL_ERROR "Equality boundaries are not materialized distinctly:\n${assembly}")
-    endif()
-    # Fused O1 comparisons need not materialize a boolean then test it with
-    # BNE. Execution asserts equality/order, rather than requiring that shape.
     check_round_trip(comparisons "${source}" --init-runtime)
     foreach(suffix IN ITEMS "" "-asm")
         run_command("${GSU_RUNNER}" "${TEST_DIR}/comparisons${suffix}.bin" 0x8000 --register 6 0)
+    endforeach()
+
+    # The original fixture's only ==/!= expressions have constant operands;
+    # O2/Os fold them, and reversed <=/> comparisons need no BEQ. Assert the
+    # equality shape on actual runtime ==/!= instead, then verify truth values
+    # independently of branch direction or boolean materialization choices.
+    # Compile this harness once per policy, not once per input pair.
+    set(matrix_source "${TEST_DIR}/comparison-matrix.dc")
+    set(matrix "word main(){\n")
+    foreach(signedness IN ITEMS signed unsigned)
+        if(signedness STREQUAL "unsigned")
+            set(type "unsigned word")
+            set(output_address 0x112)
+        else()
+            set(type "word")
+            set(output_address 0x110)
+        endif()
+        string(APPEND matrix "${type} ${signedness}_a=*(volatile ${type}*)0x100;\n")
+        string(APPEND matrix "${type} ${signedness}_b=*(volatile ${type}*)0x102;\n")
+        string(APPEND matrix "word ${signedness}_result=0;\n")
+        set(weight 1)
+        foreach(predicate IN ITEMS "<" "<=" ">" ">=" "==" "!=")
+            string(APPEND matrix "${signedness}_result+=(word)(${signedness}_a${predicate}${signedness}_b)*${weight};\n")
+            math(EXPR weight "${weight} * 2")
+        endforeach()
+        foreach(predicate IN ITEMS "<" "<=" ">" ">=" "==" "!=")
+            string(APPEND matrix "if(${signedness}_a${predicate}${signedness}_b)${signedness}_result+=${weight};\n")
+            math(EXPR weight "${weight} * 2")
+        endforeach()
+        string(APPEND matrix "*(volatile word*)${output_address}=${signedness}_result;\n")
+    endforeach()
+    string(APPEND matrix "return 42;}\n")
+    file(WRITE "${matrix_source}" "${matrix}")
+    check_round_trip(comparison-matrix "${matrix_source}")
+    file(READ "${TEST_DIR}/comparison-matrix.s" matrix_assembly)
+    if(NOT matrix_assembly MATCHES "beq" OR
+       (NOT OPTIMIZATION MATCHES "^[12s]$" AND NOT matrix_assembly MATCHES "bne"))
+        message(FATAL_ERROR "Runtime equality boundaries are not materialized distinctly:\n${matrix_assembly}")
+    endif()
+    # Nine bounded word encodings cover equal/adjacent values, both zero
+    # directions, byte boundaries, signed extrema and subtraction overflow.
+    foreach(a IN ITEMS 0 1 2 127 128 255 32767 32768 65535)
+        foreach(b IN ITEMS 0 1 2 127 128 255 32767 32768 65535)
+            foreach(signedness IN ITEMS signed unsigned)
+                set(x ${a})
+                set(y ${b})
+                if(signedness STREQUAL "signed")
+                    if(x GREATER 32767)
+                        math(EXPR x "${x} - 65536")
+                    endif()
+                    if(y GREATER 32767)
+                        math(EXPR y "${y} - 65536")
+                    endif()
+                endif()
+                # Bits 0..5 encode <,<=,>,>=,==,!=. Bits 6..11 repeat
+                # those truths via control flow. Trichotomy gives an oracle
+                # independent of the compiler's comparison implementation.
+                if(x LESS y)
+                    set(truth_bits 35)
+                elseif(x GREATER y)
+                    set(truth_bits 44)
+                else()
+                    set(truth_bits 26)
+                endif()
+                math(EXPR expected_${signedness} "${truth_bits} * 65")
+            endforeach()
+            math(EXPR a_low "${a} & 255")
+            math(EXPR a_high "${a} >> 8")
+            math(EXPR b_low "${b} & 255")
+            math(EXPR b_high "${b} >> 8")
+            foreach(suffix IN ITEMS "" "-asm")
+                run_command("${GSU_RUNNER}" "${TEST_DIR}/comparison-matrix${suffix}.bin" 0x8000
+                    --ram-byte 0x700100 ${a_low} --ram-byte 0x700101 ${a_high}
+                    --ram-byte 0x700102 ${b_low} --ram-byte 0x700103 ${b_high}
+                    --word 0x700110 ${expected_signed} --word 0x700112 ${expected_unsigned}
+                    --register 0 42 --register 6 0)
+            endforeach()
+        endforeach()
     endforeach()
 
 elseif(CASE STREQUAL "optimizer_preservation")

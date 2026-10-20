@@ -145,6 +145,13 @@ struct IRBasicBlock {
     std::vector<IRInstruction> instructions;
 };
 
+struct IRImmutableLocalArray {
+    Type type;
+    // Little-endian RAM image. Owned by this candidate, never borrowed from
+    // the analyzer, an instruction, or a different candidate's optimized IR.
+    std::vector<std::uint8_t> bytes;
+};
+
 struct IRFunction {
     std::string name;
     std::string link_name;
@@ -156,6 +163,11 @@ struct IRFunction {
     std::vector<IRBasicBlock> blocks;
     IRBlockId entry;
     std::uint32_t value_count = 0;
+    // Final storage planning runs after IR optimization. Backends must use
+    // this owned table, when valid, for both emission and address proofs.
+    bool storage_layout_valid = false;
+    Analyzer::LocalSymbolTable storage_layout;
+    std::map<SymbolId, IRImmutableLocalArray> immutable_local_arrays;
 };
 
 struct IRModule {
@@ -235,6 +247,7 @@ private:
     IRBlockId createBlock(const std::string& label);
     IRValueId createValue();
     IRValueId lowerExpression(Expr& expr);
+    void lowerCondition(Expr& expr, IRBlockId true_target, IRBlockId false_target);
     IRValueId lowerAddress(Expr& expr);
     IRValueId lowerLogical(BinaryExpr& expr);
     IRValueId emitValue(IROpcode opcode, const Type& type, const Token& source,

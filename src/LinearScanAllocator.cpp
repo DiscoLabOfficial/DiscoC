@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <set>
 #include <stdexcept>
 
@@ -466,9 +467,22 @@ std::vector<std::uint8_t> LinearScanAllocator::spareRegisters(std::size_t positi
     return found == m_spare_registers.end() ? std::vector<std::uint8_t>{} : found->second;
 }
 
+const std::vector<std::uint32_t>& LinearScanAllocator::boundaryStores(std::uint32_t block) const {
+    static const std::vector<std::uint32_t> empty;
+    const auto found = m_boundary_store.find(block);
+    return found == m_boundary_store.end() ? empty : found->second;
+}
+
+const std::vector<std::uint32_t>& LinearScanAllocator::boundaryReloads(std::uint32_t block) const {
+    static const std::vector<std::uint32_t> empty;
+    const auto found = m_boundary_reload.find(block);
+    return found == m_boundary_reload.end() ? empty : found->second;
+}
+
 void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
                                       const std::vector<std::uint8_t>& allocatable_registers, bool cost_priority, bool size_policy) {
     m_locations.clear(); m_call_live.clear(); m_spare_registers.clear();
+    m_boundary_store.clear(); m_boundary_reload.clear();
     IRControlFlow cfg(function);
     std::vector<std::size_t> begin(function.blocks.size()), end(function.blocks.size());
     std::map<std::uint32_t, std::uint64_t> weight;
@@ -532,9 +546,34 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
             if (position) --position;
         }
     }
+    // Same-depth uses tie. Prefer the carried value over an older invariant
+    // with the same weight; do not multiply the weight, or a rarely used
+    // induction evicts a value reloaded on every trip.
+    std::set<std::uint32_t> inductions;
+    if (!size_policy) {
+        for (const auto& loop : cfg.loops) {
+            for (const auto& phi : function.blocks[loop.header].instructions) {
+                if (phi.opcode != IROpcode::Phi) break;
+                bool carried = false;
+                IRValueId update;
+                for (std::size_t n = 0; n < phi.operands.size() && n < phi.targets.size(); ++n) {
+                    if (!loop.latches.count(phi.targets[n].value)) continue;
+                    carried = true;
+                    update = phi.operands[n];
+                }
+                if (!carried) continue;
+                inductions.insert(phi.result.value);
+                if (update.isValid()) inductions.insert(update.value);
+            }
+        }
+    }
     std::vector<std::uint8_t> registers;
     for (const auto reg : allocatable_registers) {
-        if (reg != 5 && reg != 7 && reg != 8) throw std::runtime_error("Global allocator: register has a fixed GSU/ABI role.");
+        // R0/R1/R3 stay backend scratch, R6 stays the cross-value temporary,
+        // and R9-R13/R15 stay ABI or hardware registers. The caller decides
+        // which of R2/R4/R14 are actually free in this function.
+        if (reg != 2 && reg != 4 && reg != 5 && reg != 7 && reg != 8 && reg != 14)
+            throw std::runtime_error("Global allocator: register has a fixed GSU/ABI role.");
         if (std::find(registers.begin(), registers.end(), reg) == registers.end()) registers.push_back(reg);
     }
     std::sort(registers.begin(), registers.end());
@@ -542,6 +581,8 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
     for (const auto& entry : m_locations) if (!entry.second.rematerializable && !far.count(entry.first) && weight.count(entry.first)) ordered.push_back(entry.first);
     std::sort(ordered.begin(), ordered.end(), [&](std::uint32_t a, std::uint32_t b) {
         if (weight.at(a) != weight.at(b)) return weight.at(a) > weight.at(b);
+        const bool a_induction = inductions.count(a) != 0, b_induction = inductions.count(b) != 0;
+        if (a_induction != b_induction) return a_induction;
         if (m_locations.at(a).start != m_locations.at(b).start) return m_locations.at(a).start < m_locations.at(b).start;
         return a < b;
     });
@@ -578,7 +619,25 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
                         affinity[edgeKey(i->result.value, v.value)] +=
                             size_policy ? 1 : GSUCostModel::blockWeight(cfg.loop_depth.at(i->targets.at(n).value));
                 }
-            } else for (const auto v : i->operands) if (eligible(v.value)) live.insert(v.value);
+            } else {
+                // Two-address GSU forms need only WITH when the dying input
+                // and result share a home. Preferences never remove an edge:
+                // a still-live input continues to interfere with its result.
+                const bool tied = (i->opcode == IROpcode::Unary &&
+                    (i->operation == "~" || i->operation == "!" || i->operation == "-")) ||
+                    (i->opcode == IROpcode::Cast && i->type.pointer_level == 0) ||
+                    (i->opcode == IROpcode::Binary && (i->operation == "+" || i->operation == "-" ||
+                     i->operation == "&" || i->operation == "|" || i->operation == "^"));
+                if (tied && i->result.isValid() && !i->operands.empty()) {
+                    const auto input = i->operands.front().value, output = i->result.value;
+                    if (input != output && eligible(input) && eligible(output)) {
+                        preferences[output].insert(input); preferences[input].insert(output);
+                        affinity[edgeKey(output, input)] += size_policy ? 1 :
+                            GSUCostModel::blockWeight(cfg.loop_depth.at(block.id.value));
+                    }
+                }
+                for (const auto v : i->operands) if (eligible(v.value)) live.insert(v.value);
+            }
         }
     }
     for (const auto value : ordered) {
@@ -593,9 +652,17 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
         }
         // Incoming backedges are hot; ascending SSA IDs otherwise favor a cold
         // preheader copy. Ranking changes only choices, never interference.
+        // Equal affinity keeps the historical R5/R7/R8 homes. The widened
+        // registers are chosen only when one of those three is occupied.
+        const auto preference = [](std::uint8_t reg) {
+            if (reg == 5) return 0;
+            if (reg == 7) return 1;
+            if (reg == 8) return 2;
+            return 100 + static_cast<int>(reg);
+        };
         std::sort(choices.begin(), choices.end(), [&](std::uint8_t a, std::uint8_t b) {
             if (scores.at(a) != scores.at(b)) return scores.at(a) > scores.at(b);
-            return a < b;
+            return preference(a) < preference(b);
         });
         for (const auto reg : choices) {
             bool occupied = false;
