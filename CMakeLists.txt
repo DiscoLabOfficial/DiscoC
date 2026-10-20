@@ -3,9 +3,12 @@ cmake_minimum_required(VERSION 3.15)
 
 project(DiscoC-Toolchain VERSION 0.2.0 LANGUAGES CXX)
 
-# CMake's project VERSION is numeric; retain the SemVer prerelease separately.
-set(DISCO_VERSION_PRERELEASE "rc.1")
-set(DISCO_VERSION_STRING "${PROJECT_VERSION}-${DISCO_VERSION_PRERELEASE}")
+# CMake's project VERSION is numeric; an empty suffix selects the stable version.
+set(DISCO_VERSION_PRERELEASE "" CACHE STRING "SemVer prerelease suffix (empty for stable builds)")
+set(DISCO_VERSION_STRING "${PROJECT_VERSION}")
+if(NOT DISCO_VERSION_PRERELEASE STREQUAL "")
+    string(APPEND DISCO_VERSION_STRING "-${DISCO_VERSION_PRERELEASE}")
+endif()
 message(STATUS "DiscoC version: ${DISCO_VERSION_STRING}")
 
 # Include helper module for printing status messages

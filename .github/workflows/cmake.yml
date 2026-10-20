@@ -52,6 +52,10 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Stamp fresh exact-source Release build
+        if: matrix.build_type == 'Release'
+        run: cmake -DACTION=prepare -DBUILD_DIR=build/${{ matrix.preset }} -P cmake/package-tools.cmake
+
       - name: Configure using the documented preset
         run: cmake --preset ${{ matrix.preset }}
 
@@ -65,6 +69,31 @@ jobs:
         if: runner.os != 'Windows' && matrix.build_type == 'Release'
         shell: bash
         run: bash build.sh --backend direct --build-dir build/direct-check --test
+
+      - name: Package and smoke extracted Release distribution
+        if: matrix.build_type == 'Release'
+        run: cmake -DACTION=package -DBUILD_DIR=build/${{ matrix.preset }} -P cmake/package-tools.cmake
+
+      - name: Upload already-smoked native distribution
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: distribution-native-${{ matrix.os }}-Release
+          path: |
+            build/${{ matrix.preset }}/package/artifacts/*.zip
+            build/${{ matrix.preset }}/package/artifacts/*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload native package receipts
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-receipts-native-${{ matrix.os }}-Release
+          path: |
+            build/${{ matrix.preset }}/package/artifacts/*.json
+            build/${{ matrix.preset }}/package/artifacts/*.txt
+            build/${{ matrix.preset }}/package/artifacts/*.log
+          if-no-files-found: error
 
       - name: Upload artifacts (Native)
         uses: actions/upload-artifact@v4
@@ -105,6 +134,8 @@ jobs:
           DISCO_MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
         run: |
           $env:PATH = (Join-Path $env:DISCO_MSYS2_LOCATION 'ucrt64\bin') + ';' + $env:PATH
+          cmake -DACTION=prepare -DBUILD_DIR=build/release-mingw -P cmake/package-tools.cmake
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --preset release-mingw
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build --preset release-mingw
@@ -118,6 +149,31 @@ jobs:
         run: |
           $env:PATH = (Join-Path $env:DISCO_MSYS2_LOCATION 'ucrt64\bin') + ';' + $env:PATH
           ./build.ps1 -Backend Make -Compiler g++ -Configuration Release -BuildDir build/helper-mingw -Test
+
+      - name: Package and smoke extracted MinGW distribution
+        shell: pwsh
+        env:
+          DISCO_MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          $env:PATH = (Join-Path $env:DISCO_MSYS2_LOCATION 'ucrt64\bin') + ';' + $env:PATH
+          cmake -DACTION=package -DBUILD_DIR=build/release-mingw -P cmake/package-tools.cmake
+
+      - name: Upload already-smoked MinGW distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: distribution-windows-mingw-Release
+          path: build/release-mingw/package/artifacts/*.zip
+          if-no-files-found: error
+
+      - name: Upload MinGW package receipts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-receipts-windows-mingw-Release
+          path: |
+            build/release-mingw/package/artifacts/*.json
+            build/release-mingw/package/artifacts/*.txt
+            build/release-mingw/package/artifacts/*.log
+          if-no-files-found: error
 
       - name: Upload standalone tools
         uses: actions/upload-artifact@v4
