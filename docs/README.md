@@ -42,12 +42,12 @@ for detailed workflows and contracts.
 
 ## Releases and Evidence
 
-- [v0.2.0 final-candidate notes](releases/v0.2.0-final/release-notes.md) and
-  [reproduction](releases/v0.2.0-final/reproduce.md): prepared, not published.
-  Exact-source validation records and package manifests are generated separately
-  under `build/stable-final/<SHA>/`; historical RC results are not final evidence.
-- [Published v0.2.0-rc.1](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.2.0-rc.1):
-  the current download, release notes, and evidence for the tagged RC revision.
+- [Published v0.2.0](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.2.0):
+  final downloads, checksums and evidence; [release notes](releases/v0.2.0-final/release-notes.md),
+  [exact-source validation and package requirements](releases/v0.2.0-final/validation.md),
+  and [reproduction procedure](releases/v0.2.0-final/reproduce.md).
+- [Historical v0.2.0-rc.1](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.2.0-rc.1):
+  downloads, release notes and evidence for the tagged RC revision, not the final release.
 - [Historical v0.2.0 RC candidate records](releases/v0.2.0/validation.md),
   [optimization results](releases/v0.2.0/optimization-results.md),
   [reproduction](releases/v0.2.0/reproduce.md), and

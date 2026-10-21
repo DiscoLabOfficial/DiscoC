@@ -1,34 +1,36 @@
-# DiscoC v0.2.0 — final-candidate notes
+# DiscoC v0.2.0 — release notes
 
-**Prepared, not published.** This source prepares the `0.2.0` version identity,
-without the `-rc.1` suffix. It does not create a tag, publish a release, or claim
-that an untested merge commit is validated. The available download remains
-[v0.2.0-rc.1](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.2.0-rc.1).
+**Published on 2026-10-21:** [DiscoC v0.2.0](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.2.0),
+without the `-rc.1` suffix, with native tools, exact source, SNES demos,
+checksums and validation evidence. DOS remains an experimental cross-build
+whose runtime is unverified.
 Stable-channel naming does not make this experimental pre-1.0 compiler
 production-ready.
 
-Exact-commit validation is recorded separately from these qualitative notes.
-Fresh test inventories, results, tool identities, benchmark JSON/CSV, demo
-evidence and package manifests belong under `build/stable-final/<SHA>/` and
-accompany the corresponding packages. Each record must identify the full source
-commit and its actual scope. Follow the [reproduction guide](reproduce.md);
-these notes are not a passing validation report.
+The [final validation record](validation.md) identifies the published tag,
+package/test source, their identical Git tree, recorded results and post-merge
+CI. It links the released evidence and [reproduction procedure](reproduce.md).
+The released `FINAL-NOTES.md` and `BUILD-INFO.json` retain their pre-publication
+snapshot wording unchanged; that wording describes preparation, not the current
+publication status. These qualitative notes do not replace the raw records.
 
 ## Scope and relationship to the RC
 
 DiscoC 0.2.0 builds on the documented Language Baseline 0.1 with explicit
 optimization policies and correctness-oriented SuperFX code generation. The
-current final candidate also includes the gem-chess scene and expanded backend,
+release also includes the gem-chess scene and expanded backend,
 differential, raster and build-path regression coverage developed after the RC.
 The [gem-chess guide](../../../examples/snes/gem_chess/README.md) describes the
 scene viewer and its limits; it is not a chess rules engine or a real-time game.
 
 The published RC and the older checked-in
 [candidate records](../v0.2.0/validation.md) identify different historical source
-revisions. Neither is relabeled as evidence for the final candidate. In
+revisions. Neither is relabeled as evidence for the final release. In
 particular, old test totals, payload sizes, cycles and FPS are not final-source
-measurements. The current backend, all nine official workloads at all four
-optimization levels, and all complete-ROM demos require fresh validation.
+measurements. The [final-source checks](validation.md#recorded-results) cover
+all nine official workloads at all four optimization levels and nine complete-ROM
+configurations. The RC comparison has 36 incompatible strict signatures, so no
+apples-to-apples speedup against the RC is claimed.
 
 ## Optimization and compatibility contract
 
