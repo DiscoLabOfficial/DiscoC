@@ -10,18 +10,30 @@ It is **not an ISO C implementation**.
 The toolchain is written in C++23, with an experimental C++14 DOS cross-build.
 SuperFX programs can be compiled into real SNES execution payloads without LLVM.
 
-> **Experimental — [v0.2.0 final candidate prepared, not published](docs/releases/v0.2.0-final/release-notes.md).**
-> The final candidate retains explicit `-O0`, `-O1`, `-O2`, and `-Os` policies.
+> **Experimental — [v0.2.0 is published](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.2.0).**
+> The release retains explicit `-O0`, `-O1`, `-O2`, and `-Os` policies.
 > The language remains Baseline 0.1; syntax, ABI, and object format may change
 > before 1.0. Generated code is not guaranteed to be optimal.
 > A linked `.bin` is a fixed-origin GSU payload, **not a complete SNES ROM**.
 
-The available download remains [v0.2.0-rc.1](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.2.0-rc.1),
-with packaged tools and evidence for that tagged RC revision. Final-candidate
-validation and packages must identify their own exact source commit; the RC
-results do not validate it. See the [final reproduction guide](docs/releases/v0.2.0-final/reproduce.md).
-[v0.1.0](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.1.0) remains
-the first stable-channel baseline release.
+## Download v0.2.0
+
+Native tools: [Windows MSVC AMD64](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/discoc-v0.2.0-windows-msvc-AMD64.zip),
+[Windows MinGW AMD64](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/discoc-v0.2.0-windows-mingw-AMD64.zip),
+[Linux x86_64](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/discoc-v0.2.0-linux-x86_64.tar.gz),
+[macOS arm64](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/discoc-v0.2.0-macos-arm64.tar.gz).
+Also available: [exact source](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/discoc-v0.2.0-source.zip),
+[SNES demos](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/discoc-v0.2.0-snes-demos.zip),
+and [experimental DOS](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/discoc-v0.2.0-dos-i586-experimental.zip)
+(DOS runtime unverified).
+
+Verify downloads with [SHA256SUMS](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/SHA256SUMS.txt).
+[Build identity](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/BUILD-INFO.json)
+and the [evidence archive](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/discoc-v0.2.0-evidence.zip)
+accompany the tools. Read the [platform requirements and exact-source validation](docs/releases/v0.2.0-final/validation.md)
+for the tag/package commit relationship, recorded checks and reproduction commands.
+See the [final release notes](docs/releases/v0.2.0-final/release-notes.md);
+[RC records](docs/releases/v0.2.0/validation.md) remain historical, not final-release evidence.
 
 ## Supported Targets
 
