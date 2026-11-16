@@ -1,11 +1,13 @@
 # GSU optimization modes
 
-For the latest committed-source measurements, use the
-[v0.2.0 candidate results](releases/v0.2.0/optimization-results.md) and
-[validation/provenance](releases/v0.2.0/validation.md). They cover all four
-levels plus RAM demos on `d967c3ef45a948ff457d81052448732da3bd73dc`.
+Fresh functional measurements of the unpublished 0.3.0 preparation are in the
+[benchmark results](releases/v0.3.0/optimization-results.md) and
+[validation/provenance](releases/v0.3.0/validation.md). They cover all four
+levels and identify the working-tree build inputs; they contain no cycle or FPS
+measurements. The [v0.2.0 candidate results](releases/v0.2.0/optimization-results.md)
+retain their own committed source identity and emulator measurements.
 The development snapshots later in this document remain historical evidence;
-they must not be relabeled with the candidate SHA or treated as a published release.
+they must not be relabeled as validation of the 0.3.0 preparation or a final tag.
 
 DiscoC provides local **O1** (`-O` or `-O1`), global **O2** (`-O2`), and
 size-oriented **Os** (`-Os`).
@@ -68,7 +70,10 @@ when a CLI option overrides them. `false` or omitted settings keep O0.
 Explicit CLI wins regardless of `--config`
 position; the last CLI level wins. `discc build -O0` overrides an enabled
 manifest. Ordinary compilation still emits one unit, not imported implementations.
-The policy does not change language semantics, object version or the call ABI.
+The policies preserve language semantics and the public call ABI. Optimized
+objects can require the proof-marker formats described in
+[object compatibility](object-format.md#compatibility-and-evolution); optional
+short RAM uses format 10. Rebuild compiler, assembler and linker together.
 O2 can add a private performance-only CODE alignment hint. O0/O1 IR inspection remains the frontend IR;
 `--emit-ir -O2` prints the optimized SSA, and `--check -O2` verifies it without
 emission. AST inspection is unchanged. It does not add an
@@ -373,6 +378,13 @@ interactive-shapes renderer:
   cold-fill cost. Windows reserve alignment headroom inside the 512-byte
   hardware limit. Os also emits an uncached alternative and selects by actual
   payload size; CACHE is not mandatory merely because a loop exists.
+- Call-free loops whose trip count is only known at run time are candidates
+  too, with an assumed four trips (one cold fill repaid by the repeats), also
+  in functions that use explicit `@cache` elsewhere, but never inside or
+  around an explicit window. Besides the delay slot of a branch into the
+  header, O2 reserves a selector-reset NOP where the preheader falls into it;
+  Os keeps only the free delay-slot anchors. The outermost loop that fits is
+  selected first, and every entry of a selected loop opens the same window.
 - Safe backedges bypass a header's explicit CACHE through a private entry
   immediately after it. External entries still execute the original CACHE at
   the same address, preserving CBR anchoring. This avoids moving CACHE into a
@@ -456,6 +468,98 @@ cmake -DDISCO_TOOLS_DIR=build/release/bin -DOPTIMIZATION=2 -DOUTPUT_DIR=build/lo
 Use `s` and separate directories for Os. Generated timing JSON/CSV and demo
 logs remain beside their payloads. Rebuild and repeat these checks against the
 final committed revision before treating them as release-candidate evidence.
+
+### Pointer loads and selector peepholes
+
+A later working-tree pass removes work the earlier ones still emitted, again
+without touching any benchmark or demo source:
+
+- **Guard-free pointer loads.** At O2/Os null is a storable pointer value, so
+  loading a near RAM pointer whose pointee is byte-aligned (and at most two
+  bytes wide) has no alignment, span or bank guard left. The emitter no longer
+  writes the zero test and branch that only reached its own fallthrough, and
+  such a parameter is promoted like an integer: one load from its ABI slot in
+  the entry block, not one per loop iteration. A word or wider-aligned pointee
+  keeps its guard and its original load point, so no faulting check moves into
+  a previously untaken path.
+- **Checked address homes.** A store through an allocated address register
+  uses `STW/STB (Rn)` directly when that same SSA address already passed its
+  check in the block, as it previously did only for a statically proved one.
+- **Index operands.** O2 copies an allocated word index straight into R6
+  (formerly Os-only and proof-only). With a unit stride and an unsigned or
+  proved index, `ADD/SUB` read the index home itself and R6 is not staged.
+  The original base, carry/borrow and result checks are unchanged.
+- **Machine peepholes** on canonical compiler output, before scheduling:
+  a `MOVE` whose destination the next instruction overwrites unread is
+  deleted; `MOVE Ra,R0` feeding an accumulator operation becomes `FROM Ra`;
+  `FROM Rx / TO Rx` before an operation becomes `WITH Rx`. Each needs a known
+  selector state, no named or relocated byte inside the pattern, and excludes
+  `CMP`, an R0 second operand and a following `TO/FROM`. A private symbol
+  nothing refers to is treated as a layout anchor, not a control-flow entry.
+
+- **Results delivered to R0.** `WITH Rx / op / MOVE Rx,R0` becomes
+  `FROM Rx / op` when a bounded straight-line scan proves Rx is never read
+  again: it is overwritten first, or the function returns. A return ends
+  only R3 and R5-R8; R0/R4 carry results, the private divmod kernels return
+  R1/R2, and R9-R13 belong to the caller. Branches, STOP, real entries and
+  any instruction outside the small modeled set end the scan as "live".
+
+O2 results on Linux (GCC Release), same nine sources, LoROM profile and
+harness as above, Mesen 2.2.1 Linux x64 (`benchmarks/run-mesen.cmake`):
+
+| Workload | CODE bytes | Executed opcodes | Fast-GSU cycles | Cycle change |
+| --- | ---: | ---: | ---: | ---: |
+| `triangle_fill` | 215 → 214 | 26,650 → 26,553 | 170,255 → 169,770 | -0.28% |
+| `horizontal_span` | 127 → 127 | 329 → 329 | 1,142 → 1,142 | +0.00% |
+| `rom_palette_plot` | 302 → 300 | 13,016 → 13,016 | 19,448 → 19,447 | -0.01% |
+| `ram_palette_plot` | 194 → 190 | 2,939 → 2,427 | 4,836 → 4,244 | -12.24% |
+| `memcpy` | 316 → 282 | 7,973 → 3,376 | 10,187 → 5,218 | -48.78% |
+| `function_call` | 180 → 176 | 6,001 → 5,745 | 37,140 → 35,860 | -3.45% |
+| `switch_dense` | 321 → 313 | 1,119 → 1,047 | 7,005 → 6,645 | -5.14% |
+| `switch_sparse` | 324 → 318 | 1,090 → 1,036 | 6,955 → 6,685 | -3.88% |
+| `arithmetic` | 264 → 259 | 12,745 → 11,460 | 24,271 → 21,490 | -11.46% |
+
+No workload grows, executes more opcodes or takes more cycles. `memcpy` also
+drops from 389 to 135 RAM loads. Luna's `--superfx-trace` master-clock column
+agrees with Mesen to within 13 clocks on the seven workloads that do not
+depend on host-seeded RAM (for example 5,213 clocks to STOP for `memcpy` in
+both); the switch and arithmetic cases need the Lua-seeded inputs and were
+timed in Mesen only. These are uncommitted working-tree measurements, not
+release-candidate evidence.
+
+The RAM-execution demos, same sources and hosts, before → after:
+
+| Demo / policy | Payload bytes | GSU cycles | Change | Measured with |
+| --- | ---: | ---: | ---: | --- |
+| Interactive wireframe, O2 | 7,030 → 6,740 | 237,350 → 226,141 | -4.72% | Mesen `benchmark.lua` |
+| Interactive filled, O2 | 7,030 → 6,740 | 656,162 → 601,501 | -8.33% | Mesen `benchmark.lua` |
+| Interactive wireframe, Os | 6,714 → 6,544 | 240,194 → 235,492 | -1.96% | Mesen `benchmark.lua` |
+| Interactive filled, Os | 6,714 → 6,544 | 695,667 → 665,885 | -4.28% | Mesen `benchmark.lua` |
+| Rotating triangle, O2 | 2,280 → 2,182 | 616,249.34 → 593,788.72 mean over 64 poses | -3.64% | Luna `--superfx-trace` |
+| Gem chess default filled, O2 | 16,617 → 15,787 | 27,067,436 → 25,972,661 | -4.04% | Mesen `verify.lua` |
+| Gem chess default wireframe, O2 | 16,617 → 15,787 | 20,789,012 → 19,950,566 | -4.03% | Mesen `verify.lua` |
+| Gem chess, all 18 publications, O2 | 16,617 → 15,787 | 483,585,722 → 464,058,765 | -4.04% | Mesen `verify.lua` |
+| Gem chess default filled, Os | 15,911 → 15,398 | 30,173,645 → 29,400,068 | -2.56% | Mesen `verify.lua` |
+| Gem chess default wireframe, Os | 15,911 → 15,398 | 23,333,760 → 22,657,525 | -2.90% | Mesen `verify.lua` |
+| Gem chess, all 18 publications, Os | 15,911 → 15,398 | 540,444,533 → 526,181,362 | -2.64% | Mesen `verify.lua` |
+
+Gem chess passes the complete Mesen verification before and after at both
+levels (10 camera views, 18 publications, framebuffer/VRAM/PPU, STOP/ABI and
+the negative ROM); every publication improves by 3.98% to 4.08% at O2. Its
+default view is yaw 8, elevation 7, zoom 12. Luna's GO-to-STOP clocks for
+that first O2 render are 26,984,831 → 25,891,793 (4,553,687 → 4,294,287
+executed opcodes), within 0.35% of Mesen.
+Shapes use the fixed pose yaw 8, pitch 5, size 12 (filled: steady state).
+Luna's GO-to-STOP clocks for the first wireframe render are 237,024 →
+225,883, within 0.15% of Mesen. The "before" toolchain was rebuilt from a
+source copy with these changes reverted and reproduces all nine original
+benchmark payload hashes. The rotation row is Luna-only: on this Linux
+Mesen 2.2.1 build `verify.lua` reports `host status=196`/`180` for the
+before and after ROMs alike, while Luna shows the host publishing poses with
+status 0 and matching results, so the Mesen image verification and FPS probe
+were not obtained here. Rotation cycles are GO-to-STOP master clocks from
+Luna's trace, not the Mesen window used for earlier rotation tables: compare
+this row only with itself.
 
 ## What O1 does
 
@@ -671,7 +775,9 @@ bounded machine scheduling. It has no LLVM dependency.
   Both the original base and the complete result span must be legal, and the
   scaled magnitude must fit a word. Numeric wrapping never becomes a guessed
   small interval. Unknown loads/calls, recursive pointer PHIs, over-aligned
-  locals, far/ROM addresses and scaled-index recurrences retain their checks.
+  locals, far/extern ROM addresses and scaled-index recurrences retain their
+  checks. A near ROM access to a ROM object defined by the same object file
+  is proved too (see [ROM table proofs](#rom-table-proofs)).
 - **Bounded multiply selection.** O2/Os use MULT only when both operands are
   proved within -128..127, or UMULT when both are within 0..255. A small product
   alone is insufficient because hardware truncates both inputs. Eligible
@@ -1581,8 +1687,12 @@ the ABI, address spaces or the object format:
   wins, re-emit without optional probe bytes. Uniform initializer loops have
   a separately known small body. Function `@cache` and enclosing explicit
   loop windows suppress automatic rebasing inside their scope; a disjoint
-  unhinted loop may use its own window. Calls, division kernels and nested
-  hardware scopes conservatively fence this selection. O0/O1 do not gain
+  unhinted loop may use its own window. Calls and initializer kernels fence
+  this selection. Nested hardware scopes and inline division kernels do not:
+  LOOP never writes CBR, and a selected enclosing window demotes the
+  division kernel's own CACHE back to its selector-reset NOP (see
+  [nested windows](#nested-hardware-loops-and-division-kernels-in-automatic-cache-windows)).
+  O0/O1 do not gain
   automatic CACHE.
 - **Avoid redundant explicit loop CACHE.** When the header begins with CACHE
   and no body operation can rebase it, internal backedges target a private
@@ -1600,6 +1710,196 @@ rule. RAM instruction fetch can wait for pending RAM operations. The selector's
 fetch-cost proxy is not a cycle oracle: use the calibrated Mesen reports to
 measure the complete instruction/memory/pipeline behavior. See the existing
 [Mesen GSU implementation](https://github.com/nesdev-org/MesenCE/blob/master/Core/SNES/Coprocessors/GSU/Gsu.cpp).
+
+### Nested hardware loops and division kernels in automatic CACHE windows
+
+Two fences on automatic CACHE selection were broader than the hardware
+requires:
+
+- **Nested hardware LOOP.** A loop containing a scoped hardware LOOP was never
+  a candidate, so a row loop around a dynamic-width pixel scope ran its
+  two-byte `loop`/`plot` body from ROM. LOOP only reloads R15 from R13; it never
+  changes CBR. Outer nests are selected before nested candidates and claim
+  their blocks, so one window covers the whole nest. Entry and backedge
+  delay-slot CACHEs of that window share its CBR and never rebase it.
+- **Inline division kernel.** The 16-step kernel converts its guard NOP into
+  its own CACHE. An enclosing loop was therefore never cached; on every outer
+  pass its body was fetched from ROM. The kernel now records that slot. When
+  an enclosing window is selected and contains the slot, the byte goes back
+  to NOP, which also resets the selectors, so size and semantics stay the same.
+  Without a selected enclosing window the kernel keeps its CACHE.
+
+Calls and initializer kernels still fence selection. The explicit-header
+backedge bypass (`@after_cache`) still treats nested hardware scopes and
+division as rebasing. Os uses the same selector; these two changes left every
+measured Os payload (nine workloads, three demos) byte-identical. The later
+[cache-aware Os exchange](#cache-aware-os-exchange) changes Os on purpose.
+
+A remaining, older inefficiency: a constant-trip LOOP entered through its
+setup CACHE and then its trampoline's delay-slot CACHE rebases twice per
+entry when the two anchors fall on different 16-byte lines. That costs cold
+line fills once per entry, not per iteration; `arithmetic` has both anchors
+on one line.
+
+Emulated Mesen timing of the nine-workload suite at O2 (LoROM execution;
+emulated master clocks/fast GSU cycles, `benchmarks/run-mesen.cmake`). The
+other seven workloads produce identical payloads.
+
+| Workload | Payload bytes before → after | Cycles before → after |
+| --- | ---: | ---: |
+| triangle_fill | 214 → 216 | 169,770 → 58,772 (−65.4%) |
+| arithmetic | 259 → 260 | 21,490 → 15,167 (−29.4%) |
+
+The RAM-executed demos were compiled with frozen before/after tools.
+`rotating_triangle` (O2/Os objects) and `interactive_shapes` (O2/Os payloads)
+are byte-identical. `gem_chess` O2 gains automatic CACHE in one function
+(+4 bytes): its first GO→STOP window drops from 15,840,986 to 15,780,137
+master clocks (−0.38%) under Luna, and its Mesen verification still passes.
+Its Os payload is identical.
+`GSUCompactionTests` covers both cases at O2 and Os, from ROM and RAM
+origins: no repeated CBR rebases across a nest, and a cached division loop
+whose uncached fetch count (O2) and rebase count do not grow with the trip
+count.
+
+### ROM table proofs
+
+A read like `palette[i & 7]` from a `rom const` array used to run its full
+near-ROM pointer validation on every access: null, bank range, LoROM `$8000`
+window, offset carry and the same checks again on the result. In
+`rom_palette_plot` that was most of each pixel's cost.
+
+`GSUAddressProof` now gives ROM objects defined by the object being compiled
+the same in-object `Symbol` facts as static RAM objects (separate object IDs,
+never mixed across spaces). An access is proved only when its complete span
+stays inside the object, using the existing masks/byte-cast/induction
+intervals. The facts rest on link-time checks that already exist:
+
+- discld places all DATA directly after CODE inside the payload's one bank
+  (`validatePayload`), so a defined object can neither wrap nor start at
+  offset zero.
+- Every proved ROM read still selects the near ROM bank through
+  `__disco_near_rom_bank`. In such an object, discld rejects any near DATA
+  address outside the selected bank's ROM window (`rom-bank-mismatch`,
+  `rom-data-in-ram` in `LinkerHardeningTests`). RAM-executed payloads
+  therefore cannot link a proved ROM read.
+
+No object-format, linker or ABI change was needed, and ROM proofs never emit
+the static-RAM marker. Extern ROM declarations are unsupported; far ROM pairs
+and `member` addresses into ROM objects are outside the proof. Unbounded
+indices keep every check. `GSUCheckedProofTests` covers the proof domain, the
+removed checks, the retained near-ROM bank relocation and O1-equal execution
+of byte and word tables. `run_checked_proofs_regression.cmake` links O1/O2/Os
+objects and their canonical assembly through discld: the payloads execute
+correctly, and linking at a RAM origin or another `--rom-bank` must fail.
+
+| Level | `rom_palette_plot` bytes | Cycles before → after |
+| --- | ---: | ---: |
+| O2 | 300 → 156 | 19,447 → 5,031 (−74.1%) |
+| Os | 262 → 116 | 21,327 → 25,065 (+17.5%), then 6,427 with the [cache-aware Os exchange](#cache-aware-os-exchange) |
+
+The Os loop is a software loop both before and after. Before, its body
+exceeded 127 bytes, so the backedge was a long `IWT R15` jump whose free
+delay-slot NOP became CACHE. Now the backedge is a short `BRA`; the scheduler
+moves `PLOT` into that slot in the uncached candidate. The cached candidate
+(CACHE in the slot, 6,426 cycles under Luna) has the same total bytes, because
+DATA alignment padding absorbs its extra CODE byte, but it loses Os's speed
+tie-break: that estimate counts loop-weighted bytes and ignores CACHE. The other
+eight `payload.bin` files (O2/Os) and the three demo payloads/objects are
+byte-identical (`cmp`) with and without the ROM proof.
+
+### Cache-aware Os exchange
+
+Os emits each IR/helper policy twice, with and without automatic CACHE, and
+keeps the uncached re-emission unless the cached one wins. A CACHE in a
+delay slot the scheduler could otherwise fill costs a byte, and Os's speed
+estimate (`candidateSpeed`: loop-weighted bytes) did not know CACHE at all, so
+a cached loop always looked one byte slower. Even exact byte ties went to the
+uncached loop.
+
+Os already allows one bounded exchange: at most `max(2, smallest/64)` bytes
+above the smallest candidate for an inclusive estimate at least 25% lower.
+Two changes let CACHE use that same rule; no second definition of "clearly
+faster" exists:
+
+- **Cache credit.** When the selector picks a window for a loop with a proved
+  constant trip count, it records the estimated fetch saving in the same
+  units: 4/5 of the window's loop-weighted bytes (a warm cached byte costs 1
+  clock instead of 5), minus each conservatively counted cold line as 16
+  uncached bytes per entry into the window. The structural weight assumes 64
+  trips per loop level, so a smaller proved count scales the saving by
+  `trips/64`. The callee-inclusive Os estimate subtracts each function's
+  credit; `candidateSpeed` itself is unchanged. Loops whose trip count is only
+  the assumed dynamic estimate earn no credit. They cannot justify bytes on
+  their own, but the choice is per emission, so such a window can still ride
+  along when a constant-trip window in the same emission pays for it.
+- **Whole-program threshold.** The exchange compares the complete emission:
+  the cached one must be at least 25% lower overall and at most
+  `max(2, smallest/64)` bytes larger (about 210 bytes for gem_chess's size).
+  A large program with a single hot loop rarely clears 25%, which is why the
+  demos did not change.
+- **Budgeted re-emission choice.** Both cached-versus-uncached comparisons
+  pass their local smallest size, enabling the exchange rule. O2 has no
+  inclusive estimate and is unaffected (all nine O2 payloads byte-identical).
+
+| Os workload | Payload bytes | Cycles before → after |
+| --- | ---: | ---: |
+| rom_palette_plot | 124 → 124 | 25,065 → 6,427 (−74.4%) |
+| ram_palette_plot | 148 → 149 | 19,640 → 5,240 (−73.3%) |
+| arithmetic | 234 → 235 | 24,601 → 17,269 (−29.8%) |
+
+`memcpy` (a run-time `count` loop) keeps its uncached 238-byte form by design;
+forcing CACHE there would cost 1 byte for 28,460 → 7,000 cycles. The other
+five workloads (`cmp` of `payload.bin`) and the three demos' Os payloads are
+byte-identical; forcing
+every cached alternative would instead have grown gem_chess by 7 bytes and
+interactive_shapes by 2. `GSUSizeOptimizationTests` executes constant-trip
+fixtures whose cached choice costs 0, +1 and +2 bytes (both CODE/DATA padding
+parities), plus a run-time-count loop and a three-trip loop that must not
+execute CACHE. Removing either the constant-trip requirement or the trip
+scaling makes the respective fixture fail.
+
+### Regional values in innermost software loops
+
+Hardware LOOP scopes already load spilled loop-invariant values once into
+R4/R6 when a closed-region proof shows nothing inside uses those registers.
+Innermost software loops lacked this, and Os allocation (static use counts,
+loop weight only as a tie-break) often spills a hot loop's bound. The scaling
+triangle's pixel loop therefore re-read `width` from its frame on every pixel
+(`IBT R3` / `FROM R9` / `TO R3` / `ADD R3` / `LDW`).
+
+The same proof now also covers an innermost software loop when:
+
+- its function has no hardware scope (whose R4/R6 may hold saved R12/R13);
+- its header has exactly one outside predecessor, ending in an unconditional
+  branch to it. The loads go after that edge's PHI copies;
+- R4 holds no allocated value that is live in the loop, and no exit edge
+  carries PHI copies;
+- each candidate repays its per-entry load: the header reads it (so every
+  entry, zero-trip ones included, already paid that read), or every trip
+  reads it outside a PHI and its reload is the FP-relative sequence rather
+  than one short-RAM `LMS`. Values read only on a rare path never qualify.
+
+Scalar comparisons now use a regional home directly (`FROM R11` / `CMP R4`),
+in hardware scopes too, instead of copying it through R0.
+
+| Demo (Luna, mean per GO→STOP window) | Payload bytes | Cycles before → after |
+| --- | ---: | ---: |
+| scaling_triangle, Os (32 frames) | 428 → 429 | 44,920 → 37,161 (−17.3%) |
+| rotating_triangle, Os (32 poses) | 2,154 → 2,158 | 418,895 → 387,863 (−7.4%) |
+
+gem_chess and interactive_shapes (O2/Os), the triangles at O2 and all nine
+benchmark payloads (O2/Os) are byte-identical. A first version without the
+repayment rule cost gem_chess 0.1–0.2% (a short-RAM value read only inside a
+loop that often runs zero trips); the rule removes that case. The two changed
+demos display identical frames and VRAM under Luna at frames 60, 150 and 300.
+Their Mesen verification fails here with the original compiler too (the known
+Linux Mesen issue), so it was not usable. `GSUCompactionTests` checks that
+frame reads stop growing with the inner trip count at O2 and Os (ROM and RAM
+origins); only its Os leg failed before this change. The repayment rule is
+pinned by the gem_chess measurement, not by a unit test. The loads are not
+weighed against bytes: every Os candidate receives them (+1 byte for
+scaling, +4 for rotating). Os remains about 35% (scaling) and 13% (rotating)
+slower than O2.
 
 ### Measured compaction tradeoffs
 

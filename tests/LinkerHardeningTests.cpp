@@ -269,17 +269,19 @@ void runtimeEncodingCases() {
         require(startup.bytes == expected && startup.entry_patch == expected.size()-3,
             "Runtime RAM initializer differs from its golden encoding");
     };
-    check(0,{0},{0xa0,0,0x3e,0xdf,0xaa,0xfe,0xa0,0,0xa1,0,0xa2,1,
-        0x3d,0x31,0xd1,0xe2,0x08,0xfa,1,0xff,0,0,1});
-    check(0,{0x80,0,0x95},{0xa0,0,0x3e,0xdf,0xaa,0xfe,0xa0,0,0xa1,0,0xa2,3,
-        0x3d,0x31,0xd1,0xe2,0x08,0xfa,1,
+    // Word clear: STW (R1) / INC R1 / DEC R2 / BNE -5 / INC R1 (delay slot),
+    // then STB for an odd tail byte. A one-byte image has no word loop.
+    check(0,{0},{0xa0,0,0x3e,0xdf,0xaa,0xfe,0xa0,0,0xa1,0,
+        0x3d,0x31,0xff,0,0,1});
+    check(0,{0x80,0,0x95},{0xa0,0,0x3e,0xdf,0xaa,0xfe,0xa0,0,0xa1,0,0xa2,1,
+        0x31,0xd1,0xe2,0x08,0xfb,0xd1,0x3d,0x31,
         0xa1,0,0xf0,0x80,0,0x31,0xa1,2,0xf0,0x95,0,0x3d,0x31,0xff,0,0,1});
-    check(0xfffe,{0xfe,0xff},{0xa0,0,0x3e,0xdf,0xaa,0xfe,0xa0,0,0xa1,0xfe,0xa2,2,
-        0x3d,0x31,0xd1,0xe2,0x08,0xfa,1,0xa1,0xfe,0xa0,0xfe,0x31,0xff,0,0,1});
+    check(0xfffe,{0xfe,0xff},{0xa0,0,0x3e,0xdf,0xaa,0xfe,0xa0,0,0xa1,0xfe,0xa2,1,
+        0x31,0xd1,0xe2,0x08,0xfb,0xd1,0xa1,0xfe,0xa0,0xfe,0x31,0xff,0,0,1});
 
     for (const auto size : {65535u,65536u}) {
         const auto startup = makeRuntimeInitialization(1,0xfffe,0,Bytes(size,0x12));
-        const auto bound = 27u + 7u * ((static_cast<std::size_t>(size) + 1u) / 2u);
+        const auto bound = 28u + 7u * ((static_cast<std::size_t>(size) + 1u) / 2u);
         require(startup.bytes.size() <= bound && startup.entry_patch == startup.bytes.size()-3,
             "Runtime initializer exceeded its validated emission bound");
         const auto tail = size == 65535u ? Bytes{0xa1,0xfe,0xa0,0x12,0x3d,0x31,0xff,0,0,1}
@@ -318,7 +320,30 @@ void runtimeImageCases() {
             require(runtime.byte(0x700000+(1-bank)*65536+offset) == 0, "Global initializer wrote the other RAM bank");
         }
     }
-    // Count 0 represents exactly 64 KiB: it must wrap once, not skip clearing.
+    // A short RAM image is cleared and filled at $0002 as a second region.
+    const Bytes short_image{0x34,0x12,0,0,0x80,0x00,0x7f};
+    for (const auto bank : {0u,1u}) {
+        auto startup = makeRuntimeInitialization(static_cast<std::uint8_t>(bank),0xfffe,0x0400,image,short_image);
+        const auto destination = 0x8000u + startup.bytes.size();
+        startup.bytes.at(startup.entry_patch) = static_cast<std::uint8_t>(destination);
+        startup.bytes.at(startup.entry_patch+1) = static_cast<std::uint8_t>(destination >> 8);
+        startup.bytes.insert(startup.bytes.end(),{0,1});
+        DiscoGSU::Machine runtime(startup.bytes,0x008000,0x7777,static_cast<std::uint8_t>(1-bank));
+        for (unsigned offset = 0; offset < 0x800; ++offset) runtime.seed(0x700000 + bank*65536 + offset,0xa5,false);
+        runtime.run();
+        for (unsigned offset = 0; offset < 0x800; ++offset) {
+            auto expected = 0xa5;
+            if (offset >= 0x0400 && offset - 0x0400 < image.size()) expected = image[offset - 0x0400];
+            if (offset >= GSUAbi::ShortRamBase && offset - GSUAbi::ShortRamBase < short_image.size())
+                expected = short_image[offset - GSUAbi::ShortRamBase];
+            require(runtime.byte(0x700000+bank*65536+offset) == expected, "Short RAM initialization changed a wrong byte");
+        }
+    }
+    bool rejected = false;
+    try { (void)makeRuntimeInitialization(0,0x2000,0x0400,image,Bytes(GSUAbi::ShortRamCapacity + 2u,0)); }
+    catch (const std::runtime_error&) { rejected = true; }
+    require(rejected, "Runtime initialization accepted a short RAM image larger than the window");
+    // Exactly 64 KiB is 32768 words: the full bank must be cleared, none skipped.
     auto startup = makeRuntimeInitialization(0,0x2000,0,Bytes(65536,0));
     const auto destination = 0x8000u + startup.bytes.size();
     startup.bytes.at(startup.entry_patch) = static_cast<std::uint8_t>(destination);
@@ -394,6 +419,121 @@ void immutablePoolCases(Cases& cases) {
     cases.link("pool-reject-wrong-section", {wrong_section}, {"--host-initialized-globals"}, "Immutable local-array pool requires");
 }
 
+// An object whose code omits null checks for its own static RAM carries a
+// private marker. Only a segment that starts at address 0 can contain null.
+void staticRamProofCases(Cases& cases) {
+    auto proved = entry(); proved.ram_section = {0x42, 0};
+    proved.symbol_table.push_back({"table", SymbolSection::RAM, 0});
+    proved.symbol_table.push_back({GSUAbi::StaticRamProofSymbol, SymbolSection::RAM, 0});
+    const std::vector<std::string> host{"--host-initialized-globals"};
+    auto at = [&](std::string origin) { auto options = host; options.push_back("--ram-origin"); options.push_back(origin); return options; };
+    cases.link("proof-ram-origin-zero", {proved}, at("0"), "static RAM starts at address 0");
+    require(cases.link("proof-ram-origin-two", {proved}, at("2")).size() == 2, "Nonzero static RAM was rejected for a proved object");
+    cases.link("proof-default-origin", {proved}, host);
+    auto unmarked = proved; unmarked.symbol_table.pop_back();
+    cases.link("unproved-ram-origin-zero", {unmarked}, at("0"));
+    // The marker constrains the marked object's own segment, not the link.
+    auto later = proved; later.symbol_table[0].name = "other_main"; later.symbol_table[1].name = "other_table";
+    cases.link("proof-after-empty-ram", {entry(), later}, at("0"), "static RAM starts at address 0");
+    auto first_ram = unmarked; first_ram.ram_section = {0, 0};
+    cases.link("proof-after-static-ram", {first_ram, later}, at("0"));
+}
+
+// A static stack bound is valid only for the runtime entering this object's
+// otherwise unreferenced main, with the bound above the final stack floor.
+void staticStackBoundCases(Cases& cases) {
+    auto bounded = entry();
+    bounded.code_section = {0x00, 0x01, 0x00, 0x01};
+    bounded.symbol_table.push_back({"other", SymbolSection::CODE, 2});
+    bounded.symbol_table.push_back({GSUAbi::StaticStackBoundPrefix + std::string("64"), SymbolSection::RAM, 0});
+    const auto runtime = [](const std::string& stack) {
+        return std::vector<std::string>{"--init-runtime", "--stack-pointer", stack};
+    };
+    cases.link("stack-bound-runtime", {bounded}, runtime("0x3000"));
+    cases.link("stack-bound-exact", {bounded}, runtime("0x40"));
+    cases.link("stack-bound-short", {bounded}, runtime("0x3e"), "leaves only 62 bytes above the stack floor");
+    cases.link("stack-bound-no-runtime", {bounded}, {}, "link with --init-runtime");
+    cases.link("stack-bound-host-globals", {bounded}, {"--host-initialized-globals"}, "link with --init-runtime");
+    auto entry_options = runtime("0x3000"); entry_options.insert(entry_options.end(), {"--entry", "other"});
+    cases.link("stack-bound-other-entry", {bounded}, entry_options, "runtime entry is not that object's main");
+    // Static RAM raises the floor the bound is measured from.
+    auto with_ram = bounded; with_ram.ram_section.assign(16, 0);
+    // Floor = RAM end rounded to a word: 0x10 + 16 = 0x20, so 0x60 fits 64 exactly.
+    auto ram_options = runtime("0x60"); ram_options.insert(ram_options.end(), {"--ram-origin", "0x10"});
+    cases.link("stack-bound-ram-floor", {with_ram}, ram_options);
+    ram_options = runtime("0x5e"); ram_options.insert(ram_options.end(), {"--ram-origin", "0x20"});
+    cases.link("stack-bound-ram-short", {with_ram}, ram_options, "leaves only 46 bytes above the stack floor");
+    // main must not be reachable except through the runtime's jump.
+    auto caller = entry();
+    caller.symbol_table[0].name = "caller";
+    caller.code_section = {0xff, 0, 0, 0x01};
+    caller.relocation_table.push_back({"main", SymbolSection::CODE, 0, RelocationType::ADDR16_JAL});
+    cases.link("stack-bound-main-called", {bounded, caller}, runtime("0x3000"), "only the runtime may enter it");
+    auto self = bounded;
+    self.code_section = {0xff, 0, 0, 0x01};
+    self.symbol_table[1].offset = 3;
+    self.relocation_table.push_back({"main", SymbolSection::CODE, 0, RelocationType::ADDR16_IWT});
+    cases.link("stack-bound-main-jumped", {self}, runtime("0x3000"), "only the runtime may enter it");
+    // The bound constrains its own object's main, not another object's.
+    auto other_main = bounded;
+    other_main.symbol_table[0].name = "not_main";
+    cases.link("stack-bound-foreign-main", {other_main, entry()}, runtime("0x3000"), "runtime entry is not that object's main");
+}
+
+// Short RAM: every object's section from $0002 in link order, word-aligned;
+// LMS/SMS operands receive the word index, and every overlap is rejected.
+void shortRamCases(Cases& cases) {
+    const auto shortObject = [](const std::string& name, std::size_t bytes, std::uint32_t offset) {
+        ObjectFile object;
+        object.code_section = {0x3d, 0xa5, 0x00, 0x3e, 0xa7, 0x00, 0x00, 0x01};
+        object.symbol_table.push_back({name, SymbolSection::CODE, 0});
+        object.short_ram_section.assign(bytes, 0);
+        object.symbol_table.push_back({"\x01" "slot", SymbolSection::SHORT_RAM, offset});
+        object.relocation_table.push_back({"\x01" "slot", SymbolSection::CODE, 1, RelocationType::ADDR8_SHORT_RAM});
+        object.relocation_table.push_back({"\x01" "slot", SymbolSection::CODE, 4, RelocationType::ADDR8_SHORT_RAM});
+        return object;
+    };
+    const std::vector<std::string> host{"--host-initialized-globals"};
+    // Odd-sized first section: the second starts at $0002 + 6 (aligned).
+    const auto first = shortObject("main", 5, 4), second = shortObject("other", 4, 2);
+    const auto payload = cases.link("short-ram-placement", {first, second}, host);
+    require(payload.size() == 16 && payload.at(2) == 3 && payload.at(5) == 3 && payload.at(10) == 5 && payload.at(13) == 5,
+        "Short RAM operands do not hold each slot's word index ($0006, $000A)");
+    // A global short RAM symbol resolves for ADDR16_RAM users as well.
+    auto exported = shortObject("main", 4, 2);
+    exported.symbol_table.push_back({"window", SymbolSection::SHORT_RAM, 2});
+    auto user = entry(); user.symbol_table[0].name = "user";
+    user.code_section = {0xf3, 0, 0, 0x01};
+    user.relocation_table.push_back({"window", SymbolSection::CODE, 0, RelocationType::ADDR16_RAM});
+    const auto both = cases.link("short-ram-global", {exported, user}, host);
+    require(both.size() == 12 && both.at(9) == 0x04 && both.at(10) == 0x00, "ADDR16_RAM did not resolve a short RAM symbol");
+    cases.link("short-ram-needs-init", {first}, {}, "require --init-runtime or --host-initialized-globals");
+    cases.link("short-ram-runtime", {first}, {"--init-runtime", "--stack-pointer", "0x2000"});
+    cases.link("short-ram-stack", {first, second}, {"--init-runtime", "--stack-pointer", "0x000a"},
+        "Short RAM must end below the initial stack pointer");
+    auto big = shortObject("main", 300, 0), bigger = shortObject("other", 300, 0);
+    cases.link("short-ram-overflow", {big, bigger}, host, "-byte LMS/SMS window ($0002-$01FF)");
+    auto with_ram = first; with_ram.ram_section.assign(4, 0);
+    auto low_ram = host; low_ram.insert(low_ram.end(), {"--ram-origin", "0x0006"});
+    cases.link("short-ram-static-overlap", {with_ram}, low_ram, "Static RAM overlaps the short RAM window");
+    low_ram = host; low_ram.insert(low_ram.end(), {"--ram-origin", "0x0008"});
+    cases.link("short-ram-static-above", {with_ram}, low_ram);
+    auto framed = first;
+    framed.config.bitmap.enabled = true; framed.config.bitmap.height = 192; framed.config.bitmap.base = 0;
+    cases.link("short-ram-bitmap-zero", {framed}, host, "Bitmap framebuffer overlaps the short RAM window");
+    framed.config.bitmap.base = 0x400;
+    cases.link("short-ram-bitmap-above", {framed}, host);
+    auto origin = host; origin.insert(origin.end(), {"--origin", "0x700000"});
+    cases.link("short-ram-payload", {first}, origin, "Short RAM overlaps the linked payload");
+    // The word index reaches only even addresses below $0200.
+    auto odd = first; odd.symbol_table[1].offset = 3;
+    cases.link("short-ram-odd", {odd}, host, "even near RAM word below $0200");
+    auto far = first;
+    far.ram_section.assign(2, 0);
+    far.symbol_table[1] = {"\x01" "slot", SymbolSection::RAM, 0};
+    cases.link("short-ram-ordinary-target", {far}, host, "even near RAM word below $0200");
+}
+
 void malformedCases(const std::filesystem::path& root) {
     const auto object = root / "malformed.o", output = root / "malformed.bin";
     const Bytes sentinel{0x95, 0x42}; writeBytes(output, sentinel);
@@ -435,7 +575,8 @@ int main() {
     try {
         TestTempDirectory temporary("linker-tests"); Cases cases(temporary.path());
         relocationCases(cases); runtimeCases(cases); runtimeEncodingCases(); runtimeImageCases(); metadataCases(cases); malformedCases(temporary.path());
-        immutablePoolCases(cases); aggregateBudgetCase(temporary.path());
+        immutablePoolCases(cases); staticRamProofCases(cases); staticStackBoundCases(cases); shortRamCases(cases);
+        aggregateBudgetCase(temporary.path());
         temporary.cleanup();
         return 0;
     } catch (const std::exception& error) {

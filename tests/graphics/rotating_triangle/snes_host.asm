@@ -95,6 +95,8 @@ Reset:
   lda #$00
   pha
   plb
+  ; Keep the status mailbox valid while multi-frame display setup is running.
+  sta.l TEST_STATUS
   stz $4200
   stz $420B
   stz $420C

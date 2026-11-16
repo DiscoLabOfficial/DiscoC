@@ -226,6 +226,7 @@ Unknown tables/keys and duplicate definitions are errors.
 | `target.gsu` | `rom_bank` | Execution ROM bank, or `0` for RAM execution; accessible ROM bank |
 | `target.gsu` | `stack_pointer` | `0x2000`; even value in `0x0008..0xFFFE`, used with startup |
 | `target.gsu` | `initialize_runtime` | Alias for `runtime.initialize`; do not specify both |
+| `target.gsu` | `short_ram` | `false`; with startup entering `main`, static-frame word slots use `LMS`/`SMS` in `$0002-$01FF`, shared evenly by the sources; keep the bitmap at `$0400` or above |
 | `target.spc700` | `origin` | Optional 16-bit future-linker setting; not applied by frontend-only checks |
 | `runtime` | `initialize` | `false`; initialize data/stack and enter `entry` |
 | `runtime` | `entry` | `main`; exported CODE symbol, used with startup |

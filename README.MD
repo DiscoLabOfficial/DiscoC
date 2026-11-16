@@ -10,13 +10,22 @@ It is **not an ISO C implementation**.
 The toolchain is written in C++23, with an experimental C++14 DOS cross-build.
 SuperFX programs can be compiled into real SNES execution payloads without LLVM.
 
-> **Experimental — [v0.2.0 is published](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.2.0).**
-> The release retains explicit `-O0`, `-O1`, `-O2`, and `-Os` policies.
+> **Experimental — source version 0.3.0 is in preparation, unpublished.**
+> The compiler retains explicit `-O0`, `-O1`, `-O2`, and `-Os` policies.
 > The language remains Baseline 0.1; syntax, ABI, and object format may change
 > before 1.0. Generated code is not guaranteed to be optimal.
 > A linked `.bin` is a fixed-origin GSU payload, **not a complete SNES ROM**.
 
-## Download v0.2.0
+## Version 0.3.0 preparation
+
+This source update adds checked GSU address and stack proofs, optional short
+RAM frames, backend optimization improvements, and revised SNES renderers.
+Read the [0.3.0 release notes](docs/releases/v0.3.0/release-notes.md) and
+[validation record](docs/releases/v0.3.0/validation.md) for compatibility,
+fresh functional benchmarks and the remaining emulator/platform limits.
+No 0.3.0 packages or tag have been published by this preparation.
+
+## Published v0.2.0 downloads
 
 Native tools: [Windows MSVC AMD64](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/discoc-v0.2.0-windows-msvc-AMD64.zip),
 [Windows MinGW AMD64](https://github.com/DiscoLabOfficial/DiscoC/releases/download/v0.2.0/discoc-v0.2.0-windows-mingw-AMD64.zip),

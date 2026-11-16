@@ -238,7 +238,7 @@ emu.addMemoryCallback(guard(function(_,status)
     assert(emu.read16(0x1C,emu.memType.snesWorkRam)>=0x8000,"CACHE outside payload")
     for address=0,32767 do
         local value=planar[address+1]
-        assert(emu.read(address,emu.memType.gsuWorkRam)==value,string.format("framebuffer $%04X state=%d/%d/%d/%d",address,state.yaw,state.pitch,state.size,state.mode))
+        assert(emu.read(0x400+address,emu.memType.gsuWorkRam)==value,string.format("framebuffer $%04X state=%d/%d/%d/%d",address,state.yaw,state.pitch,state.size,state.mode))
         assert(emu.read(address,emu.memType.snesVideoRam)==value,string.format("VRAM $%04X",address))
     end
     assert(emu.read(0,emu.memType.snesSpriteRam)==32 and

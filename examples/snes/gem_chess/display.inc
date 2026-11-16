@@ -63,7 +63,8 @@ PaletteByte:
 upload_scene:
   rep #$20
   .ACCU 16
-  stz DMA_SOURCE
+  lda #FRAMEBUFFER_BASE
+  sta DMA_SOURCE
   stz DMA_CHUNKS
   lda ACTIVE_BUFFER
   eor #1
@@ -108,7 +109,7 @@ UploadChunk:
   adc #$0800
   sta DMA_DESTINATION
   lda DMA_SOURCE
-  cmp #$6000
+  cmp #FRAMEBUFFER_END
   sep #$20
   .ACCU 8
   bne UploadChunk

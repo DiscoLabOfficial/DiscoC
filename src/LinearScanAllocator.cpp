@@ -486,6 +486,10 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
     IRControlFlow cfg(function);
     std::vector<std::size_t> begin(function.blocks.size()), end(function.blocks.size());
     std::map<std::uint32_t, std::uint64_t> weight;
+    // Os ranks by static bytes, but values that tie there can still differ
+    // by orders of magnitude in executed reloads. Loop-weighted uses break
+    // those ties without changing the size-first primary order.
+    std::map<std::uint32_t, std::uint64_t> hot_weight;
     std::set<std::uint32_t> far;
     std::size_t position = 0;
     for (const auto& block : function.blocks) {
@@ -505,9 +509,12 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
     const auto touch = [&](std::size_t point, IRValueId value, unsigned depth, bool use) {
         auto& location = m_locations.at(value.value);
         location.start = std::min(location.start, point); location.end = std::max(location.end, point);
-        if (use) weight[value.value] += (size_policy ? 1 : GSUCostModel::blockWeight(depth)) * (cost_priority ?
+        if (!use) return;
+        weight[value.value] += (size_policy ? 1 : GSUCostModel::blockWeight(depth)) * (cost_priority ?
             size_policy ? GSUCostModel::spillLoad(-2).fetch_bytes - GSUCostModel::copy().fetch_bytes :
             GSUCostModel::spillLoad(-2).pressureScore() - GSUCostModel::copy().pressureScore() : 1);
+        auto& hot = hot_weight[value.value];
+        hot = GSUCost::saturatedAdd(hot, GSUCostModel::blockWeight(depth));
     };
     for (const auto& block : function.blocks) {
         const auto b = block.id.value;
@@ -570,9 +577,9 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
     std::vector<std::uint8_t> registers;
     for (const auto reg : allocatable_registers) {
         // R0/R1/R3 stay backend scratch, R6 stays the cross-value temporary,
-        // and R9-R13/R15 stay ABI or hardware registers. The caller decides
-        // which of R2/R4/R14 are actually free in this function.
-        if (reg != 2 && reg != 4 && reg != 5 && reg != 7 && reg != 8 && reg != 14)
+        // and R10/R12/R13/R15 stay ABI or hardware registers. The caller
+        // decides which of R2/R4/R9/R11/R14 are actually free in this function.
+        if (reg != 2 && reg != 4 && reg != 5 && reg != 7 && reg != 8 && reg != 9 && reg != 11 && reg != 14)
             throw std::runtime_error("Global allocator: register has a fixed GSU/ABI role.");
         if (std::find(registers.begin(), registers.end(), reg) == registers.end()) registers.push_back(reg);
     }
@@ -581,6 +588,8 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
     for (const auto& entry : m_locations) if (!entry.second.rematerializable && !far.count(entry.first) && weight.count(entry.first)) ordered.push_back(entry.first);
     std::sort(ordered.begin(), ordered.end(), [&](std::uint32_t a, std::uint32_t b) {
         if (weight.at(a) != weight.at(b)) return weight.at(a) > weight.at(b);
+        const auto hot_a = hot_weight.count(a) ? hot_weight.at(a) : 0, hot_b = hot_weight.count(b) ? hot_weight.at(b) : 0;
+        if (size_policy && hot_a != hot_b) return hot_a > hot_b;
         const bool a_induction = inductions.count(a) != 0, b_induction = inductions.count(b) != 0;
         if (a_induction != b_induction) return a_induction;
         if (m_locations.at(a).start != m_locations.at(b).start) return m_locations.at(a).start < m_locations.at(b).start;
@@ -658,6 +667,8 @@ void LinearScanAllocator::runGlobalImpl(const IRFunction& function,
             if (reg == 5) return 0;
             if (reg == 7) return 1;
             if (reg == 8) return 2;
+            // R9 (frameless functions only) costs a save in framed callers.
+            if (reg == 9) return 1000;
             return 100 + static_cast<int>(reg);
         };
         std::sort(choices.begin(), choices.end(), [&](std::uint8_t a, std::uint8_t b) {

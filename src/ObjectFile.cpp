@@ -1,4 +1,5 @@
 #include "ObjectFile.hpp"
+#include "ABI.hpp"
 #include "GSUCodeLayout.hpp"
 #include <algorithm>
 #include <limits>
@@ -100,8 +101,57 @@ void ObjectFile::read_vec(std::istream& in, std::vector<T>& vec,
 
 // Main I/O Methods
 
+bool ObjectFile::hasStaticRamProof() const {
+    return std::any_of(symbol_table.begin(), symbol_table.end(),
+        [](const SymbolEntry& symbol) { return symbol.name == GSUAbi::StaticRamProofSymbol; });
+}
+
+namespace {
+bool staticStackMarker(const std::string& name) {
+    const std::string prefix(GSUAbi::StaticStackBoundPrefix);
+    return name.size() > prefix.size() && name.compare(0, prefix.size(), prefix) == 0;
+}
+// Canonical decimal 1..65535 only, so equal bounds have one spelling.
+std::uint32_t staticStackValue(const std::string& name) {
+    const auto digits = name.substr(std::string(GSUAbi::StaticStackBoundPrefix).size());
+    if (digits.empty() || digits.size() > 5 || digits.front() == '0') return 0;
+    std::uint32_t value = 0;
+    for (const char c : digits) {
+        if (c < '0' || c > '9') return 0;
+        value = value * 10u + static_cast<std::uint32_t>(c - '0');
+    }
+    return value <= 65535u ? value : 0;
+}
+} // namespace
+
+std::uint32_t ObjectFile::staticStackBound() const {
+    for (const auto& symbol : symbol_table)
+        if (staticStackMarker(symbol.name)) return staticStackValue(symbol.name);
+    return 0;
+}
+
+bool ObjectFile::usesShortRam() const {
+    return !short_ram_section.empty() ||
+        std::any_of(symbol_table.begin(), symbol_table.end(),
+            [](const SymbolEntry& symbol) { return symbol.section == SymbolSection::SHORT_RAM; }) ||
+        std::any_of(relocation_table.begin(), relocation_table.end(),
+            [](const RelocationEntry& relocation) { return relocation.type == RelocationType::ADDR8_SHORT_RAM; });
+}
+
 void ObjectFile::validate() const {
     GSUCodeLayout::alignment(*this);
+    unsigned stack_markers = 0;
+    for (const auto& symbol : symbol_table) {
+        if (staticStackMarker(symbol.name)) {
+            if (config.target != TargetKind::GSU || symbol.section != SymbolSection::RAM || symbol.offset != 0 ||
+                !staticStackValue(symbol.name) || ++stack_markers > 1)
+                throw std::runtime_error("Invalid GSU static stack-bound marker.");
+            continue;
+        }
+        if (symbol.name != GSUAbi::StaticRamProofSymbol) continue;
+        if (config.target != TargetKind::GSU || symbol.section != SymbolSection::RAM || symbol.offset != 0)
+            throw std::runtime_error("Invalid GSU static-RAM proof marker.");
+    }
     if (static_cast<std::uint8_t>(config.target) > static_cast<std::uint8_t>(TargetKind::SPC700) ||
         static_cast<std::uint8_t>(config.mapping) > static_cast<std::uint8_t>(MemoryMapping::HiROM))
         throw std::runtime_error("Object file: invalid target configuration.");
@@ -110,9 +160,12 @@ void ObjectFile::validate() const {
     if (!data_alignment || data_alignment > 128 || (data_alignment & (data_alignment - 1)) ||
         !ram_alignment || ram_alignment > 128 || (ram_alignment & (ram_alignment - 1)))
         throw std::runtime_error("Object file: section alignment must be a power of two in 1..128.");
-    if (code_section.size() > MaxSectionBytes || data_section.size() > MaxSectionBytes || ram_section.size() > 65536) {
+    if (code_section.size() > MaxSectionBytes || data_section.size() > MaxSectionBytes || ram_section.size() > 65536 ||
+        short_ram_section.size() > GSUAbi::ShortRamCapacity) {
         throw std::runtime_error("Object file section exceeds the supported size limit.");
     }
+    if (usesShortRam() && config.target != TargetKind::GSU)
+        throw std::runtime_error("Object file: short RAM requires GSU.");
     if (symbol_table.size() > MaxSymbolCount || relocation_table.size() > MaxRelocationCount) {
         throw std::runtime_error("Object file table exceeds the supported entry limit.");
     }
@@ -126,7 +179,8 @@ void ObjectFile::validate() const {
         }
     };
     std::uint64_t serialized_bytes = 35u + (config.bitmap.enabled ? 10u : 0u) +
-        static_cast<std::uint64_t>(code_section.size()) + data_section.size() + ram_section.size();
+        static_cast<std::uint64_t>(code_section.size()) + data_section.size() + ram_section.size() +
+        (usesShortRam() ? 4u + short_ram_section.size() : 0u);
     const auto charge = [&](std::uint64_t bytes) {
         if (serialized_bytes > MaxObjectBytes || bytes > MaxObjectBytes - serialized_bytes)
             throw std::runtime_error("Object file exceeds the supported total size limit.");
@@ -137,10 +191,11 @@ void ObjectFile::validate() const {
         std::set<std::string> names;
         for (const auto& symbol : symbol_table) {
             valid_name(symbol.name);
-            if (static_cast<std::uint8_t>(symbol.section) > static_cast<std::uint8_t>(SymbolSection::RAM))
+            if (static_cast<std::uint8_t>(symbol.section) > static_cast<std::uint8_t>(SymbolSection::SHORT_RAM))
                 throw std::runtime_error("Object file: invalid symbol section.");
             const auto& section = symbol.section == SymbolSection::CODE ? code_section :
-                symbol.section == SymbolSection::DATA ? data_section : ram_section;
+                symbol.section == SymbolSection::DATA ? data_section :
+                symbol.section == SymbolSection::RAM ? ram_section : short_ram_section;
             if (symbol.offset > section.size())
                 throw std::runtime_error("Object file has a symbol outside its section.");
             charge(9u + symbol.name.size());
@@ -155,12 +210,16 @@ void ObjectFile::validate() const {
         for (const auto& relocation : relocation_table) {
             if (relocation.target_symbol_name == GSUCodeLayout::CacheAlignmentSymbol)
                 throw std::runtime_error("Object file: CACHE layout hint is not an addressable symbol.");
+            if (relocation.target_symbol_name == GSUAbi::StaticRamProofSymbol)
+                throw std::runtime_error("Object file: static-RAM proof marker is not an addressable symbol.");
+            if (staticStackMarker(relocation.target_symbol_name))
+                throw std::runtime_error("Object file: static stack-bound marker is not an addressable symbol.");
             valid_name(relocation.target_symbol_name);
             validate_relocation(relocation, *this);
             charge(10u + relocation.target_symbol_name.size());
             const auto begin = static_cast<std::uint64_t>(relocation.patch_offset) + 1;
-            spans.push_back({relocation.section_to_patch, begin,
-                begin + (relocation.type == RelocationType::ADDR24_BANK ? 1u : 2u)});
+            spans.push_back({relocation.section_to_patch, begin, begin + (relocation.type == RelocationType::ADDR24_BANK ||
+                relocation.type == RelocationType::ADDR8_SHORT_RAM ? 1u : 2u)});
         }
         std::sort(spans.begin(), spans.end(), [](const Span& left, const Span& right) {
             return left.section != right.section ? left.section < right.section : left.begin < right.begin;
@@ -185,7 +244,8 @@ void ObjectFile::write(const std::string& path) {
 
     // Magic Header
     out.write("DISCO", 5);
-    const auto version = CurrentFormatVersion;
+    const std::uint8_t version = usesShortRam() ? ShortRamFormatVersion : staticStackBound() ? StaticStackFormatVersion :
+        hasStaticRamProof() ? StaticRamProofFormatVersion : BaselineFormatVersion;
     write_u8(out, version);
 
     const auto target = static_cast<std::uint8_t>(config.target);
@@ -208,6 +268,7 @@ void ObjectFile::write(const std::string& path) {
     write_vec(out, code_section);
     write_vec(out, data_section);
     write_vec(out, ram_section);
+    if (version >= ShortRamFormatVersion) write_vec(out, short_ram_section);
 
     // Write symbol table
     uint32_t sym_count = static_cast<uint32_t>(symbol_table.size());
@@ -308,6 +369,7 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
     read_vec(in, obj.code_section, MaxSectionBytes, "code section");
     read_vec(in, obj.data_section, MaxSectionBytes, "data section");
     if (version >= 5) read_vec(in, obj.ram_section, 65536u, "RAM section");
+    if (version >= ShortRamFormatVersion) read_vec(in, obj.short_ram_section, GSUAbi::ShortRamCapacity, "short RAM section");
 
     const uint32_t sym_count = read_u32_le(in, "symbol count");
     if (sym_count > MaxSymbolCount || sym_count > remaining_bytes(in) / 10u) {
@@ -322,13 +384,16 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
         obj.symbol_table[i].name = read_string(in, "symbol name");
         uint8_t section = 0;
         section = read_u8(in, "symbol section");
-        if (section > static_cast<uint8_t>(version >= 5 ? SymbolSection::RAM : SymbolSection::DATA)) {
+        if (section > static_cast<uint8_t>(version >= ShortRamFormatVersion ? SymbolSection::SHORT_RAM :
+                version >= 5 ? SymbolSection::RAM : SymbolSection::DATA)) {
             throw std::runtime_error("Object file has an invalid symbol section: " + path);
         }
         obj.symbol_table[i].section = static_cast<SymbolSection>(section);
         obj.symbol_table[i].offset = read_u32_le(in, "symbol offset");
-        const auto section_size = obj.symbol_table[i].section == SymbolSection::CODE
-            ? obj.code_section.size() : obj.symbol_table[i].section == SymbolSection::DATA ? obj.data_section.size() : obj.ram_section.size();
+        const auto kind = obj.symbol_table[i].section;
+        const auto section_size = kind == SymbolSection::CODE ? obj.code_section.size() :
+            kind == SymbolSection::DATA ? obj.data_section.size() :
+            kind == SymbolSection::RAM ? obj.ram_section.size() : obj.short_ram_section.size();
         if (obj.symbol_table[i].offset > section_size) {
             throw std::runtime_error("Object file has a symbol outside its section: " + path);
         }
@@ -353,7 +418,8 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
         obj.relocation_table[i].section_to_patch = static_cast<SymbolSection>(section);
         obj.relocation_table[i].patch_offset = read_u32_le(in, "relocation offset");
         const uint8_t type = read_u8(in, "relocation type");
-        if (type > static_cast<uint8_t>(version >= 5 ? RelocationType::ADDR16_RAM : RelocationType::ADDR24_OFFSET)) {
+        if (type > static_cast<uint8_t>(version >= ShortRamFormatVersion ? RelocationType::ADDR8_SHORT_RAM :
+                version >= 5 ? RelocationType::ADDR16_RAM : RelocationType::ADDR24_OFFSET)) {
             throw std::runtime_error("Object file has an invalid relocation type: " + path);
         }
         obj.relocation_table[i].type = static_cast<RelocationType>(type);
@@ -364,6 +430,14 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
         throw std::runtime_error("Object file has trailing data: " + path);
     }
     obj.validate();
+    // Writers emit the marker only in version 8, which older linkers refuse.
+    if (version < StaticRamProofFormatVersion && obj.hasStaticRamProof())
+        throw std::runtime_error("Object file has a static-RAM proof marker before format version 8: " + path);
+    if (version < StaticStackFormatVersion && obj.staticStackBound())
+        throw std::runtime_error("Object file has a static stack-bound marker before format version 9: " + path);
+    // Section/enum bounds above already confine short RAM to version 10.
+    if (version >= ShortRamFormatVersion && !obj.usesShortRam())
+        throw std::runtime_error("Object file uses format version 10 without short RAM: " + path);
     return obj;
 }
 
@@ -371,15 +445,23 @@ void ObjectFile::validate_relocation(const RelocationEntry& relocation,
                                      const ObjectFile& object) {
     if (static_cast<std::uint8_t>(relocation.section_to_patch) > static_cast<std::uint8_t>(SymbolSection::DATA))
         throw std::runtime_error("Object file: invalid relocation section.");
-    if (static_cast<std::uint8_t>(relocation.type) > static_cast<std::uint8_t>(RelocationType::ADDR16_RAM))
+    if (static_cast<std::uint8_t>(relocation.type) > static_cast<std::uint8_t>(RelocationType::ADDR8_SHORT_RAM))
         throw std::runtime_error("Object file: invalid relocation type.");
     if (relocation.target_symbol_name.empty()) {
         throw std::runtime_error("Object file has a relocation without a target symbol.");
     }
     const auto& section = relocation.section_to_patch == SymbolSection::CODE
         ? object.code_section : object.data_section;
-    const std::uint64_t patch_size = relocation.type == RelocationType::ADDR24_BANK ? 2u : 3u;
+    const bool byte_operand = relocation.type == RelocationType::ADDR24_BANK || relocation.type == RelocationType::ADDR8_SHORT_RAM;
+    const std::uint64_t patch_size = byte_operand ? 2u : 3u;
     if (static_cast<std::uint64_t>(relocation.patch_offset) + patch_size > section.size()) {
         throw std::runtime_error("Object file relocation extends beyond its section.");
     }
+    // The operand is a word index only in ALT1/ALT2 + IBT-opcode form; any
+    // other placement would patch an unrelated instruction byte.
+    if (relocation.type == RelocationType::ADDR8_SHORT_RAM &&
+        (object.config.target != TargetKind::GSU || relocation.section_to_patch != SymbolSection::CODE ||
+         relocation.patch_offset == 0 || (section[relocation.patch_offset] & 0xf0u) != 0xa0u ||
+         (section[relocation.patch_offset - 1] != 0x3d && section[relocation.patch_offset - 1] != 0x3e)))
+        throw std::runtime_error("Object file: short RAM relocation must patch an LMS/SMS operand.");
 }

@@ -74,6 +74,11 @@ Instruction decodeAlt(const std::vector<std::uint8_t>& code, std::size_t offset)
     else if (prefix == 0x3d && op == 0x4c) result.text = "rpix";
     else if (prefix == 0x3d && op == 0x4e) result.text = "cmode";
     else if (prefix == 0x3d && op == 0x96) result.text = "div2";
+    else if (op >= 0xa0 && op <= 0xaf && prefix != 0x3f && offset + 2 < code.size()) {
+        result.size = 3;
+        const auto address = hex(static_cast<std::uint32_t>(code[offset + 2]) * 2u, 3);
+        result.text = prefix == 0x3d ? "lms " + reg(n) + ", (" + address + ")" : "sms (" + address + "), " + reg(n);
+    }
     return result;
 }
 } // namespace
@@ -89,6 +94,9 @@ std::string AssemblyGenerator::generate() const {
         << "\n.define __DISCO_DATA_ALIGNMENT " << static_cast<unsigned>(m_object.data_alignment)
         << "\n.define __DISCO_RAM_ALIGNMENT " << static_cast<unsigned>(m_object.ram_alignment) << '\n';
     if (GSUCodeLayout::alignment(m_object) == 16) out << ".define __DISCO_CODE_ALIGNMENT 16\n";
+    if (m_object.hasStaticRamProof()) out << ".define __DISCO_STATIC_RAM_NONNULL 1\n";
+    const auto stack_bound = m_object.staticStackBound();
+    if (stack_bound) out << ".define __DISCO_STATIC_STACK_BOUND " << stack_bound << '\n';
     m_object.config.bitmap.validate();
     if (m_object.config.bitmap.enabled) {
         out << "; SNES host writes SCBR and SCMR before starting GSU; OR SCMR with bus ownership bits.\n"
@@ -98,7 +106,7 @@ std::string AssemblyGenerator::generate() const {
     std::set<std::string> names;
     for (const auto& symbol : m_object.symbol_table) names.insert(symbol.name);
     std::map<std::string, std::string> renamed;
-    std::map<std::size_t, std::vector<std::string>> code_labels, data_labels, ram_labels;
+    std::map<std::size_t, std::vector<std::string>> code_labels, data_labels, ram_labels, short_labels;
     std::size_t serial = 0;
     const auto uniqueName = [&]() {
         std::string name;
@@ -108,7 +116,8 @@ std::string AssemblyGenerator::generate() const {
     };
     for (const auto& symbol : m_object.symbol_table) {
         if (symbol.name.empty()) throw std::runtime_error("Assembly export: empty symbol name.");
-        if (symbol.name == GSUCodeLayout::CacheAlignmentSymbol) continue;
+        if (symbol.name == GSUCodeLayout::CacheAlignmentSymbol || symbol.name == GSUAbi::StaticRamProofSymbol) continue;
+        if (stack_bound && symbol.name == GSUAbi::StaticStackBoundPrefix + std::to_string(stack_bound)) continue;
         const bool local = symbol.name.front() == '\x01';
         auto name = local ? uniqueName() : symbol.name;
         if (local && symbol.name.compare(0, std::string(GSUAbi::ImmutablePoolPrefix).size(), GSUAbi::ImmutablePoolPrefix) == 0) {
@@ -119,15 +128,19 @@ std::string AssemblyGenerator::generate() const {
             names.insert(name);
         }
         renamed.emplace(symbol.name, name);
-        auto& labels = symbol.section == SymbolSection::CODE ? code_labels : symbol.section == SymbolSection::DATA ? data_labels : ram_labels;
-        const auto size = symbol.section == SymbolSection::CODE ? m_object.code_section.size() : symbol.section == SymbolSection::DATA ? m_object.data_section.size() : m_object.ram_section.size();
+        auto& labels = symbol.section == SymbolSection::CODE ? code_labels : symbol.section == SymbolSection::DATA ? data_labels :
+            symbol.section == SymbolSection::RAM ? ram_labels : short_labels;
+        const auto size = symbol.section == SymbolSection::CODE ? m_object.code_section.size() :
+            symbol.section == SymbolSection::DATA ? m_object.data_section.size() :
+            symbol.section == SymbolSection::RAM ? m_object.ram_section.size() : m_object.short_ram_section.size();
         if (symbol.offset > size) throw std::runtime_error("Assembly export: symbol outside section.");
         labels[symbol.offset].push_back(name);
         if (!local) out << ".export " << name << '\n';
     }
     std::map<std::size_t, const RelocationEntry*> relocations;
     for (const auto& relocation : m_object.relocation_table) {
-        const std::size_t span = relocation.type == RelocationType::ADDR24_BANK ? 2 : 3;
+        const std::size_t span = relocation.type == RelocationType::ADDR24_BANK ||
+            relocation.type == RelocationType::ADDR8_SHORT_RAM ? 2 : 3;
         if (relocation.section_to_patch != SymbolSection::CODE || relocation.patch_offset > m_object.code_section.size() ||
             span > m_object.code_section.size() - relocation.patch_offset ||
             !relocations.emplace(relocation.patch_offset, &relocation).second) {
@@ -158,8 +171,18 @@ std::string AssemblyGenerator::generate() const {
         labelsAt(code_labels, offset);
         auto instruction = decode(code, offset);
         const auto op = code[offset];
-        const auto relocation = relocations.find(offset);
-        if (relocation != relocations.end()) {
+        auto relocation = relocations.find(offset);
+        const auto short_relocation = op >= 0x3d && op <= 0x3e ? relocations.find(offset + 1) : relocations.end();
+        if (!explicit_alt && short_relocation != relocations.end() &&
+            short_relocation->second->type == RelocationType::ADDR8_SHORT_RAM && !code_labels.count(offset + 1)) {
+            // LMS/SMS with a linker-written word index: one 3-byte statement.
+            const auto found = renamed.find(short_relocation->second->target_symbol_name);
+            const auto& name = found == renamed.end() ? short_relocation->second->target_symbol_name : found->second;
+            const auto n = static_cast<unsigned>(code.at(offset + 1) & 15u);
+            instruction.size = 3;
+            instruction.text = op == 0x3d ? "lms " + reg(n) + ", (short(" + name + "))" : "sms (short(" + name + ")), " + reg(n);
+            relocation = short_relocation;
+        } else if (relocation != relocations.end()) {
             const auto& entry = *relocation->second;
             const auto found = renamed.find(entry.target_symbol_name);
             const auto& name = found == renamed.end() ? entry.target_symbol_name : found->second;
@@ -175,10 +198,10 @@ std::string AssemblyGenerator::generate() const {
         } else if (!explicit_alt && op >= 0x3d && op <= 0x3f && offset + 1 < code.size() &&
                    !code_labels.count(offset + 1) && !relocations.count(offset + 1)) {
             const auto combined = decodeAlt(code, offset);
-            if (!combined.text.empty()) instruction = combined;
+            if (!combined.text.empty() && !(combined.size == 3 && code_labels.count(offset + 2))) instruction = combined;
         }
         const auto next_label = code_labels.upper_bound(offset);
-        const auto next_relocation = relocations.upper_bound(offset);
+        const auto next_relocation = relocations.upper_bound(relocation != relocations.end() ? relocation->first : offset);
         if ((next_label != code_labels.end() && next_label->first < offset + instruction.size) ||
             (next_relocation != relocations.end() && next_relocation->first < offset + instruction.size))
             throw std::runtime_error("Assembly export: label/relocation inside instruction.");
@@ -212,6 +235,14 @@ std::string AssemblyGenerator::generate() const {
             out << "    .byte " << hex(m_object.ram_section[offset]) << '\n';
         }
         labelsAt(ram_labels, m_object.ram_section.size());
+    }
+    if (!m_object.short_ram_section.empty() || !short_labels.empty()) {
+        out << "\n.segment \"SHORTRAM\"\n";
+        for (std::size_t offset = 0; offset < m_object.short_ram_section.size(); ++offset) {
+            labelsAt(short_labels, offset);
+            out << "    .byte " << hex(m_object.short_ram_section[offset]) << '\n';
+        }
+        labelsAt(short_labels, m_object.short_ram_section.size());
     }
     return out.str();
 }

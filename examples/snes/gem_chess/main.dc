@@ -3,14 +3,31 @@ bitmap scene {
     mode bitmap;
     size 256x192;
     depth 4bpp;
-    base 0;
+    // $0000-$03FF stays free for the short RAM window (LMS/SMS).
+    base 0x400;
 }
 
-word q6(word value) {
+// Per-frame state lives in static RAM rather than behind pointer parameters:
+// a global array has a known aligned, nonnull base. Every variable index is
+// narrowed with `(unsigned byte)` or a mask that is a no-op for the values the
+// scene produces, which proves the address in-bank so the backend emits a raw
+// scaled ADD instead of a checked pointer offset.
+// camera = sin(yaw), cos(yaw), sin(elevation), cos(elevation), distance.
+internal word camera[5];
+// Scanline extrema, interleaved per row y in 0..191: [2y] holds the left
+// minimum and [2y+1] the right maximum NEGATED, so both sides share one walk
+// and one minimum merge. Indices are masked with 511, a no-op for these rows
+// that proves every access in-bank.
+internal word spans[512];
+// The polygon handed to paint().
+internal word poly_x[4];
+internal word poly_y[4];
+
+internal word q6(word value) {
     return (value + 32 + (value >> 15)) >> 6;
 }
 
-word sine(word* quarter, word phase) {
+internal word sine(word* quarter, word phase) {
     phase &= 63;
     word index = phase & 15;
     if ((phase & 16) != 0) index = 16 - index;
@@ -19,46 +36,10 @@ word sine(word* quarter, word phase) {
     return value;
 }
 
-// camera = sin(yaw), cos(yaw), sin(elevation), cos(elevation), distance.
-// The bounded orbit keeps every depth in 128..511. One reciprocal per integer
-// depth is shared by the whole frame; projection needs no per-vertex division.
-void project(word x, word height, word z, word* camera, word* inverse, word* out) {
-    word rx = q6(x * camera[1] + z * camera[0]);
-    word rz = q6(z * camera[1] - x * camera[0]);
-    word h = height - 10;
-    word vertical = q6(h * camera[3] - rz * camera[2]);
-    word depth = camera[4] - q6(h * camera[2] + rz * camera[3]);
-    if (depth < 128 || depth >= 512) {
-        *(volatile word*)0xF018 = 1;
-        out[0]=0; out[1]=0;
-        return;
-    }
-    word factor = inverse[depth];
-    out[0] = 128 + q6(rx * factor);
-    out[1] = 84 - q6(vertical * factor);
-}
-
-// Mesh instances combine unrounded yaw products modulo one word. Round only
-// after adding the center, ring offset and knight lean, just as project() does.
-void project_raw(word raw_x, word height, word raw_z, word* camera, word* inverse, word* out) {
-    word rx = q6(raw_x);
-    word rz = q6(raw_z);
-    word h = height - 10;
-    word vertical = q6(h * camera[3] - rz * camera[2]);
-    word depth = camera[4] - q6(h * camera[2] + rz * camera[3]);
-    if (depth < 128 || depth >= 512) {
-        *(volatile word*)0xF018 = 1;
-        out[0]=0; out[1]=0;
-        return;
-    }
-    word factor = inverse[depth];
-    out[0] = 128 + q6(rx * factor);
-    out[1] = 84 - q6(vertical * factor);
-}
-
 // General clipped midpoint fallback. It samples the same canonical edge pixels
-// as line(), but accumulates extrema instead of plotting them.
-void collect_clipped(word x0, word y0, word x1, word y1, word* spans) {
+// as line(), but accumulates extrema instead of plotting them. It is rare, so
+// it carries no CACHE request that would evict the hot raster window.
+internal void collect_clipped(word x0, word y0, word x1, word y1) {
     word dx=x1-x0; word dy=y1-y0;
     if (dx<0) dx=-dx;
     if (dy<0) dy=-dy;
@@ -71,11 +52,12 @@ void collect_clipped(word x0, word y0, word x1, word y1, word* spans) {
     word major=dy; word minor=dx;
     if (horizontal) { major=dx; minor=dy; }
     word error=major>>1;
-    @cache for (word k=0; k<=major; k++) {
+    for (word k=0; k<=major; k++) {
         if (y0>=0 && y0<192) {
-            word* left=spans+y0; word* right=left+192;
-            if (x0<*left) *left=x0;
-            if (x0>*right) *right=x0;
+            word* cell=&spans[(y0+y0) & 511];
+            if (x0<*cell) *cell=x0;
+            cell=&spans[(y0+y0+1) & 511];
+            if (-x0<*cell) *cell=-x0;
         }
         error+=minor;
         if (error>=major) {
@@ -86,193 +68,7 @@ void collect_clipped(word x0, word y0, word x1, word y1, word* spans) {
     }
 }
 
-// Private fast path: clockwise convex faces, all vertices inside the viewport.
-// These faces have a downward left chain and upward right chain.
-// The walk starts on one shared vertex and stops on the other, so only those
-// two rows merge. Interior rows belong to one edge and are stored once.
-// Each side and axis is a straight walk: the minor step is inc or dec, never
-// a value reloaded from the frame on every row.
-void collect_horizontal_left(word x0, word x1, word dx, word dy, word* span, bool down) {
-    word error = dx >> 1;
-    word first = x0;
-    // Do not test a run boundary or touch RAM for every edge pixel.
-    // This is the original error recurrence, including its >= tie.
-    @cache while (true) {
-        error += dy;
-        if (error >= dx || x0 == x1) break;
-        x0++;
-    }
-    if (first < *span) *span = first;
-    if (x0 == x1) return;
-    if (down) {
-        @cache while (true) {
-            error -= dx;
-            x0++;
-            span--;
-            first = x0;
-            while (true) {
-                error += dy;
-                if (error >= dx || x0 == x1) break;
-                x0++;
-            }
-            if (x0 == x1) {
-                if (first < *span) *span = first;
-                return;
-            }
-            *span = first;
-        }
-    } else {
-        @cache while (true) {
-            error -= dx;
-            x0++;
-            span++;
-            first = x0;
-            while (true) {
-                error += dy;
-                if (error >= dx || x0 == x1) break;
-                x0++;
-            }
-            if (x0 == x1) {
-                if (first < *span) *span = first;
-                return;
-            }
-            *span = first;
-        }
-    }
-}
-
-void collect_horizontal_right(word x0, word x1, word dx, word dy, word* span, bool down) {
-    word error = dx >> 1;
-    @cache while (true) {
-        error += dy;
-        if (error >= dx || x0 == x1) break;
-        x0++;
-    }
-    if (x0 > *span) *span = x0;
-    if (x0 == x1) return;
-    if (down) {
-        @cache while (true) {
-            error -= dx;
-            x0++;
-            span--;
-            while (true) {
-                error += dy;
-                if (error >= dx || x0 == x1) break;
-                x0++;
-            }
-            if (x0 == x1) {
-                if (x0 > *span) *span = x0;
-                return;
-            }
-            *span = x0;
-        }
-    } else {
-        @cache while (true) {
-            error -= dx;
-            x0++;
-            span++;
-            while (true) {
-                error += dy;
-                if (error >= dx || x0 == x1) break;
-                x0++;
-            }
-            if (x0 == x1) {
-                if (x0 > *span) *span = x0;
-                return;
-            }
-            *span = x0;
-        }
-    }
-}
-
-void collect_vertical_left(word x0, word y0, word y1, word dx, word dy, word* span, bool leftward) {
-    word error = dy >> 1;
-    word* last = span + (y1 - y0);
-    if (x0 < *span) *span = x0;
-    if (span == last) return;
-    error += dx;
-    if (error >= dy) {
-        error -= dy;
-        if (leftward) x0--; else x0++;
-    }
-    span++;
-    if (leftward) {
-        @cache while (span != last) {
-            *span = x0;
-            error += dx;
-            if (error >= dy) { error -= dy; x0--; }
-            span++;
-        }
-    } else {
-        @cache while (span != last) {
-            *span = x0;
-            error += dx;
-            if (error >= dy) { error -= dy; x0++; }
-            span++;
-        }
-    }
-    if (x0 < *span) *span = x0;
-}
-
-void collect_vertical_right(word x0, word y0, word y1, word dx, word dy, word* span, bool leftward) {
-    word error = dy >> 1;
-    word* last = span + (y1 - y0);
-    if (x0 > *span) *span = x0;
-    if (span == last) return;
-    error += dx;
-    if (error >= dy) {
-        error -= dy;
-        if (leftward) x0--; else x0++;
-    }
-    span++;
-    if (leftward) {
-        @cache while (span != last) {
-            *span = x0;
-            error += dx;
-            if (error >= dy) { error -= dy; x0--; }
-            span++;
-        }
-    } else {
-        @cache while (span != last) {
-            *span = x0;
-            error += dx;
-            if (error >= dy) { error -= dy; x0++; }
-            span++;
-        }
-    }
-    if (x0 > *span) *span = x0;
-}
-
-void collect(word x0, word y0, word x1, word y1, word* spans) {
-    word dx = x1 - x0; word dy = y1 - y0;
-    if (dx < 0) dx = -dx;
-    if (dy < 0) dy = -dy;
-    if (dy==0) {
-        if (x0>x1) { word t=x0; x0=x1; x1=t; }
-        word* left=spans+y0; word* right=left+192;
-        if (x0<*left) *left=x0;
-        if (x1>*right) *right=x1;
-        return;
-    }
-    bool leftside = y1 > y0;
-    bool horizontal = dx >= dy;
-    if ((horizontal && x0 > x1) || (!horizontal && y0 > y1)) {
-        word t = x0; x0 = x1; x1 = t;
-        t = y0; y0 = y1; y1 = t;
-    }
-    word* span = spans + y0;
-    if (!leftside) span += 192;
-    if (horizontal) {
-        if (leftside) collect_horizontal_left(x0, x1, dx, dy, span, y1 < y0);
-        else collect_horizontal_right(x0, x1, dx, dy, span, y1 < y0);
-    } else if (leftside) {
-        collect_vertical_left(x0, y0, y1, dx, dy, span, x1 < x0);
-    } else {
-        collect_vertical_right(x0, y0, y1, dx, dy, span, x1 < x0);
-    }
-}
-
-void line(word x0, word y0, word x1, word y1, word ink) {
+internal void line(word x0, word y0, word x1, word y1, word ink) {
     word dx = x1 - x0; word dy = y1 - y0;
     if (dx < 0) dx = -dx;
     if (dy < 0) dy = -dy;
@@ -288,7 +84,7 @@ void line(word x0, word y0, word x1, word y1, word ink) {
     word error = major >> 1;
     plot {
         color ink;
-        @cache for (word k = 0; k <= major; k++) {
+        for (word k = 0; k <= major; k++) {
             if (x0 >= 0 && x0 < 256 && y0 >= 0 && y0 < 192) {
                 at (x0, y0);
                 pixel;
@@ -303,144 +99,415 @@ void line(word x0, word y0, word x1, word y1, word ink) {
     }
 }
 
-// Already-culled convex polygons; clip spans without moving their vertices.
-word paint(word* xs, word* ys, word vertices, word ink, bool wire, word* spans) {
-    if (wire) {
-        for (word i = 0; i < vertices; i++) {
-            word next = i+1; if (next==vertices) next=0;
-            line(xs[i], ys[i], xs[next], ys[next], ink);
-        }
-        return 1;
-    }
-    word top = 191; word bottom = 0;
-    bool clipped=false;
+internal void outline(word vertices, word ink) {
     for (word i = 0; i < vertices; i++) {
-        word x=xs[i]; word y=ys[i];
+        word next = i+1; if (next==vertices) next=0;
+        line(poly_x[i & 3], poly_y[i & 3], poly_x[next & 3], poly_y[next & 3], ink);
+    }
+}
+
+// Fully clipped and horizontal/point degeneracy behavior, even outside the
+// scene's proven in-viewport camera envelope. Returns 0 when every row is
+// clipped away.
+internal word paint_clipped(word vertices, word ink) {
+    word top = 191; word bottom = 0;
+    for (word i = 0; i < vertices; i++) {
+        word y=poly_y[i & 3];
         if (y < top) top = y;
         if (y > bottom) bottom = y;
-        if (x<0 || x>255) clipped=true;
-        if (y<0 || y>191) clipped=true;
-        else { spans[y]=x; spans[192+y]=x; }
     }
     if (top < 0) top = 0;
     if (bottom > 191) bottom = 191;
     if (top > bottom) return 0;
-    word* left = spans + top; word* right = spans + 192 + top;
-    if (clipped || top==bottom) {
-        // Keep fully clipped and horizontal/point degeneracy behavior, even
-        // outside the scene's proven in-viewport camera envelope.
-        @cache for (word y = top; y <= bottom; y++) { *left=256; *right=-1; left++; right++; }
-        for (word i=0; i<vertices; i++) {
-            word next=i+1; if (next==vertices) next=0;
-            collect_clipped(xs[i],ys[i],xs[next],ys[next],spans);
-        }
-    } else {
-        for (word i=0; i<vertices; i++) {
-            word next=i+1; if (next==vertices) next=0;
-            collect(xs[i],ys[i],xs[next],ys[next],spans);
-        }
+    for (word y = top; y <= bottom; y++) {
+        word* pair = &spans[(y+y) & 511];
+        pair[0]=256; pair[1]=1;
     }
-    left = spans + top; right = spans + 192 + top;
+    for (word i=0; i<vertices; i++) {
+        word next=i+1; if (next==vertices) next=0;
+        collect_clipped(poly_x[i & 3],poly_y[i & 3],poly_x[next & 3],poly_y[next & 3]);
+    }
     plot {
         color ink;
-        if (clipped || top == bottom) {
-            for (word y = top; y <= bottom; y++) {
-                word start = *left; word end = *right;
-                if (start < 0) start = 0;
-                if (end > 255) end = 255;
-                word width = end - start + 1;
-                if (width > 0) {
-                    at (start, y);
-                    @cache for (word x = 0; x < width; x++) pixel;
-                }
-                left++; right++;
-            }
-        } else {
-            // In-viewport convex edges stay inside 0..255, so the span walk
-            // does not clip. One cache window covers every scanline's plot.
-            @cache for (word y = top; y <= bottom; y++) {
-                word start = *left; word end = *right;
-                word width = end - start + 1;
-                if (width > 0) {
-                    at (start, y);
-                    for (word x = 0; x < width; x++) pixel;
-                }
-                left++; right++;
+        for (word y = top; y <= bottom; y++) {
+            word* pair = &spans[(y+y) & 511];
+            word start = pair[0]; word end = -pair[1];
+            if (start < 0) start = 0;
+            if (end > 255) end = 255;
+            word width = end - start + 1;
+            if (width > 0) {
+                at (start, y);
+                for (word x = 0; x < width; x++) pixel;
             }
         }
     }
     return 1;
 }
 
+// The hot raster window. collect() is the only CACHE request executed while
+// a mesh's faces are drawn: explicitly cached, it receives no automatic loop
+// CACHE, and none of its callers (raster(), paint(), paint_quad(), face())
+// contains a call-free loop that would be auto-cached. So CBR stays put from
+// one edge to the next and the edge walks stay resident in the 512-byte
+// cache; only a batch projection between meshes moves it.
+//
+// Private fast path: one edge of a clockwise convex face whose vertices are all
+// inside the viewport. These faces have a downward left chain and upward right
+// chain. The walk starts on one shared vertex and stops on the other, so only
+// those two rows merge with raster()'s vertex seeds. Interior rows belong to
+// one edge and are stored once.
+@cache internal void collect(word x0, word y0, word x1, word y1) {
+    word dx = x1 - x0; word dy = y1 - y0;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    if (dy==0) {
+        if (x0>x1) { word t=x0; x0=x1; x1=t; }
+        word* pair = &spans[(y0+y0) & 511];
+        if (x0<pair[0]) pair[0]=x0;
+        x1=-x1;
+        if (x1<pair[1]) pair[1]=x1;
+        return;
+    }
+    // Left chain edges walk downward (y1 > y0) and store at [2y]; right chain
+    // edges store negated maxima at [2y+1].
+    word side = 0;
+    if (y1 <= y0) side = 1;
+    if (dx >= dy) {
+        if (x0 > x1) {
+            word t = x0; x0 = x1; x1 = t;
+            t = y0; y0 = y1; y1 = t;
+        }
+        word step = 2; if (y1 < y0) step = -2;
+        word error = dx >> 1;
+        word first = x0;
+        word index = y0 + y0 + side;
+        bool interior = false;
+        // Do not test a run boundary or touch RAM for every edge pixel.
+        // This is the original error recurrence, including its >= tie.
+        while (true) {
+            while (true) {
+                error += dy;
+                if (error >= dx || x0 == x1) break;
+                x0++;
+            }
+            // A left run keeps its first pixel, a right run its last.
+            word value = first;
+            if (side != 0) value = -x0;
+            word* cell = &spans[index & 511];
+            if ((interior && x0 != x1) || value < *cell) *cell = value;
+            if (x0 == x1) return;
+            interior = true;
+            error -= dx;
+            x0++;
+            index += step;
+            first = x0;
+        }
+    }
+    // Vertical: walk downward; the minor step follows x1 - x0. Only x is
+    // stored, so a right edge walks its negated x directly.
+    if (y0 > y1) {
+        word t = x0; x0 = x1; x1 = t;
+        t = y0; y0 = y1; y1 = t;
+    }
+    word step = 1; if (x1 < x0) step = -1;
+    if (side != 0) { x0 = -x0; step = -step; }
+    word error = dy >> 1;
+    word index = y0 + y0 + side;
+    word last = y1 + y1 + side;
+    word* cell = &spans[index & 511];
+    if (x0 < *cell) *cell = x0;
+    while (true) {
+        error += dx;
+        if (error >= dy) { error -= dy; x0 += step; }
+        index += 2;
+        if (index == last) break;
+        spans[index & 511] = x0;
+    }
+    cell = &spans[last & 511];
+    if (x0 < *cell) *cell = x0;
+}
+
+// In-viewport convex edges stay inside 0..255, so the span walk does not
+// clip. PLOT itself advances R1 across each span. Its row loop owns a hardware
+// LOOP, so it is never auto-cached and cannot evict collect().
+internal void fill_spans(word top, word bottom, word ink) {
+    plot {
+        color ink;
+        for (word y = top; y <= bottom; y++) {
+            word* pair = &spans[(y+y) & 511];
+            word start = pair[0];
+            word width = 1 - pair[1] - start;
+            if (width > 0) {
+                at (start, y);
+                for (word x = 0; x < width; x++) pixel;
+            }
+        }
+    }
+}
+
+// Rasterizes the already-culled convex polygon in poly_x/poly_y (3 or 4
+// vertices) and returns 1, or returns 2 without drawing when any vertex lies
+// outside the viewport or every vertex shares one row: paint_clipped() keeps
+// the general behavior for those. Written without loops: a call-free loop here
+// would be auto-cached and move CBR away from collect() for every polygon.
+internal word raster(word vertices, word ink) {
+    word x0=poly_x[0]; word y0=poly_y[0];
+    word x1=poly_x[1]; word y1=poly_y[1];
+    word x2=poly_x[2]; word y2=poly_y[2];
+    // A triangle repeats its last vertex: the bounds are unchanged.
+    word x3=x2; word y3=y2;
+    if (vertices == 4) { x3=poly_x[3]; y3=poly_y[3]; }
+    word top = y0; word bottom = y0;
+    if (y1 < top) top = y1;
+    if (y1 > bottom) bottom = y1;
+    if (y2 < top) top = y2;
+    if (y2 > bottom) bottom = y2;
+    if (y3 < top) top = y3;
+    if (y3 > bottom) bottom = y3;
+    // Any coordinate outside 0..255 has a nonzero high byte; then only rows
+    // 192..255 remain to reject.
+    if (((x0|y0|x1|y1|x2|y2|x3|y3) & -256) != 0 || bottom > 191 || top == bottom) return 2;
+    // Seed every vertex row in vertex order (a later vertex on the same row
+    // wins) before any walk merges into it.
+    word* pair=&spans[(y0+y0) & 511]; pair[0]=x0; pair[1]=-x0;
+    pair=&spans[(y1+y1) & 511]; pair[0]=x1; pair[1]=-x1;
+    pair=&spans[(y2+y2) & 511]; pair[0]=x2; pair[1]=-x2;
+    if (vertices == 4) {
+        pair=&spans[(y3+y3) & 511]; pair[0]=x3; pair[1]=-x3;
+    }
+    collect(x0,y0,x1,y1);
+    collect(x1,y1,x2,y2);
+    if (vertices == 4) {
+        collect(x2,y2,x3,y3);
+        collect(x3,y3,x0,y0);
+    } else {
+        collect(x2,y2,x0,y0);
+    }
+    fill_spans(top, bottom, ink);
+    return 1;
+}
+
+// Already-culled convex polygon in poly_x/poly_y; clip spans without moving
+// its vertices.
+internal word paint(word vertices, word ink, bool wire) {
+    if (wire) {
+        outline(vertices, ink);
+        return 1;
+    }
+    if (raster(vertices, ink) == 1) return 1;
+    return paint_clipped(vertices, ink);
+}
+
+// Projection state. Declared after the raster kernel above, which the native
+// gem-chess regression compiles on its own, so its fixture reserves only the
+// raster's static RAM.
+// The bounded orbit keeps every depth in 128..511. One reciprocal per integer
+// depth is shared by the whole frame; projection needs no per-vertex division.
+internal word inverse[512];
+// Projected vertices of the mesh currently being drawn (at most 81: the grid).
+// Board ring, grid, shadows, pieces and boxes use it strictly one after another.
+// 256 entries: an `(unsigned byte)` index is only proved in-bank when its whole
+// 0..255 range fits the array, which removes every per-access address check.
+internal word pts_x[256];
+internal word pts_y[256];
+// Raw yaw products shared by every mesh instance: entries 0..41 are the
+// 7x6 ring radii/sides, 42..50 the grid's x steps. See main(). Sized like
+// pts_x for the same proof.
+internal word offset_x[256];
+internal word offset_z[256];
+// Mesh instances combine unrounded yaw products modulo one word. Round only
+// after adding the center, ring offset and knight lean. project() passes the
+// same word products, so both entries share one rounding path.
+internal void project_raw(word raw_x, word height, word raw_z, word slot) {
+    word rx = q6(raw_x);
+    word rz = q6(raw_z);
+    word h = height - 10;
+    word vertical = q6(h * camera[3] - rz * camera[2]);
+    word depth = camera[4] - q6(h * camera[2] + rz * camera[3]);
+    unsigned byte vertex = (unsigned byte)slot;
+    if (depth < 128 || depth >= 512) {
+        *(volatile word*)0xF018 = 1;
+        pts_x[vertex]=0; pts_y[vertex]=0;
+        return;
+    }
+    word factor = inverse[depth & 511];
+    pts_x[vertex] = 128 + q6(rx * factor);
+    pts_y[vertex] = 84 - q6(vertical * factor);
+}
+
+// Projects `count` consecutive vertices center + offset[first+k] at one
+// height into pts[target+k]. The six-vertex rings, nine-vertex grid rows and
+// shadow rings all come here: one explicit CACHE window per batch repays its
+// cold fill across the batch instead of executing every vertex from RAM.
+// The arithmetic is project_raw()'s, term for term.
+@cache internal void project_batch(word center_x, word center_z, word height, word first, word target, word count) {
+    word h = height - 10;
+    word h3 = h * camera[3];
+    word h2 = h * camera[2];
+    for (word k = 0; k < count; k++) {
+        unsigned byte o = (unsigned byte)(first + k);
+        word rx = q6(center_x + offset_x[o]);
+        word rz = q6(center_z + offset_z[o]);
+        word vertical = q6(h3 - rz * camera[2]);
+        word depth = camera[4] - q6(h2 + rz * camera[3]);
+        unsigned byte vertex = (unsigned byte)(target + k);
+        if (depth < 128 || depth >= 512) {
+            *(volatile word*)0xF018 = 1;
+            pts_x[vertex]=0; pts_y[vertex]=0;
+        } else {
+            word factor = inverse[depth & 511];
+            pts_x[vertex] = 128 + q6(rx * factor);
+            pts_y[vertex] = 84 - q6(vertical * factor);
+        }
+    }
+}
+
+// Cull codes of the quads of the current piece, band-major (band*6+side),
+// and the inputs cull_piece() reads: kept ring numbers and per-band BD masks.
+internal word quad_code[32];
+internal word piece_kept[8];
+internal word band_mask[8];
+// Wireframe mode for the faces being drawn: main() enables it for pieces only.
+internal bool scene_wire;
+// Diagonal for the next quad_cull(): a global keeps that call at four
+// register arguments (a fifth would move every argument to the stack).
+internal bool cull_bd;
+
+internal word quad_cull(word a, word b, word c, word d);
+
+// Batch culling for every band of the current piece. The loop and the
+// loop-free quad_cull() right behind it share one explicit CACHE window, so
+// one cold fill per piece covers all of its faces. piece_kept[] holds the
+// kept rings' first vertex (ring*6): a constant *6 would cost an LMULT here.
+@cache internal void cull_piece(word bands) {
+    word index = 0;
+    for (word band = 0; band < bands; band++) {
+        word lower = piece_kept[band & 7]; word upper = piece_kept[(band+1) & 7];
+        word mask = band_mask[band & 7];
+        for (word s = 0; s < 6; s++) {
+            word next = s+1; if (next==6) next=0;
+            cull_bd = (mask & 1) != 0;
+            quad_code[index & 31] = quad_cull(lower+next,lower+s,upper+s,upper+next);
+            mask >>= 1;
+            index++;
+        }
+    }
+}
+
 // Integer ring coordinates are not necessarily homothetic. The chosen diagonal
 // follows the band's convex hull. Even planar quads can fold after quantized
 // perspective projection, so independently cull the two selected triangles.
 // Fuse their fill only when both are visible AND their projection is convex.
-word quad_face(word* points, word a, word b, word c, word d,
-               word ink, bool wire, word* spans, bool bd) {
-    // Coordinates are loaded once. Their products finish before the paint
-    // arrays exist, and a culled quad never builds those arrays.
-    word ax = points[a+a]; word ay = points[a+a+1];
-    word bx = points[b+b]; word by = points[b+b+1];
-    word cx = points[c+c]; word cy = points[c+c+1];
-    word dx = points[d+d]; word dy = points[d+d+1];
-    word abx = bx-ax; word aby = by-ay;
-    word acx = cx-ax; word acy = cy-ay;
-    word adx = dx-ax; word ady = dy-ay;
-    word first; word second;
-    if (bd) {
+// Returns 0 when hidden, bit 0/1 for a visible first/second triangle, or 4
+// for one fused quad; bit 3 records a BD split (cull_bd) for paint_quad().
+internal word quad_cull(word a, word b, word c, word d) {
+    unsigned byte ia=(unsigned byte)a; unsigned byte ib=(unsigned byte)b;
+    unsigned byte ic=(unsigned byte)c; unsigned byte id=(unsigned byte)d;
+    word ax = pts_x[ia]; word ay = pts_y[ia];
+    word abx = pts_x[ib]-ax; word aby = pts_y[ib]-ay;
+    word acx = pts_x[ic]-ax; word acy = pts_y[ic]-ay;
+    word adx = pts_x[id]-ax; word ady = pts_y[id]-ay;
+    word first; word second; word other;
+    word code = 0;
+    if (cull_bd) {
+        code = 8;
         first = abx*ady-aby*adx;
         second = (acx-abx)*(ady-aby)-(acy-aby)*(adx-abx);
+        other = abx*acy-aby*acx;
     } else {
         first = abx*acy-aby*acx;
         second = acx*ady-acy*adx;
+        other = abx*ady-aby*adx;
     }
-    if (first>=0 && second>=0) return 0;
-    bool fused = false;
-    if (first<0 && second<0) {
-        word other;
-        if (bd) other = abx*acy-aby*acx;
-        else other = abx*ady-aby*adx;
-        // Both diagonals have the same total determinant. Word arithmetic
-        // preserves the original individual determinants, including their sign.
-        word remaining = first+second-other;
-        if (other<=0 && remaining<=0) fused = true;
+    if (first<0) {
+        if (second<0) {
+            // Both diagonals have the same total determinant. Word arithmetic
+            // preserves the original individual determinants, including their
+            // sign.
+            if (other<=0 && first+second-other<=0) return code+4;
+            return code+3;
+        }
+        return code+1;
     }
-    word xs[4] = {ax, bx, cx, dx};
-    word ys[4] = {ay, by, cy, dy};
-    if (fused) return paint(&xs[0], &ys[0], 4, ink, wire, spans);
-    // Reuse the polygon's storage; a hidden triangle needs no temporary copy.
-    if (bd) {
-        word t=xs[2]; xs[2]=xs[3]; xs[3]=t;
-        t=ys[2]; ys[2]=ys[3]; ys[3]=t;
+    if (second<0) return code+2;
+    return 0;
+}
+
+// Paints quad ABCD as culled by quad_cull(). A BD split draws (a,b,d) then
+// (b,c,d); AC draws (a,b,c) then (a,c,d). Returns the polygons painted.
+// Vertex pairs arrive packed as a*256+b and c*256+d (HIB/LOB unpack them),
+// which keeps all four arguments in registers.
+internal word paint_quad(word ab, word cd, word ink, word code) {
+    unsigned byte ia=(unsigned byte)((unsigned word)ab >> 8); unsigned byte ib=(unsigned byte)ab;
+    unsigned byte ic=(unsigned byte)((unsigned word)cd >> 8); unsigned byte id=(unsigned byte)cd;
+    word ax = pts_x[ia]; word ay = pts_y[ia];
+    word bx = pts_x[ib]; word by = pts_y[ib];
+    word cx = pts_x[ic]; word cy = pts_y[ic];
+    word dx = pts_x[id]; word dy = pts_y[id];
+    bool wire = scene_wire;
+    poly_x[0]=ax; poly_x[1]=bx;
+    poly_y[0]=ay; poly_y[1]=by;
+    if ((code & 7) == 4) {
+        poly_x[2]=cx; poly_x[3]=dx;
+        poly_y[2]=cy; poly_y[3]=dy;
+        return paint(4, ink, wire);
     }
     word count=0;
-    if (first<0) count=paint(&xs[0],&ys[0],3,ink,wire,spans);
-    if (second<0) {
-        if (bd) { xs[0]=xs[1]; ys[0]=ys[1]; xs[1]=xs[3]; ys[1]=ys[3]; }
-        else { xs[1]=xs[2]; ys[1]=ys[2]; xs[2]=xs[3]; ys[2]=ys[3]; }
-        count+=paint(&xs[0],&ys[0],3,ink,wire,spans);
+    if ((code & 8) != 0) {
+        if ((code & 1) != 0) {
+            poly_x[2]=dx; poly_y[2]=dy;
+            count=paint(3,ink,wire);
+        }
+        if ((code & 2) != 0) {
+            poly_x[0]=bx; poly_y[0]=by; poly_x[1]=cx; poly_y[1]=cy;
+            poly_x[2]=dx; poly_y[2]=dy;
+            count+=paint(3,ink,wire);
+        }
+    } else {
+        poly_x[2]=cx; poly_y[2]=cy;
+        if ((code & 1) != 0) count=paint(3,ink,wire);
+        if ((code & 2) != 0) {
+            poly_x[0]=ax; poly_y[0]=ay; poly_x[1]=cx; poly_y[1]=cy;
+            poly_x[2]=dx; poly_y[2]=dy;
+            count+=paint(3,ink,wire);
+        }
     }
     return count;
 }
 
-// Planar board/box faces use AC. Repeated C/D indices represent a triangle.
-word face(word* points, word a, word b, word c, word d,
-          word ink, bool wire, word* spans) {
-    if (c!=d) return quad_face(points,a,b,c,d,ink,wire,spans,false);
-    word ax = points[a+a]; word ay = points[a+a+1];
-    word bx = points[b+b]; word by = points[b+b+1];
-    word cx = points[c+c]; word cy = points[c+c+1];
+// Packs two vertex indices for paint_quad()/face(); constant pairs fold.
+internal word vertex_pair(word a, word b) {
+    return a*256+b;
+}
+
+internal void project(word x, word height, word z, word slot) {
+    project_raw(x * camera[1] + z * camera[0], height, z * camera[1] - x * camera[0], slot);
+}
+
+// Planar board/box faces use AC. Equal C and D indices represent a triangle.
+// Vertex pairs arrive packed by vertex_pair().
+internal word face(word ab, word cd, word ink) {
+    unsigned byte ia=(unsigned byte)((unsigned word)ab >> 8); unsigned byte ib=(unsigned byte)ab;
+    unsigned byte ic=(unsigned byte)((unsigned word)cd >> 8); unsigned byte id=(unsigned byte)cd;
+    if (ic!=id) {
+        cull_bd = false;
+        word code = quad_cull((word)ia,(word)ib,(word)ic,(word)id);
+        if (code == 0) return 0;
+        return paint_quad(ab,cd,ink,code);
+    }
+    word ax = pts_x[ia]; word ay = pts_y[ia];
+    word bx = pts_x[ib]; word by = pts_y[ib];
+    word cx = pts_x[ic]; word cy = pts_y[ic];
     word area = (bx-ax)*(cy-ay) - (by-ay)*(cx-ax);
     if (area >= 0) return 0;
-    word xs[3] = {ax, bx, cx};
-    word ys[3] = {ay, by, cy};
-    return paint(&xs[0],&ys[0],3,ink,wire,spans);
+    poly_x[0]=ax; poly_x[1]=bx; poly_x[2]=cx;
+    poly_y[0]=ay; poly_y[1]=by; poly_y[2]=cy;
+    return paint(3,ink,scene_wire);
 }
 
 // A bounded dot product with a fixed world-space light. L1 normalization is
 // quantized using comparisons, avoiding sqrt/division for every tiny facet.
-word shade(word dh, word dr, word horizontal, word material) {
+internal word shade(word dh, word dr, word horizontal, word material) {
     word slope = dr; if (slope < 0) slope = -slope;
     word denominator = dh + slope;
     word light = horizontal * dh + 48 * dr;
@@ -452,23 +519,38 @@ word shade(word dh, word dr, word horizontal, word material) {
     return material + level;
 }
 
-word box(word x, word y, word z, word width, word height, word depth,
-         word material, bool wire, word* camera, word* inverse, word* spans) {
-    word points[16];
+// Level of detail: whether interior ring 1..4 of a piece is drawn. `key` is
+// the piece's squared half-distance from the eye (larger is farther); it is the
+// same key that orders pieces far-first. Measured over the verifier's views it
+// spans about 1400 (nearest, zoomed in) to 34000 (farthest, zoomed out).
+// Rings per profile (radius/height): 0 base, 1 plinth top, 2 waist, 3 neck,
+// 4 head; ring 5 (cap/apex) and ring 0 are always kept by the caller.
+internal bool keep_ring(unsigned word key, word ring) {
+    // The plinth top (ring 1) sits two units above the base and the waist
+    // (ring 2) spans few pixels at range; the neck and head (rings 3, 4) carry
+    // each piece's identity and always stay. Two steps (~1.29x distance apart)
+    // avoid changing many pieces at once as the camera approaches.
+    if (ring == 1) return key < 15000;
+    if (ring == 2) return key < 25000;
+    return true;
+}
+
+// Projects its eight corners into pts[0..7]; every caller has finished with
+// the previous contents of pts by then.
+internal word box(word x, word y, word z, word width, word height, word depth,
+         word material) {
     for (word i = 0; i < 8; i++) {
         word xx = -width; if ((i & 1) != 0) xx = width;
         word yy = 0; if ((i & 2) != 0) yy = height;
         word zz = -depth; if ((i & 4) != 0) zz = depth;
-        project(x+xx, y+yy, z+zz, camera, inverse, &points[i+i]);
+        project(x+xx, y+yy, z+zz, i);
     }
-    word faces[24] = {0,2,3,1, 4,5,7,6, 0,4,6,2, 1,3,7,5, 0,1,5,4, 2,6,7,3};
-    word count = 0;
-    for (word i = 0; i < 6; i++) {
-        word ink = material+2;
-        if (i == 0 || i == 3) ink = material+1;
-        if (i == 5) ink = material+4;
-        count += face(&points[0], faces[i*4], faces[i*4+1], faces[i*4+2], faces[i*4+3], ink, wire, spans);
-    }
+    word count = face(vertex_pair(0,2), vertex_pair(3,1), material+1);
+    count += face(vertex_pair(4,5), vertex_pair(7,6), material+2);
+    count += face(vertex_pair(0,4), vertex_pair(6,2), material+2);
+    count += face(vertex_pair(1,3), vertex_pair(7,5), material+1);
+    count += face(vertex_pair(0,1), vertex_pair(5,4), material+2);
+    count += face(vertex_pair(2,6), vertex_pair(7,3), material+4);
     return count;
 }
 
@@ -478,24 +560,30 @@ word main() {
     word elevation = *(volatile word*)0xF004;
     word zoom = *(volatile word*)0xF006;
     bool wire = (*(volatile word*)0xF008 & 1) != 0;
+    // The plinth, board and shadows are filled even in wireframe mode.
+    scene_wire = false;
     *(volatile word*)0xF018 = 0;
     if (elevation < 5) elevation = 5;
     if (elevation > 10) elevation = 10;
     if (zoom < 6) zoom = 6;
     if (zoom > 16) zoom = 16;
     word quarter[17] = {0,6,12,19,24,30,36,41,45,49,53,56,59,61,63,64,64};
-    word camera[5] = {sine(&quarter[0], yaw), sine(&quarter[0], yaw+16),
-        sine(&quarter[0], elevation), sine(&quarter[0], elevation+16), 400-zoom*8};
-    word inverse[512];
+    word c0 = sine(&quarter[0], yaw);
+    word c1 = sine(&quarter[0], yaw+16);
+    camera[0] = c0;
+    camera[1] = c1;
+    camera[2] = sine(&quarter[0], elevation);
+    camera[3] = sine(&quarter[0], elevation+16);
+    camera[4] = 400-zoom*8;
     // At entry to each iteration, product is quotient*i. Across this bounded
     // range floor(16384/i) falls by at most one, so one correction is exact.
+    // This and the clear below run before the raster window takes CBR.
     word quotient=128; word product=16384;
     @cache for (word i = 128; i < 512; i++) {
         if (product>16384) { quotient--; product-=i; }
-        inverse[i]=quotient;
+        inverse[i & 511]=quotient;
         product+=quotient;
     }
-    word spans[384];
     word count = 0;
 
     plot {
@@ -503,37 +591,41 @@ word main() {
         // framebuffer, not just the previous geometry's bounding box.
         options;
         color 0;
-        for (word y = 0; y < 192; y++) {
+        @cache for (word y = 0; y < 192; y++) {
             at (0, y);
-            @cache for (word x = 0; x < 256; x++) pixel;
+            for (word x = 0; x < 256; x++) pixel;
         }
     }
 
     // Beveled plinth: lower/upper four-corner rings, then a gold top frame.
-    word border[16];
     for (word i = 0; i < 4; i++) {
         word xx = -70; if (i == 1 || i == 2) xx = 70;
         word zz = -70; if (i >= 2) zz = 70;
-        project(xx, -5, zz, &camera[0], &inverse[0], &border[i+i]);
-        project(xx, 0, zz, &camera[0], &inverse[0], &border[8+i+i]);
+        project(xx, -5, zz, i);
+        project(xx, 0, zz, i+4);
     }
     for (word i = 0; i < 4; i++) {
         word next = (i+1) & 3;
-        count += face(&border[0], next, i, i+4, next+4, 3, false, &spans[0]);
+        count += face(vertex_pair(next,i), vertex_pair(i+4,next+4), 3);
     }
-    count += face(&border[0], 7,6,5,4, 3,false,&spans[0]);
+    count += face(vertex_pair(7,6), vertex_pair(5,4), 3);
 
-    word grid[162];
+    // Grid corners. Successive corners differ by exactly 16 world units, so
+    // the yaw products advance by constant word steps; modular word addition
+    // reproduces project()'s own products bit for bit.
+    for (word x = 0; x <= 8; x++) {
+        offset_x[42+x] = x*16*c1;
+        offset_z[42+x] = -(x*16*c0);
+    }
+    word row_x = -64*c1 - 64*c0; word row_z = -64*c1 + 64*c0;
     for (word z = 0; z <= 8; z++) {
-        for (word x = 0; x <= 8; x++) {
-            word vertex = (z*9+x)*2;
-            project(x*16-64, 0, z*16-64, &camera[0], &inverse[0], &grid[vertex]);
-        }
+        project_batch(row_x, row_z, 0, 42, z*9, 9);
+        row_x += 16*c0; row_z += 16*c1;
     }
     for (word z = 0; z < 8; z++) {
         for (word x = 0; x < 8; x++) {
             word a = z*9+x;
-            count += face(&grid[0], a+9,a+10,a+1,a, 1+((x^z)&1),false,&spans[0]);
+            count += face(vertex_pair(a+9,a+10), vertex_pair(a+1,a), 1+((x^z)&1));
         }
     }
 
@@ -550,13 +642,16 @@ word main() {
     word ring_x[6] = {64,32,-32,-64,-32,32};
     word ring_z[6] = {0,55,55,0,-55,-55};
     // Keep rounding on the complete original radius product, not on a split
-    // projection. Every instance shares these exact 7*6 coordinate pairs.
-    word ring_offsets[84];
+    // projection. Every instance shares these exact 7*6 coordinate pairs,
+    // converted below to raw yaw products: offset_x = x*cos + z*sin and
+    // offset_z = z*cos - x*sin, matching project()'s own word arithmetic.
     for (word radius=0; radius<=6; radius++) {
         for (word s=0; s<6; s++) {
-            word vertex=(radius*6+s)*2;
-            ring_offsets[vertex]=q6(radius*ring_x[s]);
-            ring_offsets[vertex+1]=q6(radius*ring_z[s]);
+            word x=q6(radius*ring_x[s]);
+            word z=q6(radius*ring_z[s]);
+            word v=radius*6+s;
+            offset_x[v]=x*c1+z*c0;
+            offset_z[v]=z*c1-x*c0;
         }
     }
     word normal_z[6] = {32,64,32,-32,-64,-32};
@@ -571,8 +666,8 @@ word main() {
         word xx = (slot & 7)*16-56;
         word zz = -56; if (slot >= 8) zz = -40;
         if (team != 0) zz = -zz;
-        word rx = q6(xx*camera[1]+zz*camera[0]);
-        word rz = q6(zz*camera[1]-xx*camera[0]);
+        word rx = q6(xx*c1+zz*c0);
+        word rz = q6(zz*c1-xx*c0);
         word half_x=rx>>1; word half_d=(eye_ground-rz)>>1;
         unsigned word key=(unsigned word)(half_x*half_x)
             + (unsigned word)half_d*(unsigned word)half_d;
@@ -581,27 +676,22 @@ word main() {
         keys[j] = key; order[j] = i;
     }
 
-    word points[74];
     // All shadows lie on the board. Paint them before any raised piece.
+    // project(xx+2+ox, 0, zz+2+oz) has raw products base + offset modulo one
+    // word, so the shared radius-6 offsets serve here too.
     for (word i = 0; i < 32; i++) {
         word team=i>>4; word slot=i&15;
-        word xx=(slot&7)*16-56; word zz=-56;
-        if (slot>=8) zz=-40;
-        if (team!=0) zz=-zz;
-        for (word s=0; s<6; s++)
-            project(xx+2+ring_offsets[72+s+s],0,zz+2+ring_offsets[73+s+s],&camera[0],&inverse[0],&points[s+s]);
-        count += face(&points[0],3,2,1,0,15,false,&spans[0]);
-        count += face(&points[0],0,5,4,3,15,false,&spans[0]);
+        word xx=(slot&7)*16-54; word zz=-54;
+        if (slot>=8) zz=-38;
+        if (team!=0) zz=4-zz;
+        word base_x=xx*c1+zz*c0; word base_z=zz*c1-xx*c0;
+        project_batch(base_x,base_z,0,36,0,6);
+        count += face(vertex_pair(3,2), vertex_pair(1,0), 15);
+        count += face(vertex_pair(0,5), vertex_pair(4,3), 15);
     }
 
-    // Shadows consumed the world offsets. Reuse their 84 words for the raw
-    // rotated offsets shared by every mesh, without component-wise rounding.
-    for (word vertex=0; vertex<84; vertex+=2) {
-        word x=ring_offsets[vertex]; word z=ring_offsets[vertex+1];
-        ring_offsets[vertex]=x*camera[1]+z*camera[0];
-        ring_offsets[vertex+1]=z*camera[1]-x*camera[0];
-    }
-
+    // Pieces and the king's cross/rook's merlons honor the wireframe toggle.
+    scene_wire = wire;
     for (word item = 0; item < 32; item++) {
         word piece = order[item]; word team = piece >> 4; word slot = piece & 15;
         word xx = (slot & 7)*16-56; word zz = -56;
@@ -610,62 +700,82 @@ word main() {
         if (team != 0) zz = -zz;
         word material = 4; word facing = 1;
         if (team != 0) { material=9; facing=-1; }
-        word raw_x=xx*camera[1]+zz*camera[0];
-        word raw_z=zz*camera[1]-xx*camera[0];
+        word raw_x=xx*c1+zz*c0;
+        word raw_z=zz*c1-xx*c0;
         word profile = piece_type*6;
         // Pawn/bishop final rings and their caps are the same unleaned apex.
         // Keep all six ring indices for the real conical band below them.
         bool collapsed = piece_type == 0 || piece_type == 3;
         word rings = 6; if (collapsed) rings = 5;
-        for (word ring = 0; ring < rings; ring++) {
+        // Band boundaries actually drawn. The base ring 0 and the top ring 5
+        // (projected cap edge or copied apex) always stay; keep_ring() may
+        // drop interior rings of distant pieces, merging their bands.
+        word kept[6]; kept[0] = 0; word kept_count = 1;
+        for (word ring = 1; ring < 5; ring++) {
+            if (keep_ring(keys[item], ring)) { kept[kept_count] = ring; kept_count++; }
+        }
+        kept[kept_count] = 5; kept_count++;
+        // Project only kept rings; a collapsed profile's ring 5 is the apex
+        // copied below, not a projected ring.
+        for (word k = 0; k < kept_count; k++) {
+            word ring = kept[k];
+            if (ring >= rings) continue;
             word radius = radii[profile+ring]; word height = heights[profile+ring];
-            word lean_x=0; word lean_z=0;
+            word center_x=raw_x; word center_z=raw_z;
             if (piece_type == 2 && ring >= 3) {
                 word offset=(ring-3)*facing;
-                lean_x=offset*camera[0]; lean_z=offset*camera[1];
+                center_x+=offset*c0; center_z+=offset*c1;
             }
-            for (word s = 0; s < 6; s++) {
-                word vertex = (ring*6+s)*2;
-                word radial=(radius*6+s)*2;
-                project_raw(raw_x+lean_x+ring_offsets[radial], height, raw_z+lean_z+ring_offsets[radial+1],
-                    &camera[0],&inverse[0],&points[vertex]);
-            }
+            project_batch(center_x, center_z, height, radius*6, ring*6, 6);
         }
         word cap = heights[profile+5];
         if (piece_type == 4) cap += 3;
-        project_raw(raw_x,cap,raw_z,&camera[0],&inverse[0],&points[72]);
+        project_raw(raw_x,cap,raw_z,36);
         if (collapsed) {
-            word apex_x=points[72]; word apex_y=points[73];
+            word apex_x=pts_x[36]; word apex_y=pts_y[36];
             for (word s=0; s<6; s++) {
-                points[60+s+s]=apex_x; points[61+s+s]=apex_y;
+                pts_x[30+s]=apex_x; pts_y[30+s]=apex_y;
             }
         }
-        for (word band = 0; band < 5; band++) {
-            word dh = heights[profile+band+1]-heights[profile+band];
-            word dr = radii[profile+band]-radii[profile+band+1];
-            word mask=diagonals[piece_type*5+band]; word bit=1;
+        // Adjacent rings keep their convex-hull diagonal mask. A merged band
+        // uses AC: quad_cull() culls both triangles independently and fuses
+        // them only when their projection is convex.
+        for (word band = 0; band + 1 < kept_count; band++) {
+            word lower = kept[band]; word upper = kept[band+1];
+            piece_kept[band] = lower*6; piece_kept[band+1] = upper*6;
+            word mask=0;
+            if (upper == lower+1) mask=diagonals[piece_type*5+lower];
+            band_mask[band] = mask;
+        }
+        cull_piece(kept_count-1);
+        for (word band = 0; band + 1 < kept_count; band++) {
+            word lower = kept[band]; word upper = kept[band+1];
+            word dh = heights[profile+upper]-heights[profile+lower];
+            word dr = radii[profile+lower]-radii[profile+upper];
             for (word s = 0; s < 6; s++) {
-                word next = s+1; if (next==6) next=0;
-                word a=band*6+s; word b=band*6+next;
-                word slope=dr;
-                if (piece_type==2 && band>=3) slope-=q6(normal_z[s]*facing);
-                word ink=shade(dh,slope,light[s],material);
-                count += quad_face(&points[0],b,a,a+6,b+6,ink,wire,&spans[0],(mask&bit)!=0);
-                bit+=bit;
+                word code = quad_code[band*6+s];
+                if (code != 0) {
+                    word next = s+1; if (next==6) next=0;
+                    word a=lower*6+s; word b=lower*6+next;
+                    word slope=dr;
+                    if (piece_type==2 && lower>=3) slope-=q6(normal_z[s]*facing);
+                    word ink=shade(dh,slope,light[s],material);
+                    count += paint_quad(b*256+a,(upper*6+s)*256+upper*6+next,ink,code);
+                }
             }
         }
         if (!collapsed) {
             for (word s = 0; s < 6; s++) {
                 word next=s+1; if(next==6) next=0;
                 word ink=shade(cap-heights[profile+5],radii[profile+5],light[s],material);
-                count += face(&points[0],30+next,30+s,36,36,ink,wire,&spans[0]);
+                count += face(vertex_pair(30+next,30+s), vertex_pair(36,36), ink);
             }
         }
         if (piece_type == 5) {
             // A real extruded cross, three nonintersecting convex solids.
-            count += box(xx,29,zz,1,4,1,material,wire,&camera[0],&inverse[0],&spans[0]);
-            count += box(xx,33,zz,4,2,1,material,wire,&camera[0],&inverse[0],&spans[0]);
-            count += box(xx,35,zz,1,3,1,material,wire,&camera[0],&inverse[0],&spans[0]);
+            count += box(xx,29,zz,1,4,1,material);
+            count += box(xx,33,zz,4,2,1,material);
+            count += box(xx,35,zz,1,3,1,material);
         }
         if (piece_type == 1) {
             // Four separate merlons: do not fill a concave crown as one polygon.
@@ -675,7 +785,7 @@ word main() {
                 if (t==1) { tx=0; tz=-3; }
                 if (t==2) tx=4;
                 if (t==3) { tx=0; tz=3; }
-                word key=tz*camera[1]-tx*camera[0];
+                word key=tz*c1-tx*c0;
                 word j=t;
                 while(j>0 && tooth_keys[j-1]>key) { tooth_keys[j]=tooth_keys[j-1]; teeth[j]=teeth[j-1]; j--; }
                 tooth_keys[j]=key; teeth[j]=t;
@@ -685,7 +795,7 @@ word main() {
                 if (tooth==1) { tx=0; tz=-3; }
                 if (tooth==2) tx=4;
                 if (tooth==3) { tx=0; tz=3; }
-                count += box(xx+tx,23,zz+tz,1,4,1,material,wire,&camera[0],&inverse[0],&spans[0]);
+                count += box(xx+tx,23,zz+tz,1,4,1,material);
             }
         }
     }

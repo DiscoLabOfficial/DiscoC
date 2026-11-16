@@ -6,29 +6,33 @@ endif()
 
 # Compile the actual scene functions unchanged. The declaration boundaries are
 # checked so a scene reorganization fails visibly instead of testing stale code.
-# Omit its framebuffer at zero and scene main: this fixture's stack and inputs
-# live below a separate framebuffer at $6000.
+# The kernel starts at the scene's static-RAM state, which project/paint/collect
+# use instead of pointer parameters, and ends before the projection state. Omit its
+# framebuffer at zero and scene main: this fixture's stack and inputs live below
+# a separate framebuffer at $6000.
 set(scene_source "${ROOT_DIR}/examples/snes/gem_chess/main.dc")
 file(READ "${scene_source}" scene)
 string(REPLACE "\r\n" "\n" scene "${scene}")
-foreach(boundary IN ITEMS q6 quad_face)
-    string(REGEX MATCHALL "\nword ${boundary}\\(" declarations "${scene}")
+# No ';' in these patterns: CMake would split the list item there.
+foreach(boundary IN ITEMS "word camera\\[5\\]" "word q6\\(" "word inverse\\[512\\]")
+    string(REGEX MATCHALL "\ninternal ${boundary}" declarations "${scene}")
     list(LENGTH declarations declaration_count)
     if(NOT declaration_count EQUAL 1)
-        message(FATAL_ERROR "Expected one ${boundary} declaration in ${scene_source}")
+        message(FATAL_ERROR "Expected one internal ${boundary} declaration in ${scene_source}")
     endif()
 endforeach()
-string(FIND "${scene}" "\nword q6(" kernel_begin)
-string(FIND "${scene}" "\nword quad_face(" kernel_end)
-if(kernel_begin LESS 0 OR kernel_end LESS_EQUAL kernel_begin)
+string(FIND "${scene}" "\ninternal word camera[5];" kernel_begin)
+string(FIND "${scene}" "\ninternal word q6(" kernel_functions)
+string(FIND "${scene}" "\ninternal word inverse[512]" kernel_end)
+if(kernel_begin LESS 0 OR kernel_functions LESS_EQUAL kernel_begin OR kernel_end LESS_EQUAL kernel_functions)
     message(FATAL_ERROR "Gem-chess kernel declaration boundaries are missing or reordered")
 endif()
 math(EXPR kernel_begin "${kernel_begin} + 1")
 math(EXPR kernel_length "${kernel_end} - ${kernel_begin}")
 string(SUBSTRING "${scene}" ${kernel_begin} ${kernel_length} kernel)
-foreach(declaration IN ITEMS "void collect_clipped(" "void collect_horizontal_left("
-        "void collect_horizontal_right(" "void collect_vertical_left("
-        "void collect_vertical_right(" "void collect(" "void line(" "word paint(")
+foreach(declaration IN ITEMS "internal word spans[512]" "internal word poly_x[4]" "internal word poly_y[4]"
+        "internal void collect_clipped(" "@cache internal void collect(" "internal void line("
+        "internal word raster(" "internal word paint(")
     string(FIND "${kernel}" "\n${declaration}" declaration_position)
     if(declaration_position LESS 0)
         message(FATAL_ERROR "Current gem-chess kernel is missing declaration: ${declaration}")
@@ -39,12 +43,21 @@ set(bitmap "")
 if(CASE STREQUAL "gem_chess_paint")
     set(runner_mode --gem-paint)
     set(bitmap "bitmap fixture { mode bitmap; size 256x192; depth 4bpp; base 0x6000; }\n")
+    # The runner seeds the polygon at $0108/$0110 and dirties every span word
+    # at $1000. Copy both into the scene's globals so vertex-only span
+    # initialization still cannot pass by reading zero-initialized rows. The
+    # scene interleaves rows: [2y] is the left minimum, [2y+1] the negated
+    # right maximum; the runner's layout is left[0..191], right[192..383].
     set(entry [=[
 word main() {
     use bitmap fixture;
     word* input = (word*)0x100;
+    word* xs = (word*)0x108; word* ys = (word*)0x110;
+    word* outside = (word*)0x1000;
+    for (word i = 0; i < 4; i++) { poly_x[i] = xs[i]; poly_y[i] = ys[i]; }
+    for (word y = 0; y < 192; y++) { spans[y+y] = outside[y]; spans[y+y+1] = -outside[192+y]; }
     plot { options; }
-    paint((word*)0x108, (word*)0x110, input[0], input[1], input[2] != 0, (word*)0x1000);
+    paint(input[0], input[1], input[2] != 0);
     flush;
     return 42;
 }
@@ -53,29 +66,33 @@ else()
     set(entry [=[
 word main() {
     word* input = (word*)0x100;
-    word* spans = (word*)0x1000;
-    @cache for (word y = 0; y < 192; y++) { spans[y] = 256; spans[192+y] = -1; }
+    word* outside = (word*)0x1000;
+    @cache for (word y = 0; y < 192; y++) { spans[y+y] = 256; spans[y+y+1] = 1; }
 ]=])
     if(CASE STREQUAL "gem_chess_raster_private")
         set(runner_mode --gem-raster-private)
         # A private edge writes one side according to its orientation. Walk
         # both directions to compare both boundaries to the widened oracle.
         string(APPEND entry [=[
-    collect(input[0], input[1], input[2], input[3], spans);
-    collect(input[2], input[3], input[0], input[1], spans);
+    collect(input[0], input[1], input[2], input[3]);
+    collect(input[2], input[3], input[0], input[1]);
 ]=])
     elseif(CASE STREQUAL "gem_chess_raster")
         set(runner_mode --gem-raster)
-        string(APPEND entry "    collect_clipped(input[0], input[1], input[2], input[3], spans);\n")
+        string(APPEND entry "    collect_clipped(input[0], input[1], input[2], input[3]);\n")
     else()
         message(FATAL_ERROR "Unknown gem-chess regression case: ${CASE}")
     endif()
-    string(APPEND entry "    return 42;\n}\n")
+    # The runner compares all 384 span words at $1000, in its own layout.
+    string(APPEND entry "    for (word y = 0; y < 192; y++) { outside[y] = spans[y+y]; outside[192+y] = -spans[y+y+1]; }\n    return 42;\n}\n")
 endif()
 
 set(source "${TEST_DIR}/kernel.dc")
 file(WRITE "${source}" "${bitmap}${kernel}\n${entry}")
-set(link_options --origin 0x008000 --init-runtime --ram-bank 0 --stack-pointer 0x2000)
+# Static RAM must end below the $2000 stack. The ~2 KiB of scene globals fit
+# between the runner's inputs ($0100..$0117) and its $0FFE span sentinel,
+# away from every runner-checked span, input, sentinel and stack address.
+set(link_options --origin 0x008000 --init-runtime --ram-bank 0 --ram-origin 0x0200 --stack-pointer 0x2000)
 check_round_trip(kernel "${source}" ${link_options})
 
 # Export the genuinely linked payload, with bootstrap and resolved metadata.

@@ -178,7 +178,8 @@ int runLinker(std::vector<std::string> arguments) {
             // names/tables, not just payload bytes. Legacy records are charged
             // at the same rate. Bound the complete link as well as each reader.
             std::uint64_t object_bytes = 35u + (object.config.bitmap.enabled ? 10u : 0u) +
-                static_cast<std::uint64_t>(object.code_section.size()) + object.data_section.size() + object.ram_section.size();
+                static_cast<std::uint64_t>(object.code_section.size()) + object.data_section.size() + object.ram_section.size() +
+                object.short_ram_section.size();
             for (const auto& symbol : object.symbol_table) object_bytes += 9u + symbol.name.size();
             for (const auto& relocation : object.relocation_table) object_bytes += 10u + relocation.target_symbol_name.size();
             if (object_bytes > ObjectFile::MaxObjectBytes - input_record_bytes)
@@ -234,6 +235,19 @@ int runLinker(std::vector<std::string> arguments) {
         config.bitmap.validate();
         if (initialize_runtime && config.target != TargetKind::GSU)
             throw std::runtime_error("Runtime initialization is only supported for GSU.");
+        // Short RAM: every object's section, word-aligned, in link order from
+        // GSUAbi::ShortRamBase. Only there do LMS/SMS operands reach them.
+        std::vector<std::uint8_t> final_short;
+        std::vector<std::size_t> short_bases;
+        for (const auto& object : objects) {
+            if (final_short.size() & 1u) final_short.push_back(0);
+            short_bases.push_back(final_short.size());
+            if (object.short_ram_section.size() > GSUAbi::ShortRamCapacity - final_short.size())
+                throw std::runtime_error("Short RAM sections exceed the " + std::to_string(GSUAbi::ShortRamCapacity) +
+                    "-byte LMS/SMS window ($0002-$01FF).");
+            final_short.insert(final_short.end(), object.short_ram_section.begin(), object.short_ram_section.end());
+        }
+        const auto short_start = 0x700000u | (ram_bank << 16) | GSUAbi::ShortRamBase;
         std::vector<std::uint8_t> final_ram;
         std::vector<std::size_t> ram_bases;
         for (const auto& object : objects) {
@@ -242,13 +256,22 @@ int runLinker(std::vector<std::string> arguments) {
             if (final_ram.size() > 65536u - ram_origin || object.ram_section.size() > 65536u - ram_origin - final_ram.size())
                 throw std::runtime_error("Static storage crosses a RAM bank boundary.");
             final_ram.insert(final_ram.end(), object.ram_section.begin(), object.ram_section.end());
+            // The object's code omits null checks for its own static RAM. Every
+            // object byte is above its segment start, and the segment stays
+            // in one bank (checked above), so a nonzero start suffices.
+            if (object.hasStaticRamProof() && ram_origin + ram_bases.back() == 0)
+                throw std::runtime_error("Object relies on nonnull static RAM, but its static RAM starts at address 0; "
+                                         "use a nonzero --ram-origin.");
         }
-        if (!final_ram.empty() && !initialize_runtime && !host_globals)
+        if ((!final_ram.empty() || !final_short.empty()) && !initialize_runtime && !host_globals)
             throw std::runtime_error("Static globals require --init-runtime or --host-initialized-globals.");
-        if (!final_ram.empty() && config.target != TargetKind::GSU)
+        if ((!final_ram.empty() || !final_short.empty()) && config.target != TargetKind::GSU)
             throw std::runtime_error("Static storage placement is currently GSU-only.");
+        if (!final_short.empty() && !final_ram.empty() && ram_origin < GSUAbi::ShortRamBase + final_short.size())
+            throw std::runtime_error("Static RAM overlaps the short RAM window; use a --ram-origin of at least $0200.");
         const auto startup = initialize_runtime ? makeRuntimeInitialization(static_cast<std::uint8_t>(ram_bank),
-            static_cast<std::uint16_t>(stack_pointer), static_cast<std::uint16_t>(ram_origin), final_ram) : RuntimeInitialization{};
+            static_cast<std::uint16_t>(stack_pointer), static_cast<std::uint16_t>(ram_origin), final_ram, final_short) :
+            RuntimeInitialization{};
         const std::size_t startup_size = startup.bytes.size();
 
         if (config.target == TargetKind::GSU) {
@@ -274,12 +297,15 @@ int runLinker(std::vector<std::string> arguments) {
         std::map<std::string, SymbolSection> final_sections;
         std::map<std::string, bool> code_targets;
         bool entry_is_instruction = false;
+        // Short RAM symbols are near static RAM too: they resolve as RAM.
         for (std::size_t index = 0; index < objects.size(); ++index) {
             for (const auto& symbol : objects[index].symbol_table) {
-                if (symbol.section != SymbolSection::RAM || (!symbol.name.empty() && symbol.name.front() == '\x01')) continue;
+                if ((symbol.section != SymbolSection::RAM && symbol.section != SymbolSection::SHORT_RAM) ||
+                    (!symbol.name.empty() && symbol.name.front() == '\x01')) continue;
                 if (final_addresses.count(symbol.name)) throw std::runtime_error("Duplicate global symbol: " + symbol.name);
-                final_addresses.emplace(symbol.name, 0x700000u | (ram_bank << 16) |
-                    checkedAddress(ram_origin + ram_bases[index] + symbol.offset, "RAM symbol address"));
+                final_addresses.emplace(symbol.name, symbol.section == SymbolSection::SHORT_RAM
+                    ? checkedAddress(static_cast<std::uint64_t>(short_start) + short_bases[index] + symbol.offset, "short RAM symbol address")
+                    : 0x700000u | (ram_bank << 16) | checkedAddress(ram_origin + ram_bases[index] + symbol.offset, "RAM symbol address"));
                 final_sections.emplace(symbol.name, SymbolSection::RAM);
             }
         }
@@ -363,6 +389,17 @@ int runLinker(std::vector<std::string> arguments) {
                 throw std::runtime_error("Bitmap framebuffer overlaps static RAM.");
             if (initialize_runtime && overlaps(0x700000u + (ram_bank << 16) + stack_pointer, 2))
                 throw std::runtime_error("Bitmap framebuffer overlaps the initial stack word.");
+            if (overlaps(short_start, final_short.size()))
+                throw std::runtime_error("Bitmap framebuffer overlaps the short RAM window ($0002-$01FF); "
+                                         "place the bitmap at $0400 or above.");
+        }
+        if (!final_short.empty()) {
+            const auto short_end = static_cast<std::uint64_t>(short_start) + final_short.size();
+            const auto payload_end = static_cast<std::uint64_t>(config.code_start_address) + final_code.size() + final_data.size();
+            if (short_start < payload_end && short_end > config.code_start_address)
+                throw std::runtime_error("Short RAM overlaps the linked payload.");
+            if (initialize_runtime && GSUAbi::ShortRamBase + final_short.size() >= stack_pointer)
+                throw std::runtime_error("Short RAM must end below the initial stack pointer.");
         }
         if (!final_ram.empty()) {
             const auto ram_start = 0x700000u | (ram_bank << 16) | ram_origin;
@@ -403,12 +440,37 @@ int runLinker(std::vector<std::string> arguments) {
         if (config.bitmap.enabled)
             reserve_below_stack(0x700000u + config.bitmap.base,
                 0x700000u + config.bitmap.base + config.bitmap.sizeBytes());
+        if (!final_short.empty())
+            reserve_below_stack(short_start, static_cast<std::uint64_t>(short_start) + final_short.size());
         // A descending stack must not grow into still-executable RAM code or
         // payload DATA, even when its initial word itself does not overlap.
         if (initialize_runtime && GsuMemoryMap::region(config.code_start_address) == GsuMemoryMap::Region::Ram &&
             (config.code_start_address >> 16) == 0x70u + ram_bank)
             reserve_below_stack(config.code_start_address,
                 static_cast<std::uint64_t>(config.code_start_address) + final_code.size() + final_data.size());
+        // An object without stack guards in `main`'s call tree is sound only
+        // if `main` starts at the runtime's initial SP, from nowhere else, and
+        // its proven depth fits above the final floor: then no guard can fail.
+        for (std::size_t index = 0; index < objects.size(); ++index) {
+            const auto bound = objects[index].staticStackBound();
+            if (!bound) continue;
+            const auto prefix = "Object relies on a static stack bound of " + std::to_string(bound) + " bytes";
+            if (!initialize_runtime)
+                throw std::runtime_error(prefix + " from its runtime entry; link with --init-runtime.");
+            const bool own_main = entry_name == "main" && std::any_of(objects[index].symbol_table.begin(),
+                objects[index].symbol_table.end(), [](const SymbolEntry& symbol) {
+                    return symbol.section == SymbolSection::CODE && symbol.name == "main";
+                });
+            if (!own_main) throw std::runtime_error(prefix + ", but the runtime entry is not that object's main.");
+            for (const auto& object : objects)
+                for (const auto& relocation : object.relocation_table)
+                    if (relocation.target_symbol_name == entry_name)
+                        throw std::runtime_error(prefix + ", but code also references main; only the runtime may enter it.");
+            if (static_cast<std::uint64_t>(stack_floor) + bound > stack_pointer)
+                throw std::runtime_error(prefix + ", but the initial stack pointer leaves only " +
+                    std::to_string(stack_pointer > stack_floor ? stack_pointer - stack_floor : 0u) +
+                    " bytes above the stack floor.");
+        }
 
         for (const auto& obj : objects) {
             current_code_base = code_bases.at(current_object);
@@ -441,7 +503,10 @@ int runLinker(std::vector<std::string> arguments) {
                     const auto base = local_symbol->section == SymbolSection::CODE
                         ? static_cast<std::uint64_t>(config.code_start_address) + current_code_base
                         : local_symbol->section == SymbolSection::DATA ? data_start_address + current_data_base
+                        : local_symbol->section == SymbolSection::SHORT_RAM
+                        ? static_cast<std::uint64_t>(short_start) + short_bases.at(current_object)
                         : (0x700000u | (ram_bank << 16)) + ram_origin + ram_bases.at(current_object);
+                    if (target_section == SymbolSection::SHORT_RAM) target_section = SymbolSection::RAM;
                     target_addr = checkedAddress(base + local_symbol->offset,
                         "local branch target address");
                 } else if (reloc.target_symbol_name.compare(0, std::string(GSUAbi::StackLimitPrefix).size(), GSUAbi::StackLimitPrefix) == 0) {
@@ -475,7 +540,12 @@ int runLinker(std::vector<std::string> arguments) {
                     throw std::runtime_error("Relocation target exceeds the 24-bit address range.");
                 }
                 if (config.target == TargetKind::GSU) {
-                    if (reloc.type == RelocationType::ADDR16_RAM) {
+                    if (reloc.type == RelocationType::ADDR8_SHORT_RAM) {
+                        if (target_section != SymbolSection::RAM || (target_addr >> 16) != 0x70u + ram_bank ||
+                            (target_addr & 1u) || (target_addr & 0xffffu) >= GSUAbi::ShortRamEnd)
+                            throw std::runtime_error("Short RAM relocation must target an even near RAM word below $0200: " +
+                                reloc.target_symbol_name);
+                    } else if (reloc.type == RelocationType::ADDR16_RAM) {
                         const bool pool = reloc.target_symbol_name.compare(0, std::string(GSUAbi::ImmutablePoolPrefix).size(),
                             GSUAbi::ImmutablePoolPrefix) == 0;
                         if (pool && (target_section != SymbolSection::DATA ||
@@ -507,7 +577,8 @@ int runLinker(std::vector<std::string> arguments) {
                 const auto section_base = reloc.section_to_patch == SymbolSection::CODE
                     ? current_code_base : current_data_base;
                 const auto offset_in_section = section_base + reloc.patch_offset;
-                const auto patch_size = reloc.type == RelocationType::ADDR24_BANK ? 2u : 3u;
+                const auto patch_size = reloc.type == RelocationType::ADDR24_BANK ||
+                    reloc.type == RelocationType::ADDR8_SHORT_RAM ? 2u : 3u;
                 if (static_cast<std::uint64_t>(offset_in_section) + patch_size > section_to_patch.size()) {
                     throw std::runtime_error("Linker Error: relocation extends beyond its section.");
                 }
@@ -523,6 +594,9 @@ int runLinker(std::vector<std::string> arguments) {
                         break;
                     case RelocationType::ADDR24_BANK:
                         section_to_patch[patch_index + 1] = (target_addr >> 16) & 0xFF;
+                        break;
+                    case RelocationType::ADDR8_SHORT_RAM:
+                        section_to_patch[patch_index + 1] = static_cast<std::uint8_t>((target_addr & 0xffffu) >> 1);
                         break;
                 }
             }

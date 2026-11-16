@@ -1,4 +1,5 @@
 #include "Assembler.hpp"
+#include "ABI.hpp"
 #include "GSUCodeLayout.hpp"
 
 #include "CompilerError.hpp"
@@ -17,7 +18,7 @@
 
 namespace {
 
-enum class Section { None, Code, Data, Ram };
+enum class Section { None, Code, Data, Ram, ShortRam };
 
 struct ParsedLine {
     int line_number = 0;
@@ -171,10 +172,13 @@ private:
     std::uint8_t m_data_alignment = 1;
     std::uint8_t m_ram_alignment = 2;
     bool m_cache_alignment = false;
+    bool m_static_ram_proof = false;
+    std::uint32_t m_static_stack_bound = 0;
     std::set<std::string> m_config_definitions;
     std::size_t m_code_size = 0;
     std::size_t m_data_size = 0;
     std::size_t m_ram_size = 0;
+    std::size_t m_short_ram_size = 0;
     std::set<int> m_relaxed_branch_lines;
     std::map<int, std::size_t> m_code_offsets_by_line;
 
@@ -185,18 +189,17 @@ private:
     }
 
     static SymbolSection symbolSection(Section section) {
-        return section == Section::Code ? SymbolSection::CODE : section == Section::Data ? SymbolSection::DATA : SymbolSection::RAM;
+        return section == Section::Code ? SymbolSection::CODE : section == Section::Data ? SymbolSection::DATA :
+            section == Section::Ram ? SymbolSection::RAM : SymbolSection::SHORT_RAM;
     }
 
-    static std::size_t& offsetFor(Section section, std::size_t& code, std::size_t& data, std::size_t& ram) {
-        if (section == Section::Code) return code;
-        if (section == Section::Data) return data;
-        return ram;
-    }
-
-    static std::size_t currentOffset(Section section, std::size_t code, std::size_t data, std::size_t ram) {
-        return section == Section::Code ? code : section == Section::Data ? data : ram;
-    }
+    // Running byte offset of every section during a layout pass.
+    struct SectionOffsets {
+        std::size_t code = 0, data = 0, ram = 0, short_ram = 0;
+        std::size_t& at(Section section) {
+            return section == Section::Code ? code : section == Section::Data ? data : section == Section::Ram ? ram : short_ram;
+        }
+    };
 
     void parseConfigDefinition(const std::string& rest, int line_number) {
         std::istringstream definition(rest);
@@ -206,7 +209,8 @@ private:
         }
         if (name != "__DISCO_MEMORY_MAPPING" && name != "__DISCO_CODE_START_ADDRESS" &&
             name != "__DISCO_DATA_ALIGNMENT" && name != "__DISCO_RAM_ALIGNMENT" && name != "__DISCO_CODE_ALIGNMENT" &&
-            name != "__DISCO_BITMAP_SCBR" && name != "__DISCO_BITMAP_SCMR") {
+            name != "__DISCO_BITMAP_SCBR" && name != "__DISCO_BITMAP_SCMR" && name != "__DISCO_STATIC_RAM_NONNULL" &&
+            name != "__DISCO_STATIC_STACK_BOUND") {
             fail("unsupported .define name '" + name + "'.", line_number);
         }
         if (!m_config_definitions.insert(name).second) {
@@ -215,6 +219,14 @@ private:
         if (name == "__DISCO_CODE_ALIGNMENT") {
             if (value != "16") fail("GSU CODE alignment hint must be 16.", line_number);
             m_cache_alignment = true;
+        } else if (name == "__DISCO_STATIC_RAM_NONNULL") {
+            if (value != "1") fail("Static-RAM proof marker must be 1.", line_number);
+            m_static_ram_proof = true;
+        } else if (name == "__DISCO_STATIC_STACK_BOUND") {
+            std::int64_t number = 0;
+            if (!parseNumber(value, number) || number < 1 || number > 65535)
+                fail("Static stack bound must be 1..65535 bytes.", line_number);
+            m_static_stack_bound = static_cast<std::uint32_t>(number);
         } else if (name == "__DISCO_BITMAP_SCBR" || name == "__DISCO_BITMAP_SCMR") {
             std::int64_t number = 0;
             if (!parseNumber(value, number) || number < 0 || number > 255) fail("Invalid bitmap register value.", line_number);
@@ -294,6 +306,7 @@ private:
                 if (name == "\"code\"") current = Section::Code;
                 else if (name == "\"data\"") current = Section::Data;
                 else if (name == "\"ram\"") current = Section::Ram;
+                else if (name == "\"shortram\"") current = Section::ShortRam;
                 else fail("unsupported segment " + line.operands.front() + ".", line_number);
             }
         }
@@ -304,21 +317,19 @@ private:
         if (line.section == Section::None) fail("statement appears before a .segment directive.", line.line_number);
     }
 
-    void defineLabel(const ParsedLine& line, std::size_t code, std::size_t data, std::size_t ram) {
+    void defineLabel(const ParsedLine& line, SectionOffsets& offsets) {
         if (line.label.empty()) return;
         requireSection(line);
         if (m_symbols.count(line.label)) fail("duplicate label '" + line.label + "'.", line.line_number);
-        m_symbols.emplace(line.label, SymbolDefinition{symbolSection(line.section), currentOffset(line.section, code, data, ram)});
+        m_symbols.emplace(line.label, SymbolDefinition{symbolSection(line.section), offsets.at(line.section)});
     }
 
     void firstPass() {
         m_symbols.clear();
         m_code_offsets_by_line.clear();
-        std::size_t code = 0;
-        std::size_t data = 0;
-        std::size_t ram = 0;
+        SectionOffsets offsets;
         for (const auto& line : m_lines) {
-            defineLabel(line, code, data, ram);
+            defineLabel(line, offsets);
             if (line.operation.empty() || line.operation == ".segment" || line.operation == ".export" ||
                 line.operation == ".setcpu" || line.operation == ".include" || line.operation == ".define") {
                 if (line.operation == ".export") {
@@ -331,22 +342,23 @@ private:
             }
             requireSection(line);
             if (line.section == Section::Code) {
-                m_code_offsets_by_line[line.line_number] = code;
+                m_code_offsets_by_line[line.line_number] = offsets.code;
             }
             if (line.operation == ".byte" || line.operation == ".word") {
                 if (line.operands.empty()) fail(line.operation + " expects at least one value.", line.line_number);
-                auto& offset = offsetFor(line.section, code, data, ram);
-                offset += line.operands.size() * (line.operation == ".byte" ? 1u : 2u);
+                offsets.at(line.section) += line.operands.size() * (line.operation == ".byte" ? 1u : 2u);
             } else {
-                if (line.section == Section::Ram) fail("RAM initial images contain data directives, not instructions.", line.line_number);
-                auto& offset = offsetFor(line.section, code, data, ram);
-                offset += encodeInstruction(line, nullptr, false);
+                if (line.section == Section::Ram || line.section == Section::ShortRam)
+                    fail("RAM initial images contain data directives, not instructions.", line.line_number);
+                offsets.at(line.section) += encodeInstruction(line, nullptr, false);
             }
         }
-        m_code_size = code;
-        m_data_size = data;
-        if (ram > 65536u) fail("RAM initial image exceeds one bank.", 1);
-        m_ram_size = ram;
+        m_code_size = offsets.code;
+        m_data_size = offsets.data;
+        if (offsets.ram > 65536u) fail("RAM initial image exceeds one bank.", 1);
+        if (offsets.short_ram > GSUAbi::ShortRamCapacity) fail("short RAM image exceeds the LMS/SMS window.", 1);
+        m_ram_size = offsets.ram;
+        m_short_ram_size = offsets.short_ram;
     }
 
     void relaxBranches() {
@@ -388,9 +400,13 @@ private:
         m_object.data_alignment = m_data_alignment;
         m_object.ram_alignment = m_ram_alignment;
         if (m_cache_alignment) m_object.symbol_table.push_back({GSUCodeLayout::CacheAlignmentSymbol, SymbolSection::CODE, 0});
+        if (m_static_ram_proof) m_object.symbol_table.push_back({GSUAbi::StaticRamProofSymbol, SymbolSection::RAM, 0});
+        if (m_static_stack_bound) m_object.symbol_table.push_back({GSUAbi::StaticStackBoundPrefix +
+            std::to_string(m_static_stack_bound), SymbolSection::RAM, 0});
         m_object.code_section.reserve(m_code_size);
         m_object.data_section.reserve(m_data_size);
         m_object.ram_section.reserve(m_ram_size);
+        m_object.short_ram_section.reserve(m_short_ram_size);
 
         for (const auto& line : m_lines) {
             if (line.operation.empty() || line.operation == ".segment" || line.operation == ".export" ||
@@ -405,7 +421,8 @@ private:
     }
 
     std::vector<uint8_t>* output(Section section) {
-        return section == Section::Code ? &m_object.code_section : section == Section::Data ? &m_object.data_section : &m_object.ram_section;
+        return section == Section::Code ? &m_object.code_section : section == Section::Data ? &m_object.data_section :
+            section == Section::Ram ? &m_object.ram_section : &m_object.short_ram_section;
     }
 
     static void emitByte(std::vector<uint8_t>* output, uint8_t value) {
@@ -798,7 +815,23 @@ private:
             const bool short_address = op == "lms" || op == "sms";
             const int reg = load ? requireRegister(line.operands[0], line) : requireRegister(line.operands[1], line);
             const auto address_token = load ? line.operands[1] : line.operands[0];
-            const auto address = requireWord(address_token, line);
+            // `(short(name))`: the linker writes name's word index (address / 2).
+            auto symbolic = address_token;
+            if (symbolic.size() > 2 && symbolic.front() == '(' && symbolic.back() == ')')
+                symbolic = symbolic.substr(1, symbolic.size() - 2);
+            if (short_address && symbolic.size() > 7 && symbolic.compare(0, 6, "short(") == 0 && symbolic.back() == ')') {
+                const auto name = symbolic.substr(6, symbolic.size() - 7);
+                if (!isIdentifier(name)) fail("invalid short RAM relocation symbol.", line.line_number);
+                if (line.section != Section::Code) fail("short RAM relocations are only valid in .segment \"CODE\".", line.line_number);
+                emitByte(out, static_cast<uint8_t>(load ? 0x3d : 0x3e));
+                const auto patch = out ? out->size() : 0;
+                emitByte(out, static_cast<uint8_t>(0xa0 + reg));
+                emitByte(out, 0);
+                if (out) m_object.relocation_table.push_back({name, SymbolSection::CODE, static_cast<uint32_t>(patch),
+                    RelocationType::ADDR8_SHORT_RAM});
+                return 3;
+            }
+            const auto address = requireWord(symbolic, line);
             if (short_address) {
                 if ((address & 1u) != 0 || address > 510) fail("short memory address must be even and <= 510.", line.line_number);
                 emitByte(out, static_cast<uint8_t>(load ? 0x3d : 0x3e));

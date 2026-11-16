@@ -64,6 +64,10 @@ public:
     std::uint8_t romBank() const { return rom_bank_; }
     std::uint16_t cacheBase() const { return cache_base_; }
     unsigned cacheRequests() const { return cache_requests_; }
+    // CACHE executions that moved CBR and so invalidated every line.
+    unsigned cacheRebases() const { return cache_rebases_; }
+    // Instruction/operand bytes fetched from ROM/RAM instead of the cache.
+    unsigned long uncachedFetches() const { return uncached_fetches_; }
     void configureScreen(std::uint8_t mode, std::uint8_t base) { graphics_.configure(mode, base); }
     unsigned graphicsState(const std::string& option) const { return graphics_.state(option); }
     unsigned accesses(std::uint32_t address, bool store) const {
@@ -152,6 +156,7 @@ private:
             }
             return instruction_cache_.at(cache_offset);
         }
+        ++uncached_fetches_;
         return programByte(pc);
     }
     std::uint8_t operand() {
@@ -181,6 +186,7 @@ private:
             if (cache_base_ != next_base) {
                 cache_base_ = next_base;
                 cache_valid_.fill(false);
+                ++cache_rebases_;
             }
             ++cache_requests_;
             resetSelectors();
@@ -351,6 +357,26 @@ private:
             const auto byte = operand();
             write(index, static_cast<std::uint16_t>(byte < 128 ? byte : byte | 0xff00u));
             resetSelectors();
+        } else if (((opcode >= 0xa0 && opcode <= 0xaf) || opcode >= 0xf0) && alt1_ != alt2_) {
+            // LMS/SMS (word index operand) and LM/SM (word address): the named
+            // register is accessed directly, and like LDW/STW they set the
+            // latch SBK stores back to. Flags are unchanged.
+            std::uint16_t address = operand();
+            address = opcode >= 0xf0 ? static_cast<std::uint16_t>(address | (operand() << 8))
+                                     : static_cast<std::uint16_t>(address << 1);
+            ram_address_ = address;
+            const auto full = 0x700000u + static_cast<std::uint32_t>(ram_bank_) * 65536u + address;
+            memoryAccess(full, alt2_, false);
+            if (alt1_) {
+                ++reads_[full];
+                write(index, word(address));
+            } else {
+                ++writes_[full];
+                const auto location = static_cast<std::size_t>(ram_bank_) * 65536 + address;
+                ram_.at(location) = static_cast<std::uint8_t>(registers_[index]);
+                ram_.at(location ^ 1u) = static_cast<std::uint8_t>(registers_[index] >> 8);
+            }
+            resetSelectors();
         } else if (opcode >= 0xb0 && opcode <= 0xbf) {
             if (prefix_) {
                 const auto value = registers_[index];
@@ -412,6 +438,8 @@ private:
     std::array<bool, 32> cache_valid_{};
     std::uint16_t cache_base_ = 0;
     unsigned cache_requests_ = 0;
+    unsigned cache_rebases_ = 0;
+    unsigned long uncached_fetches_ = 0;
     std::array<std::uint16_t, 16> registers_{};
     std::uint8_t pipeline_ = 1;
     std::size_t source_ = 0, destination_ = 0;

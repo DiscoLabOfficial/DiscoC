@@ -11,7 +11,8 @@ initialize_display:
   lda #$18
   sta $4301
   stz $4302
-  stz $4303
+  lda #$04
+  sta $4303            ; framebuffer at $70:0400
   lda #$70
   sta $4304
   stz $4305
@@ -70,18 +71,18 @@ OamHigh:
 upload_panels:
   rep #$20
   .ACCU 16
-  ldx #$1080
+  ldx #$1480
   ldy #$0840
-  lda #$2080
+  lda #$2480
   sta $0016
   sep #$20
   .ACCU 8
   jsr upload_panel
   rep #$20
   .ACCU 16
-  ldx #$3080
+  ldx #$3480
   ldy #$1840
-  lda #$4080
+  lda #$4480
   sta $0016
   sep #$20
   .ACCU 8

@@ -1,5 +1,6 @@
 #include "GSUMachineScheduler.hpp"
 #include "GSUCodeLayout.hpp"
+#include "Opcodes.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -15,6 +16,13 @@ struct Instruction {
     bool plain = false;
     bool delay_slot = false;
     bool operand_fragment = false;
+    // `plain` when only real control-flow entries (public symbols, relocation
+    // targets and branch targets) reset selector knowledge. A private symbol
+    // nothing refers to is a layout anchor, not an entry.
+    bool reachable_plain = false;
+    bool reachable_entry = false; // Starts at such a real control-flow entry.
+    // Selector state before this instruction under that same entry notion.
+    unsigned reachable_alt = 4, reachable_source = 16, reachable_destination = 16;
     unsigned alt = 4;
     unsigned source = 16, destination = 16;
     std::size_t target = Missing;
@@ -199,9 +207,11 @@ bool splitImmediate(const Instruction& instruction) {
         (op >= 0xf0 && op <= 0xfe && instruction.bytes.size() == 3);
 }
 struct SchedulingBoundaries {
+    // Non-owning: run() keeps these offset sets alive through every helper call.
     const std::set<std::size_t>& entries;
     const std::set<std::size_t>& relocation_offsets;
     const std::set<std::size_t>& protected_offsets;
+    const std::set<std::size_t>& symbol_offsets;
 };
 void planEntryIncrements(std::vector<Instruction>& code, const SchedulingBoundaries& boundaries,
                          const ObjectFile& object,
@@ -339,6 +349,301 @@ void dropNestedCaches(std::vector<Instruction>& code, const ObjectFile& object,
         selectors_clear = true;
     }
 }
+
+std::vector<std::size_t> positions(const std::vector<Instruction>& code) {
+    std::vector<std::size_t> result(code.size() + 1, 0);
+    for (std::size_t n = 0; n < code.size(); ++n) result[n + 1] = result[n] + code[n].bytes.size();
+    return result;
+}
+// Every current branch target, symbol and relocated jump destination.
+std::set<std::size_t> liveTargets(const std::vector<Instruction>& code, const std::set<std::size_t>& symbol_offsets) {
+    std::set<std::size_t> result = symbol_offsets;
+    for (const auto& i : code) if (i.target != Missing) result.insert(i.target);
+    return result;
+}
+bool selector(std::uint8_t op) {
+    return (op >= 0x10 && op <= 0x1d) || (op >= 0x20 && op <= 0x2d) || (op >= 0xb0 && op <= 0xbd);
+}
+// One-byte opcodes that, executed with clear selectors, touch only R0-R13
+// and NZCV: no memory, ROM buffer, PC, PLOT state or ALT prefix. They may run
+// before a fault STOP, whose contract covers R6 and memory, not scratch R0.
+bool registerOnly(const Instruction& i) {
+    if (i.bytes.size() != 1 || i.operand_fragment) return false;
+    const auto op = i.bytes[0];
+    return selector(op) || (op >= 0xd0 && op <= 0xdd) || (op >= 0xe0 && op <= 0xed) ||
+        (op >= 0x50 && op <= 0x5d) || (op >= 0x60 && op <= 0x6d) || (op >= 0x71 && op <= 0x7d) ||
+        (op >= 0x80 && op <= 0x8d) || (op >= 0xc1 && op <= 0xcd) || op == 0x03 || op == 0x04 ||
+        op == 0x4d || op == 0x4f || op == 0x70 || op == 0x95 || op == 0x96 || op == 0x97 ||
+        op == 0x9e || op == 0x9f || op == 0xc0;
+}
+// One-byte opcodes whose effect does not depend on their own address. A BRA
+// slot always executes them on the jump's only path, as the target did.
+bool positionIndependent(const Instruction& i) {
+    if (i.bytes.size() != 1 || i.operand_fragment) return false;
+    const auto op = i.bytes[0];
+    return registerOnly(i) || (op >= 0x3d && op <= 0x3f) || (op >= 0x30 && op <= 0x3b) ||
+        (op >= 0x40 && op <= 0x4b) || op == 0x4c || op == 0x4e || op == 0x90 || op == 0xdf || op == 0xef;
+}
+std::size_t nextNonEmpty(const std::vector<Instruction>& code, std::size_t n) {
+    while (n < code.size() && code[n].bytes.empty()) ++n;
+    return n;
+}
+// Canonical fault island: IBT/IWT R6,#category / STOP / NOP.
+bool faultStub(const std::vector<Instruction>& code, std::size_t at, std::uint16_t& value) {
+    if (at + 2 >= code.size()) return false;
+    const auto& literal = code[at];
+    if (literal.old == Missing || literal.delay_slot || literal.operand_fragment ||
+        !oneByte(code[at + 1], 0) || !oneByte(code[at + 2], 1) || code[at + 1].delay_slot || code[at + 2].delay_slot)
+        return false;
+    if (literal.bytes.size() == 2 && literal.bytes[0] == 0xa6)
+        value = static_cast<std::uint16_t>(static_cast<std::int16_t>(static_cast<std::int8_t>(literal.bytes[1])));
+    else if (literal.bytes.size() == 3 && literal.bytes[0] == 0xf6)
+        value = static_cast<std::uint16_t>(literal.bytes[1] | (literal.bytes[2] << 8));
+    else return false;
+    return true;
+}
+// A slot an island may follow: the literal resets selectors, but an ALT
+// prefix would turn IBT into LMS/SMS.
+bool islandSlot(const Instruction& slot) {
+    return slot.bytes.size() == 1 && !slot.operand_fragment && (slot.bytes[0] == 1 || selector(slot.bytes[0]));
+}
+
+struct LayoutFences {
+    // Instruction indices before which the final layout may insert padding.
+    std::vector<std::size_t> padding_before;
+    bool crosses(std::size_t a, std::size_t b) const {
+        if (a > b) std::swap(a, b);
+        return padding_before[b + 1] != padding_before[a + 1];
+    }
+};
+LayoutFences layoutFences(const std::vector<Instruction>& code, const std::set<std::size_t>& public_offsets) {
+    LayoutFences fences;
+    fences.padding_before.assign(code.size() + 1, 0);
+    for (std::size_t n = 0; n < code.size(); ++n)
+        fences.padding_before[n + 1] = fences.padding_before[n] +
+            (oneByte(code[n], 2) && public_offsets.count(code[n].old) ? 1u : 0u);
+    return fences;
+}
+
+// Each guard needs SOME island of its category within signed-byte range, not
+// its own. Keep a greedy interval cover of islands and remove the rest. Only
+// bytes are deleted, so every branch distance measured now can only shrink.
+// Returns the old offsets of the islands that guards now reach by branch.
+std::set<std::size_t> shareFaultStubs(std::vector<Instruction>& code, const std::set<std::size_t>& symbol_offsets,
+                                      const std::set<std::size_t>& relocation_offsets, const LayoutFences& fences,
+                                      GSUMachineScheduler::Statistics& stats) {
+    struct Reference { std::size_t branch, stub; bool fallthrough; };
+    struct Island { std::size_t index; bool removable; };
+    const auto pos = positions(code);
+    std::map<std::size_t, std::size_t> at_old;
+    for (std::size_t n = 0; n < code.size(); ++n) if (code[n].old != Missing) at_old.emplace(code[n].old, n);
+    std::map<std::uint16_t, std::vector<Island>> islands;
+    std::map<std::uint16_t, std::vector<Reference>> references;
+    std::set<std::size_t> pinned; // Islands with an entry no rewrite here can follow.
+    std::set<std::size_t> interior_targets;
+    for (const auto& i : code) if (i.target != Missing) interior_targets.insert(i.target);
+    std::map<std::size_t, std::uint16_t> island_value;
+    for (std::size_t s = 0; s < code.size(); ++s) {
+        std::uint16_t value = 0;
+        if (!faultStub(code, s, value)) continue;
+        island_value.emplace(s, value);
+        bool removable = s >= 2 && s + 3 < code.size() && code[s - 2].target != Missing &&
+            code[s - 2].bytes.size() == 2 && code[s - 2].bytes[0] >= 6 && code[s - 2].bytes[0] <= 15 &&
+            code[s - 2].plain && !code[s - 2].delay_slot && code[s - 1].delay_slot && islandSlot(code[s - 1]) &&
+            code[s - 2].target == code[s + 3].old;
+        for (std::size_t p = s; p < s + 3 && removable; ++p) {
+            const auto old = code[p].old;
+            removable = old != Missing && !symbol_offsets.count(old) && freeRange(code, p, p + 1, relocation_offsets) &&
+                (p == s || !interior_targets.count(old));
+        }
+        islands[value].push_back({s, removable});
+        if (removable) references[value].push_back({s - 2, s, true});
+    }
+    if (islands.empty()) return {};
+    // Explicit branches into an island (codegen's backward reuse).
+    for (std::size_t n = 0; n < code.size(); ++n) {
+        const auto& branch = code[n];
+        if (branch.target == Missing || branch.delay_slot) continue;
+        const auto found = at_old.find(branch.target);
+        if (found == at_old.end()) continue;
+        const auto value = island_value.find(found->second);
+        if (value == island_value.end()) continue;
+        const bool redirectable = branch.bytes.size() == 2 && branch.bytes[0] >= 5 && branch.bytes[0] <= 15 &&
+            branch.plain && n + 1 < code.size() && islandSlot(code[n + 1]);
+        if (redirectable) references[value->second].push_back({n, found->second, false});
+        else pinned.insert(found->second);
+    }
+    std::set<std::size_t> reached;
+    for (auto& group : islands) {
+        auto& refs = references[group.first];
+        std::set<std::size_t> kept; // Island indices.
+        for (const auto& island : group.second)
+            if (!island.removable || pinned.count(island.index)) kept.insert(island.index);
+        std::sort(refs.begin(), refs.end(), [](const Reference& a, const Reference& b) { return a.branch < b.branch; });
+        std::map<std::size_t, std::size_t> assigned; // Reference branch index -> island index.
+        const auto reaches = [&](std::size_t branch, std::size_t island) {
+            const auto distance = static_cast<std::int64_t>(pos[island]) - static_cast<std::int64_t>(pos[branch] + 2);
+            return distance >= -128 && distance <= 127 && !fences.crosses(branch, island);
+        };
+        for (const auto& ref : refs) {
+            std::size_t best = Missing;
+            for (const auto island : kept) if (reaches(ref.branch, island) &&
+                (best == Missing || (island > ref.branch ? island - ref.branch : ref.branch - island) <
+                                    (best > ref.branch ? best - ref.branch : ref.branch - best))) best = island;
+            if (best == Missing) {
+                // The rightmost reachable island covers the most later guards.
+                for (const auto& island : group.second)
+                    if (island.removable && reaches(ref.branch, island.index) &&
+                        (best == Missing || island.index > best)) best = island.index;
+                if (best == Missing) best = ref.stub; // Its current island is always reachable.
+                kept.insert(best);
+            }
+            assigned[ref.branch] = best;
+        }
+        for (const auto& ref : refs) {
+            const auto island = assigned.at(ref.branch);
+            if (ref.fallthrough && kept.count(ref.stub)) continue; // Still falls into its own island.
+            auto& branch = code[ref.branch];
+            if (ref.fallthrough) branch.bytes[0] = static_cast<std::uint8_t>(branch.bytes[0] ^ 1u);
+            branch.target = code[island].old;
+            reached.insert(code[island].old);
+        }
+        for (const auto& island : group.second) {
+            if (kept.count(island.index)) continue;
+            for (std::size_t p = island.index; p < island.index + 3; ++p) {
+                code[p].bytes.clear(); code[p].target = Missing; // Zero-byte anchors keep old boundaries.
+            }
+            ++stats.shared_fault_stubs;
+        }
+    }
+    return reached;
+}
+
+// After sharing, a guard is Bcc island / NOP / continuation. The taken path
+// faults: a register-only continuation opcode may run there before STOP.
+void fillGuardSlots(std::vector<Instruction>& code, const std::set<std::size_t>& islands,
+                    const SchedulingBoundaries& boundaries,
+                    GSUMachineScheduler::Statistics& stats) {
+    if (islands.empty()) return;
+    const auto targets = liveTargets(code, boundaries.symbol_offsets);
+    for (std::size_t n = 0; n + 2 < code.size(); ++n) {
+        auto& branch = code[n];
+        if (branch.bytes.size() != 2 || branch.bytes[0] < 6 || branch.bytes[0] > 15 || branch.delay_slot ||
+            !branch.plain || !islands.count(branch.target) || !oneByte(code[n + 1], 1)) continue;
+        const auto x = nextNonEmpty(code, n + 2);
+        if (x >= code.size() || code[x].delay_slot || !registerOnly(code[x])) continue;
+        // Nothing may enter at the slot, the vacated position or the anchors
+        // between them: those paths would skip or double the moved opcode.
+        bool entered = false;
+        for (std::size_t p = n + 1; p <= x && !entered; ++p)
+            entered = code[p].old == Missing || targets.count(code[p].old);
+        // Current targets, not decode-time entries: this guard no longer
+        // branches to its continuation.
+        if (entered || !freeRange(code, n + 1, n + 2, boundaries.relocation_offsets) ||
+            !freeRange(code, x, x + 1, boundaries.relocation_offsets))
+            continue;
+        // The branch keeps clear selectors, as the NOP did on both paths.
+        code[n + 1] = code[x]; code[n + 1].delay_slot = true;
+        code.erase(code.begin() + static_cast<std::ptrdiff_t>(x));
+        ++stats.guard_slots;
+    }
+}
+
+// BRA L / NOP becomes BRA L+1 / copy of L's first opcode. The target keeps
+// its opcode for every other entry; only this edge executes the copy.
+void fillJumpSlots(std::vector<Instruction>& code, const SchedulingBoundaries& boundaries,
+                   const LayoutFences& fences,
+                   GSUMachineScheduler::Statistics& stats) {
+    const auto targets = liveTargets(code, boundaries.symbol_offsets);
+    std::map<std::size_t, std::size_t> at_old;
+    for (std::size_t n = 0; n < code.size(); ++n) if (code[n].old != Missing) at_old.emplace(code[n].old, n);
+    const auto pos = positions(code);
+    for (std::size_t n = 0; n + 1 < code.size(); ++n) {
+        auto& branch = code[n];
+        if (branch.bytes.size() != 2 || branch.bytes[0] != 5 || branch.target == Missing || branch.delay_slot ||
+            !branch.plain || !oneByte(code[n + 1], 1)) continue;
+        if (n && code[n - 1].bytes.size() == 1 && code[n - 1].bytes[0] >= 0x91 && code[n - 1].bytes[0] <= 0x94) continue;
+        if (targets.count(code[n + 1].old) || code[n + 1].old == Missing ||
+            !freeRange(code, n + 1, n + 2, boundaries.relocation_offsets)) continue;
+        const auto found = at_old.find(branch.target);
+        if (found == at_old.end()) continue;
+        const auto y = nextNonEmpty(code, found->second);
+        if (y + 1 >= code.size() || code[y].delay_slot || !positionIndependent(code[y]) ||
+            code[y + 1].old == Missing || code[y + 1].delay_slot || code[y + 1].operand_fragment ||
+            !freeRange(code, y, y + 1, boundaries.relocation_offsets)) continue; // A linked byte cannot be copied early.
+        // Distances measured on the current list; later passes only delete.
+        const auto distance = static_cast<std::int64_t>(pos[y + 1]) - static_cast<std::int64_t>(pos[n] + 2);
+        if (distance < -128 || distance > 127 || fences.crosses(n, y + 1)) continue;
+        code[n + 1] = code[y]; code[n + 1].delay_slot = true;
+        // The copy has no old offset of its own: the original stays at L.
+        code[n + 1].old = Missing; code[n + 1].target = Missing;
+        branch.target = code[y + 1].old;
+        ++stats.jump_slots;
+    }
+}
+}
+
+// Register reads/writes of one decoded instruction, for the few forms the
+// liveness scan below understands. Anything else is "unknown".
+struct RegisterEffect { bool known = false; unsigned reads = 0, writes = 0; };
+RegisterEffect registerEffect(const std::vector<Instruction>& code, std::size_t n) {
+    RegisterEffect effect;
+    const auto& i = code[n];
+    const unsigned alt = i.reachable_alt;
+    if (i.bytes.empty() || i.operand_fragment || alt > 3 || i.reachable_source > 15 || i.reachable_destination > 15) return effect;
+    const auto op = i.bytes[0];
+    const unsigned reg = op & 15u, source = 1u << i.reachable_source, destination = 1u << i.reachable_destination;
+    const bool after_with = n && code[n - 1].bytes.size() == 1 && code[n - 1].bytes[0] >= 0x20 && code[n - 1].bytes[0] <= 0x2f;
+    if (i.bytes.size() == 2 && op >= 0xa0 && op <= 0xad && alt == 0) { effect.known = true; effect.writes = 1u << reg; return effect; }
+    if (i.bytes.size() == 3 && op >= 0xf0 && op <= 0xfd && alt == 0) { effect.known = true; effect.writes = 1u << reg; return effect; }
+    if (i.bytes.size() != 1) return effect;
+    effect.known = true;
+    if (op == 1 || (op >= 0x3d && op <= 0x3f) || (op >= 0x20 && op <= 0x2f)) return effect; // NOP, ALT, WITH
+    if (op >= 0x10 && op <= 0x1f) { // TO, or MOVE after WITH
+        if (after_with) { effect.reads = source; effect.writes = 1u << reg; }
+        return effect;
+    }
+    if (op >= 0xb0 && op <= 0xbf) { // FROM, or MOVES after WITH
+        if (after_with) { effect.reads = 1u << reg; effect.writes = destination; }
+        return effect;
+    }
+    if (op >= 0x30 && op <= 0x3b) { effect.reads = source | (1u << reg); return effect; }      // STW/STB
+    if (op >= 0x40 && op <= 0x4b) { effect.reads = 1u << reg; effect.writes = destination; return effect; } // LDW/LDB
+    if ((op >= 0xd0 && op <= 0xde) || (op >= 0xe0 && op <= 0xee)) { effect.reads = effect.writes = 1u << reg; return effect; }
+    if ((op >= 0x50 && op <= 0x6f) || (op >= 0x71 && op <= 0x8f) || (op >= 0xc1 && op <= 0xcf)) {
+        const bool compare = op >= 0x60 && op <= 0x6f && alt == 3;
+        const bool immediate = (alt & 2u) != 0 && !compare;
+        effect.reads = source | (immediate ? 0u : 1u << reg);
+        effect.writes = compare ? 0u : destination;
+        return effect;
+    }
+    if (alt == 0 && (op == 3 || op == 4 || op == 0x4d || op == 0x4f || op == 0x95 || op == 0x96 || op == 0x97 ||
+        op == 0x9e || op == 0xc0)) { effect.reads = source; effect.writes = destination; return effect; }
+    effect.known = false;
+    return effect;
+}
+// Whether `reg` is provably never read again from instruction `n` on: a
+// bounded straight-line scan that ends at a full overwrite or at a function
+// return. A return makes only R3 and R5-R8 dead: R0/R4 carry results, the
+// private divmod kernels return R1/R2, and R9-R13 are preserved or owned by
+// the caller. Those kernels neither write R5/R7/R8 nor expose R3/R6.
+bool deadFrom(const std::vector<Instruction>& code, std::size_t n, Register reg) {
+    const unsigned bit = 1u << static_cast<unsigned>(reg);
+    for (unsigned steps = 0; steps < 32 && n < code.size(); ++steps, ++n) {
+        const auto& i = code[n];
+        if (i.reachable_entry || i.delay_slot) return false;
+        if (i.bytes.size() == 1 && i.reachable_alt == 0 && i.bytes[0] == 0x9b) { // JMP R11
+            if (n + 1 >= code.size() || code[n + 1].reachable_entry) return false;
+            const auto slot = registerEffect(code, n + 1);
+            return slot.known && !(slot.reads & bit) &&
+                (reg == Register::R3 || (reg >= Register::R5 && reg <= Register::R8_MERGE_Y));
+        }
+        const auto effect = registerEffect(code, n);
+        if (!effect.known || (effect.reads & bit)) return false;
+        if (effect.writes & bit) return true;
+        if (effect.writes & (1u << 15)) return false;
+    }
+    return false;
 }
 
 GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
@@ -351,12 +656,170 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
     auto code = decode(object, entries);
     for (std::size_t n = 1; n < code.size(); ++n)
         code[n].delay_slot = transfer(code[n - 1].bytes[0]);
-    protected_offsets = entries;
-    for (const auto& r : object.relocation_table) if (r.section_to_patch == SymbolSection::CODE)
-        for (unsigned b = 0; b < (r.type == RelocationType::ADDR24_BANK ? 2u : 3u); ++b) {
-            protected_offsets.insert(r.patch_offset + b);
-            relocation_offsets.insert(r.patch_offset + b);
+    {
+        std::set<std::string> referenced;
+        for (const auto& r : object.relocation_table) referenced.insert(r.target_symbol_name);
+        std::set<std::size_t> reachable;
+        for (const auto& s : object.symbol_table)
+            if (s.section == SymbolSection::CODE && s.name != GSUCodeLayout::CacheAlignmentSymbol &&
+                (s.name.empty() || s.name.front() != '\x01' || referenced.count(s.name))) reachable.insert(s.offset);
+        const auto relaxed = decode(object, reachable);
+        // Both decodes walk the same bytes, so the boundaries are identical.
+        if (relaxed.size() != code.size()) throw std::runtime_error("GSU scheduler: inconsistent instruction boundaries.");
+        for (std::size_t n = 0; n < code.size(); ++n) {
+            code[n].reachable_plain = relaxed[n].plain;
+            code[n].reachable_alt = relaxed[n].alt;
+            code[n].reachable_source = relaxed[n].source;
+            code[n].reachable_destination = relaxed[n].destination;
+            code[n].reachable_entry = reachable.count(code[n].old) != 0;
         }
+    }
+    protected_offsets = entries;
+    for (const auto& r : object.relocation_table) if (r.section_to_patch == SymbolSection::CODE) {
+        // An LMS/SMS operand is a word index only right after its ALT
+        // prefix, so that prefix is pinned with it (never a delay-slot copy).
+        const bool short_ram = r.type == RelocationType::ADDR8_SHORT_RAM;
+        for (unsigned b = short_ram && r.patch_offset ? 0u : 1u; b < (short_ram || r.type == RelocationType::ADDR24_BANK ? 3u : 4u); ++b) {
+            protected_offsets.insert(r.patch_offset + b - 1);
+            relocation_offsets.insert(r.patch_offset + b - 1);
+        }
+    }
+
+    // MOVE Ra -> Rb (WITH a / TO b) whose destination the very next
+    // instruction overwrites without reading it: a home copy of a value its
+    // only consumer already took from the source. MOVE changes no flag, and
+    // the successor's selector state is plain both after the pair and (as
+    // required here) before it, so deleting the pair changes nothing else.
+    for (std::size_t n = 0; n + 2 < code.size(); ++n) {
+        const auto& with = code[n];
+        const auto& to = code[n + 1];
+        if (!with.plain || with.delay_slot || with.bytes.size() != 1 || to.bytes.size() != 1 ||
+            with.bytes[0] < 0x20 || with.bytes[0] > 0x2d || to.bytes[0] < 0x10 || to.bytes[0] > 0x1d) continue;
+        const unsigned dead = to.bytes[0] & 15u;
+        const auto& next = code[n + 2];
+        std::size_t end = 0;
+        if ((next.bytes.size() == 2 && next.bytes[0] == (0xa0u | dead)) ||
+            (next.bytes.size() == 3 && next.bytes[0] == (0xf0u | dead))) {
+            end = n + 3; // IBT/IWT Rb
+        } else if (next.bytes.size() == 1 && next.bytes[0] == (0x10u | dead) && n + 3 < code.size()) {
+            // TO Rb / [ALT1] LDW|LDB (Rm): reads only Rm.
+            auto load = n + 3;
+            if (oneByte(code[load], 0x3d) && load + 1 < code.size()) ++load;
+            const auto op = code[load].bytes[0];
+            if (code[load].bytes.size() == 1 && op >= 0x40 && op <= 0x4b && (op & 15u) != dead) end = load + 1;
+        }
+        if (!end || !freeRange(code, n, end, entries) || !freeRange(code, n, end, protected_offsets)) continue;
+        code.erase(code.begin() + static_cast<std::ptrdiff_t>(n), code.begin() + static_cast<std::ptrdiff_t>(n + 2));
+        ++stats.dead_copies;
+    }
+
+    // MOVE Ra -> R0 (WITH a / TO R0) feeding an accumulator operation that
+    // overwrites R0: FROM a selects the same first operand without the copy.
+    // The result, NZCV and every other register are identical, and R0 never
+    // exposes the intermediate copy because the operation replaces it. CMP
+    // (which leaves R0 holding the copy) and an R0 second operand (which
+    // would read the old R0) are excluded.
+    for (std::size_t n = 0; n + 2 < code.size(); ++n) {
+        const auto& with = code[n];
+        if (!with.reachable_plain || with.delay_slot || with.bytes.size() != 1 || with.bytes[0] < 0x21 || with.bytes[0] > 0x2d ||
+            !oneByte(code[n + 1], 0x10)) continue;
+        auto last = n + 2;
+        unsigned alt = 0;
+        if (code[last].bytes.size() == 1 && code[last].bytes[0] >= 0x3d && code[last].bytes[0] <= 0x3f) {
+            alt = code[last].bytes[0] - 0x3cu;
+            if (++last >= code.size()) continue;
+        }
+        if (code[last].bytes.size() != 1) continue;
+        const auto op = code[last].bytes[0];
+        const unsigned operand = op & 15u;
+        const bool binary = (op >= 0x50 && op <= 0x6f) || (op >= 0x71 && op <= 0x8f) || (op >= 0xc1 && op <= 0xcf);
+        bool accumulator = false;
+        if (binary) {
+            const bool compare = op >= 0x60 && op <= 0x6f && alt == 3;
+            const bool immediate = (alt & 2u) != 0;
+            accumulator = !compare && (immediate || (operand >= 1 && operand <= 13));
+        } else if (alt == 0) {
+            accumulator = op == 3 || op == 4 || op == 0x4d || op == 0x4f || op == 0x95 || op == 0x96 ||
+                op == 0x97 || op == 0x9e || op == 0xc0;
+        } else {
+            accumulator = alt == 1 && op == 0x96; // DIV2
+        }
+        // The rewritten prefix keeps the WITH's offset, so an anchor there
+        // survives; nothing may name or patch the bytes after it.
+        if (!accumulator || !freeRange(code, n + 1, last + 1, entries) ||
+            !freeRange(code, n, last + 1, relocation_offsets)) continue;
+        const unsigned source = with.bytes[0] & 15u;
+        code[n].bytes = {static_cast<std::uint8_t>(0xb0u | source)};
+        code.erase(code.begin() + static_cast<std::ptrdiff_t>(n + 1));
+        // The prefix now reaches the operation instead of being consumed.
+        for (auto k = n + 1; k < last; ++k) {
+            code[k].plain = code[k].reachable_plain = false;
+            code[k].source = code[k].reachable_source = source;
+        }
+        ++stats.accumulator_sources;
+    }
+
+    // FROM Rx / TO Rx (either order) selects Rx as both operands, exactly as
+    // WITH Rx does. WITH also sets B, which only a following TO/FROM reads,
+    // so the pair must lead straight into its operation (or ALT prefix).
+    // Incoming selector state is irrelevant: both forms overwrite the source
+    // and destination and leave a pending ALT untouched. Canonical compiler
+    // output never enters a label with B set, and a WITH is never left
+    // dangling before the pair.
+    for (std::size_t n = 0; n + 2 < code.size(); ++n) {
+        const auto first = code[n].bytes[0], second = code[n + 1].bytes[0];
+        if (code[n].bytes.size() != 1 || code[n + 1].bytes.size() != 1 || code[n].delay_slot) continue;
+        const bool from_to = first >= 0xb0 && first <= 0xbd && second == (0x10u | (first & 15u));
+        const bool to_from = first >= 0x10 && first <= 0x1d && second == (0xb0u | (first & 15u));
+        if (!from_to && !to_from) continue;
+        if (n && code[n - 1].bytes.size() == 1 && code[n - 1].bytes[0] >= 0x20 && code[n - 1].bytes[0] <= 0x2f) continue;
+        // Look through one ALT prefix: it keeps B pending for its successor.
+        auto consumer = n + 2;
+        if (code[consumer].bytes.size() == 1 && code[consumer].bytes[0] >= 0x3d && code[consumer].bytes[0] <= 0x3f) {
+            ++consumer;
+            if (consumer >= code.size()) continue;
+        }
+        const auto next = code[consumer].bytes[0];
+        if ((next >= 0x10 && next <= 0x2f) || (next >= 0xb0 && next <= 0xbf) || (next >= 0x3d && next <= 0x3f) ||
+            transfer(next) || code[consumer].bytes.size() != 1) continue;
+        if (!freeRange(code, n + 1, n + 2, entries) || !freeRange(code, n, n + 2, relocation_offsets)) continue;
+        code[n].bytes = {static_cast<std::uint8_t>(0x20u | (first & 15u))};
+        code.erase(code.begin() + static_cast<std::ptrdiff_t>(n + 1));
+        ++stats.paired_selectors;
+    }
+
+    // WITH Rx / op / MOVE Rx,R0 with Rx dead afterwards: the operation can
+    // deliver its result straight to R0 (FROM Rx / op), typically a return
+    // value computed in its allocated home. Flags and R0 are identical; only
+    // the dead Rx keeps its old value.
+    for (std::size_t n = 0; n + 3 < code.size(); ++n) {
+        const auto& with = code[n];
+        if (!with.reachable_plain || with.delay_slot || with.bytes.size() != 1 || with.bytes[0] < 0x21 || with.bytes[0] > 0x2d) continue;
+        const unsigned home = with.bytes[0] & 15u;
+        auto operation = n + 1;
+        unsigned alt = 0;
+        if (code[operation].bytes.size() == 1 && code[operation].bytes[0] >= 0x3d && code[operation].bytes[0] <= 0x3f) {
+            alt = code[operation].bytes[0] - 0x3cu; ++operation;
+        }
+        if (operation + 2 >= code.size() || code[operation].bytes.size() != 1) continue;
+        const auto op = code[operation].bytes[0];
+        const bool binary = (op >= 0x50 && op <= 0x6f) || (op >= 0x71 && op <= 0x8f) || (op >= 0xc1 && op <= 0xcf);
+        const bool compare = op >= 0x60 && op <= 0x6f && alt == 3;
+        const bool unary = op == 3 || op == 4 || op == 0x4d || op == 0x4f || op == 0x95 || op == 0x96 ||
+            op == 0x97 || op == 0x9e || op == 0xc0;
+        if (!((binary && !compare) || (unary && (alt == 0 || (alt == 1 && op == 0x96))))) continue;
+        if (!oneByte(code[operation + 1], static_cast<std::uint8_t>(0x20u | home)) || !oneByte(code[operation + 2], 0x10)) continue;
+        if (!freeRange(code, n + 1, operation + 3, entries) || !freeRange(code, n, operation + 3, relocation_offsets) ||
+            !deadFrom(code, operation + 3, static_cast<Register>(home))) continue;
+        code[n].bytes = {static_cast<std::uint8_t>(0xb0u | home)};
+        for (auto k = n + 1; k <= operation; ++k) {
+            code[k].plain = code[k].reachable_plain = false;
+            code[k].source = code[k].reachable_source = home;
+            code[k].destination = code[k].reachable_destination = 0;
+        }
+        code.erase(code.begin() + static_cast<std::ptrdiff_t>(operation + 1), code.begin() + static_cast<std::ptrdiff_t>(operation + 3));
+        ++stats.accumulator_results;
+    }
 
     // A private one-PLOT loop may put PLOT in LOOP's always-executed slot,
     // including its first/final iteration and the raw zero-count wrap. Keep
@@ -552,6 +1015,18 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
         code[n + 3].bytes.clear();
         ++stats.compact_branches;
     }
+    std::set<std::size_t> symbol_offsets, public_offsets;
+    for (const auto& s : object.symbol_table) if (s.section == SymbolSection::CODE) {
+        if (s.name == GSUCodeLayout::CacheAlignmentSymbol) continue;
+        symbol_offsets.insert(s.offset);
+        if (!s.name.empty() && s.name.front() != '\x01') public_offsets.insert(s.offset);
+    }
+    const auto islands = shareFaultStubs(code, symbol_offsets, relocation_offsets, layoutFences(code, public_offsets), stats);
+    // New island entries must fence any later pass that consults `entries`.
+    entries.insert(islands.begin(), islands.end());
+    protected_offsets.insert(islands.begin(), islands.end());
+    const SchedulingBoundaries boundaries{entries, relocation_offsets, protected_offsets, symbol_offsets};
+    fillGuardSlots(code, islands, boundaries, stats);
     // Relax symbol-resolved, non-call PC literals after useful-slot/layout
     // compaction. Never infer a destination from an unrelocated numeric word.
     // Plain selectors make BRA's preserved prefix state identical to IWT's
@@ -595,9 +1070,9 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
     // would treat a split immediate opcode as a full instruction.
     const auto without_plans = code;
     const auto without_plan_stats = stats;
-    const SchedulingBoundaries boundaries{entries, relocation_offsets, protected_offsets};
     planEntryIncrements(code, boundaries, object, jump_targets, stats);
     planImmediateSlots(code, object, jump_targets, relocation_offsets, protected_offsets, stats);
+    fillJumpSlots(code, boundaries, layoutFences(code, public_offsets), stats);
     if (object.config.optimization != OptimizationLevel::Size)
         dropNestedCaches(code, object, entries, stats);
 

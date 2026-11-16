@@ -22,6 +22,11 @@ std::string internalBlockSymbol(const std::string& function, IRBlockId block) {
     return std::string(1, '\x01') + function + "#" + std::to_string(block.value);
 }
 
+// Trips assumed for a call-free loop whose count is not a compile-time
+// constant. Four already repays a cold fill of every body line; a loop that
+// actually runs once loses about one partly used line per entry.
+constexpr std::uint32_t AssumedDynamicTrips = 4;
+
 } // namespace
 
 IRCodeGenerator::IRCodeGenerator(
@@ -61,7 +66,12 @@ void IRCodeGenerator::emitMove(Register destination_register, std::uint8_t sourc
     const auto destination = static_cast<std::uint8_t>(destination_register);
     m_spill_cache.clobber(destination);
     const auto cached = m_accumulator_value;
-    if (destination == GSUAbi::StackPointerRegister) m_stack_check_credit.reset();
+    if (destination == GSUAbi::StackPointerRegister) {
+        m_stack_check_credit.reset();
+        // Only the epilogue writes SP, from FP; any other source is untracked.
+        if (source == GSUAbi::FramePointerRegister) m_stack_proof.restoreFrame();
+        else if (m_stack_proof.active()) fail("IR codegen: stack proof cannot track an SP copy.", Token(TokenType::UNKNOWN, "", 0, 0));
+    }
     // TO alone only selects a destination. WITH is required even for R0
     // to form an immediate register copy and clear the selection afterwards.
     emitByte(static_cast<std::uint8_t>(0x20 | source));
@@ -74,6 +84,7 @@ void IRCodeGenerator::emitMove(Register destination_register, std::uint8_t sourc
 
 void IRCodeGenerator::emitStackGuard(std::size_t required, const Token& source) {
     if (required > 65535u) fail("Stack requirement exceeds one bank.", source);
+    if (m_stack_proof.active()) { m_stack_proof.guard(required); return; }
     if (globallyOptimized() && m_stack_check_credit.covers(required)) return;
     const auto patch = m_object_file.code_section.size();
     emitWordLiteral(Register::R3, 0); // The linker patches an IWT, never a shortened IBT.
@@ -92,6 +103,7 @@ void IRCodeGenerator::emitPush(std::uint8_t reg) {
     emitByte(0x3A);
     emitByte(0xEA);
     emitByte(0xEA);
+    m_stack_proof.push(2);
     if (globallyOptimized()) {
         m_stack_check_credit.decrease(2);
     }
@@ -102,6 +114,7 @@ void IRCodeGenerator::emitPop(std::uint8_t reg) {
     m_last_ram_word_address = IRValueId{};
     emitByte(0xDA);
     emitByte(0xDA);
+    m_stack_proof.pop(2);
     if (reg != 0) {
         emitByte(static_cast<std::uint8_t>(0x20 | reg));
     }
@@ -165,6 +178,7 @@ void IRCodeGenerator::emitImmediateArithmetic(OpCode operation,
 }
 
 void IRCodeGenerator::emitAdjustStack(std::size_t bytes, bool add, const Token& source) {
+    if (add) m_stack_proof.pop(bytes); else m_stack_proof.push(bytes);
     if (globallyOptimized()) {
         if (add) m_stack_check_credit.increase(bytes);
         else m_stack_check_credit.decrease(bytes);
@@ -192,8 +206,23 @@ void IRCodeGenerator::emitFunctionEpilogue() {
         m_epilogue_label = localLabel();
         bindLabel(m_epilogue_label);
     }
-    emitMove(static_cast<Register>(GSUAbi::StackPointerRegister), GSUAbi::FramePointerRegister);
+    // A frameless body is balanced at every return: calls clean up their
+    // arguments and the IR verifier closes every hardware-loop save first.
+    if (!m_frameless) emitMove(static_cast<Register>(GSUAbi::StackPointerRegister), GSUAbi::FramePointerRegister);
     if (m_current_function->name == "main") {
+        // The entry STOPs with its frame installed instead of popping R9/R11.
+        // If the body reused R11, reload the saved host value from FP+4
+        // through scratch R3 so R0/R10 and the observable STOP state survive.
+        bool r11_allocated = false;
+        for (const auto& location : m_register_allocator.locations())
+            r11_allocated = r11_allocated || (location.second.has_register && !m_spill_offsets.count(location.first) &&
+                location.second.physical_register == GSUAbi::LinkRegister);
+        if (r11_allocated) {
+            emitRegisterLiteral(3, 4);
+            emitByte(0xb9); emitByte(0x13); emitByte(0x53);
+            emitByte(static_cast<std::uint8_t>(0x10 | GSUAbi::LinkRegister)); emitByte(0x43);
+            m_last_ram_word_address = IRValueId{};
+        }
         // A scalar-only entry may call a checked callee from another unit.
         // Normal STOP always clears its volatile scratch/fault category.
         emitRegisterLiteral(GSUAbi::AddressFaultRegister, 0);
@@ -201,7 +230,7 @@ void IRCodeGenerator::emitFunctionEpilogue() {
         emitByte(static_cast<std::uint8_t>(OpCode::NOP));
         return;
     }
-    emitPop(GSUAbi::FramePointerRegister);
+    if (!m_frameless) emitPop(GSUAbi::FramePointerRegister);
     emitPop(GSUAbi::LinkRegister);
     emitByte(static_cast<std::uint8_t>(0x90 | GSUAbi::LinkRegister));
     emitByte(static_cast<std::uint8_t>(OpCode::NOP));
@@ -260,6 +289,15 @@ std::vector<std::uint8_t> IRCodeGenerator::allocatableRegisters(const IRFunction
     }
     if (!plot && !division) regs.push_back(2);
     if (!far && !near_rom_pointer && !division && !multiply && !hardware_loop && !wide_pointer) regs.push_back(4);
+    // Every function saves R11 in its prologue and restores it only for the
+    // final JMP, so the body may reuse it. LINK at a call writes R11; the
+    // call-clobber envelope always contains R11, so a live value is saved
+    // like any caller-saved home. Shared divmod kernels also LINK but do not
+    // save allocated homes, so division keeps R11 reserved.
+    // R12/R13 stay reserved: they must survive to every STOP, including fault
+    // islands shared across the function, which no prologue save can cover.
+    if (!division) regs.push_back(GSUAbi::LinkRegister);
+    if (framePointerAllocatable(function)) regs.push_back(GSUAbi::FramePointerRegister);
     return regs;
 }
 
@@ -305,6 +343,11 @@ void IRCodeGenerator::saveLiveRegistersForCall(
         if (callClobbers(instruction) & (1u << location.physical_register))
             unique_registers.insert(location.physical_register);
     }
+    if (globallyOptimized() && !framePointerAllocatable(*m_current_function)) {
+        const auto callee = m_call_clobbers.find(instruction.symbol);
+        if (callee != m_call_clobbers.end() && (callee->second & (1u << GSUAbi::FramePointerRegister)))
+            unique_registers.insert(GSUAbi::FramePointerRegister);
+    }
     saved_registers.assign(unique_registers.begin(), unique_registers.end());
     for (const auto reg : saved_registers) emitPush(reg);
 }
@@ -348,6 +391,11 @@ void IRCodeGenerator::addRelocation(const std::string& symbol, std::size_t patch
 
 void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
     if (instruction.operation == "temporary") {
+        if (!m_static_frame_owner.empty() && instruction.immediate < 0) {
+            emitFrameAddress(Register::R0, static_cast<int>(instruction.immediate));
+            return;
+        }
+        requireFramePointer(instruction.source);
         emitMove(Register::R0, 9);
         emitImmediateArithmetic(OpCode::SUB_R, -instruction.immediate, instruction.source);
         return;
@@ -394,11 +442,18 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
     if (instruction.symbol_id.isValid()) {
         const auto symbol = function_symbols.find(instruction.symbol_id);
         if (symbol != function_symbols.end()) {
-            emitMove(Register::R0, 9);
-            if (symbol->second.stackOffset > 0) {
-                emitImmediateArithmetic(OpCode::ADD_R, symbol->second.stackOffset, instruction.source);
-            } else if (symbol->second.stackOffset < 0) {
-                emitImmediateArithmetic(OpCode::SUB_R, std::abs(symbol->second.stackOffset), instruction.source);
+            if (!m_static_frame_owner.empty() && symbol->second.stackOffset < 0) {
+                // A static frame keeps the FP-relative layout and alignment
+                // padding; only its base is a link-time RAM address.
+                emitFrameAddress(Register::R0, symbol->second.stackOffset);
+            } else {
+                requireFramePointer(instruction.source);
+                emitMove(Register::R0, 9);
+                if (symbol->second.stackOffset > 0) {
+                    emitImmediateArithmetic(OpCode::ADD_R, symbol->second.stackOffset, instruction.source);
+                } else if (symbol->second.stackOffset < 0) {
+                    emitImmediateArithmetic(OpCode::SUB_R, std::abs(symbol->second.stackOffset), instruction.source);
+                }
             }
             if (symbol->second.type.alignment > 2) {
                 const auto alignment = symbol->second.type.alignment;
@@ -535,11 +590,16 @@ void IRCodeGenerator::emitScalarComparison(const IRInstruction& instruction, boo
     };
     std::uint8_t source = 0, operand = scratchRegister();
     if (globallyOptimized() && home(left) && home(right)) {
-        const auto* a = usesRegisterAllocation(left) ? m_register_allocator.find(left) : nullptr;
-        const auto* b = usesRegisterAllocation(right) ? m_register_allocator.find(right) : nullptr;
-        if (a && b) { source = a->physical_register; operand = b->physical_register; }
-        else if (a) { materialize(right); source = a->physical_register; operand = 0; }
-        else if (b) { materialize(left); operand = b->physical_register; }
+        // A regional loop home (R4/R6) is as direct as an allocated one; the
+        // other operand's reload uses only R0/R3, never that home.
+        const auto direct = [&](IRValueId value) -> int {
+            if (usesRegisterAllocation(value)) return m_register_allocator.find(value)->physical_register;
+            return regionalRegister(value);
+        };
+        const int a = direct(left), b = direct(right);
+        if (a >= 0 && b >= 0) { source = static_cast<std::uint8_t>(a); operand = static_cast<std::uint8_t>(b); }
+        else if (a >= 0) { materialize(right); source = static_cast<std::uint8_t>(a); operand = 0; }
+        else if (b >= 0) { materialize(left); operand = static_cast<std::uint8_t>(b); }
         else {
             // Both scalar homes are already evaluated. Retain the existing
             // right-before-left reload order, but compare R6 directly rather
@@ -752,7 +812,7 @@ void IRCodeGenerator::emitBinary(const IRInstruction& instruction) {
 
 void IRCodeGenerator::emitBoolNormalization() {
     const auto zero = localLabel(), end = localLabel();
-    emitCompare(Register::R0, 0);
+    emitZeroTest(Register::R0);
     emitLocalJump(zero, 9);
     emitLiteral(1); emitLocalJump(end);
     bindLabel(zero); emitLiteral(0); bindLabel(end);
@@ -770,8 +830,8 @@ void IRCodeGenerator::emitCast(const IRInstruction& instruction) {
         const auto element = pointeeType(instruction.type);
         if (provenAddress(instruction.result, instruction.type, element.sizeInBytes > 0 ? element.sizeInBytes : 1)) return;
         const auto nonnull = localLabel(), done = localLabel();
-        emitCompare(Register::R0, 0); emitLocalJump(nonnull, 8);
-        if (isFarPointer(source.type)) { emitCompare(Register::R4_LMULT_LO, 0); emitLocalJump(nonnull, 8); }
+        emitZeroTest(Register::R0); emitLocalJump(nonnull, 8);
+        if (isFarPointer(source.type)) { emitZeroTest(Register::R4_LMULT_LO); emitLocalJump(nonnull, 8); }
         if (isFarPointer(instruction.type)) emitRegisterLiteral(4, 0);
         emitLocalJump(done);
         bindLabel(nonnull);
@@ -815,7 +875,9 @@ void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
     if (save_x) emitPush(1);
     if (save_y) emitPush(2);
     std::size_t argument_bytes = 0;
-    for (auto argument = instruction.operands.rbegin();
+    const bool register_arguments = m_register_arguments.count(instruction.symbol) != 0;
+    if (register_arguments) emitRegisterArguments(instruction);
+    else for (auto argument = instruction.operands.rbegin();
          argument != instruction.operands.rend(); ++argument) {
         materialize(*argument);
         emitPush(0);
@@ -831,6 +893,9 @@ void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
     // IWT R15 leaves the next opcode in the pipeline. LINK #4 returns after
     // this delay slot, so caller cleanup must begin after the NOP.
     emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+    m_stack_proof.call(instruction.symbol);
+    // Argument setup may have parked spill copies in callee-clobbered registers.
+    if (register_arguments) m_spill_cache.clear();
     // Even a no-argument call can perform arbitrary RAM accesses in its callee.
     m_last_ram_word_address = IRValueId{};
     m_stack_check_credit.reset();
@@ -843,6 +908,91 @@ void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
     if (save_x) emitPop(1);
     if (save_loop) { emitPop(13); emitPop(12); }
     restoreRegistersAfterCall(saved_registers);
+}
+
+void IRCodeGenerator::emitParallelCopies(std::vector<std::pair<std::uint8_t, std::uint8_t>> copies) {
+    copies.erase(std::remove_if(copies.begin(), copies.end(),
+        [](const std::pair<std::uint8_t, std::uint8_t>& copy) { return copy.first == copy.second; }), copies.end());
+    for (std::size_t a = 0; a < copies.size(); ++a) {
+        bool repeated = !copies[a].first || !copies[a].second;
+        for (std::size_t b = a + 1; b < copies.size(); ++b) repeated = repeated || copies[a].first == copies[b].first;
+        if (repeated) fail("IR codegen: parallel copy has a repeated destination or uses R0.", Token(TokenType::UNKNOWN, "", 0, 0));
+    }
+    // Each round emits one copy or retires one cycle; bounded by 2 * copies.
+    for (std::size_t round = 0, limit = 2 * copies.size() + 1; !copies.empty(); ++round) {
+        if (round > limit) fail("IR codegen: parallel copy did not converge.", Token(TokenType::UNKNOWN, "", 0, 0));
+        const auto ready = std::find_if(copies.begin(), copies.end(), [&](const std::pair<std::uint8_t, std::uint8_t>& copy) {
+            return std::none_of(copies.begin(), copies.end(),
+                [&](const std::pair<std::uint8_t, std::uint8_t>& other) { return other.second == copy.first; });
+        });
+        if (ready != copies.end()) {
+            emitMove(static_cast<Register>(ready->first), ready->second);
+            copies.erase(ready);
+            continue;
+        }
+        // Every destination is still read: park one in R0 and redirect.
+        const auto parked = copies.front().first;
+        emitMove(Register::R0, parked);
+        for (auto& copy : copies) if (copy.second == parked) copy.second = 0;
+    }
+    m_accumulator_value = IRValueId{};
+}
+
+void IRCodeGenerator::emitParameterInputs() {
+    // Frame homes first: these stores read argument registers and write only
+    // R3 and RAM. Then one parallel copy fills the register homes.
+    std::vector<std::pair<std::uint8_t, std::uint8_t>> copies;
+    for (const auto& input : m_parameter_inputs) {
+        const IRValueId value{input.first};
+        if (m_spill_offsets.count(input.first)) emitWordSpillStore(value, input.second);
+        else if (usesRegisterAllocation(value))
+            copies.emplace_back(m_register_allocator.find(value)->physical_register, input.second);
+    }
+    emitParallelCopies(std::move(copies));
+    for (const auto& input : m_parameter_inputs) m_materialized_values.insert(input.first);
+    m_spill_cache.clear();
+    m_last_ram_word_address = IRValueId{};
+}
+
+void IRCodeGenerator::emitRegisterArguments(const IRInstruction& call) {
+    if (call.operands.size() > GSUAbi::RegisterArgumentCount)
+        fail("IR codegen: register-argument call has too many operands.", call.source);
+    struct Argument { IRValueId value; std::uint8_t target; };
+    std::vector<Argument> computed, spilled;
+    std::vector<std::pair<std::uint8_t, std::uint8_t>> copies;
+    std::vector<std::pair<std::uint8_t, std::uint16_t>> literals;
+    for (std::size_t n = 0; n < call.operands.size(); ++n) {
+        const auto value = call.operands[n];
+        const auto target = GSUAbi::RegisterArguments[n];
+        std::int64_t literal = 0;
+        const bool regional = regionalRegister(value) >= 0;
+        if (producer(value, call.source).opcode == IROpcode::Constant && constantValue(value, literal))
+            literals.emplace_back(target, static_cast<std::uint16_t>(literal));
+        else if (!regional && m_spill_offsets.count(value.value)) spilled.push_back({value, target});
+        else if (!regional && usesRegisterAllocation(value) && !m_cursor_elided_values.count(value.value) &&
+                 !m_ephemeral_values.count(value.value))
+            copies.emplace_back(target, m_register_allocator.find(value)->physical_register);
+        else computed.push_back({value, target});
+    }
+    // Computing a value may use scratch registers and R0, so those are parked
+    // on the stack before any argument register is written. Register homes
+    // are then read in one parallel copy, before pops, reloads and literals,
+    // each of which writes only its own argument register (and R0/R3).
+    for (const auto& argument : computed) { materialize(argument.value); emitPush(0); }
+    emitParallelCopies(std::move(copies));
+    for (auto argument = computed.rbegin(); argument != computed.rend(); ++argument) emitPop(argument->target);
+    for (const auto& argument : spilled) {
+        // Load the frame word straight into its register (TO before LDW, or
+        // LMS); no spill-cache copy, since spare registers may hold arguments.
+        const auto offset = m_spill_offsets.at(argument.value.value);
+        m_spill_cache.clobber(argument.target);
+        if (shortFrameSlot(offset)) { emitShortFrameAccess(true, argument.target, offset); continue; }
+        emitFrameAddress(Register::R3, offset);
+        emitByte(static_cast<std::uint8_t>(0x10 | argument.target)); emitByte(0x43);
+    }
+    for (const auto& literal : literals) emitRegisterLiteral(literal.first, literal.second);
+    m_accumulator_value = IRValueId{};
+    m_last_ram_word_address = IRValueId{};
 }
 
 void IRCodeGenerator::emitStoreIndirect(const IRInstruction& instruction) {
@@ -882,8 +1032,15 @@ void IRCodeGenerator::emitStoreIndirect(const IRInstruction& instruction) {
             return;
         }
         const auto* address_location = m_register_allocator.find(address);
+        // A successful check of this immutable SSA address earlier in the
+        // block covers its register home exactly as it covers a reload into
+        // R0: ensureAddressChecked would emit nothing for it either.
+        const auto credited = m_checked_addresses.find(address.value);
+        const bool checked_home = target.type.space == AddressSpace::RAM && credited != m_checked_addresses.end() &&
+            credited->second >= instruction.type.sizeInBytes;
         if (globallyOptimized() && address_location && address_location->has_register &&
-            provenAddress(address, target.type, instruction.type.sizeInBytes)) {
+            address_location->physical_register <= 11 &&
+            (checked_home || provenAddress(address, target.type, instruction.type.sizeInBytes))) {
             // The address is already live in an allocatable RAM-address
             // register. STW/STB reads it before consuming the selected value.
             emitStore(static_cast<Register>(address_location->physical_register), value_reg, byte);
@@ -1026,6 +1183,7 @@ void IRCodeGenerator::emitLoopBoundary(const IRInstruction&, bool reload) {
 }
 
 void IRCodeGenerator::emitHardwareLoopCapacityGuard(const Token& source) {
+    if (m_stack_proof.active()) { m_stack_proof.guard(4); return; }
     if (m_stack_check_credit.covers(4)) return;
     const auto ready = localLabel();
     const auto patch = m_object_file.code_section.size();
@@ -1389,7 +1547,8 @@ void IRCodeGenerator::planLocalValues() {
         }
         for (std::size_t n = 0; n + 1 < block.instructions.size(); ++n) {
             const auto& value = block.instructions[n];
-            if (!value.producesValue() || m_use_counts[value.result.value] != 1 ||
+            // A register parameter has no memory word to reload at its use.
+            if (!value.producesValue() || m_use_counts[value.result.value] != 1 || m_parameter_inputs.count(value.result.value) ||
                 m_cursor_elided_values.count(value.result.value) || m_branch_comparisons.count(value.result.value)) continue;
             const auto* location = m_register_allocator.find(value.result);
             if (!location || location->has_register || location->rematerializable) continue;
@@ -1449,14 +1608,21 @@ void IRCodeGenerator::planLoopCaches() {
     std::size_t work = 0;
     for (const auto& loop : cfg.loops) {
         if (loop.latches.size() != 1 || !cfg.reachable[loop.header]) continue;
-        unsigned caches = 0; bool rebases = false;
+        // `fenced`: an operation that may execute a CACHE outside this
+        // selector's control (a callee or an initializer kernel). LOOP never
+        // writes CBR; an inline division kernel's CACHE is recorded in
+        // m_division_caches and demoted when an enclosing window is selected;
+        // selectAutomaticCaches claims an outer nest before nested candidates.
+        // The explicit-header bypass below stays conservative about all three.
+        unsigned caches = 0; bool fenced = false, nested_kernel = false;
         for (const auto b : loop.blocks) for (const auto& i : m_current_function->blocks[b].instructions) {
             if (++work > 1000000) return;
             caches += i.opcode == IROpcode::Cache;
-            rebases = rebases || i.opcode == IROpcode::Call || i.opcode == IROpcode::HardwareLoop ||
-                i.opcode == IROpcode::MemoryInitialize || i.opcode == IROpcode::DivMod ||
+            nested_kernel = nested_kernel || i.opcode == IROpcode::HardwareLoop || i.opcode == IROpcode::DivMod ||
                 (i.opcode == IROpcode::Binary && (i.operation == "/" || i.operation == "%"));
+            fenced = fenced || i.opcode == IROpcode::Call || i.opcode == IROpcode::MemoryInitialize;
         }
+        const bool rebases = fenced || nested_kernel;
         const auto& header = m_current_function->blocks[loop.header];
         auto first = header.instructions.begin();
         while (first != header.instructions.end() && first->opcode == IROpcode::Phi) ++first;
@@ -1480,12 +1646,23 @@ void IRCodeGenerator::planLoopCaches() {
             if (!matches) continue;
             m_hardware_headers.emplace(setup.loop_id, IRBlockId{loop.header});
             std::int64_t trips = 0;
-            if (m_allow_auto_cache && !manual_scope && !m_current_function->is_cached && !rebases && !caches &&
-                m_cache_trips.size() < 32 && constantValue(setup.operands[0], trips) && trips >= 2 && trips <= 65535)
+            if (m_allow_auto_cache && !manual_scope && !m_current_function->is_cached && !fenced && !caches &&
+                m_cache_trips.size() < 32 && constantValue(setup.operands[0], trips) && trips >= 2 && trips <= 65535) {
                 m_cache_trips.emplace(loop.header, static_cast<std::uint32_t>(trips));
+                m_constant_cache_trips.insert(loop.header);
+            }
         }
-        if (!m_allow_auto_cache || manual_scope || m_current_function->is_cached || rebases || caches || m_cache_trips.count(loop.header) ||
+        if (m_cache_trips.count(loop.header)) m_cache_loop_blocks.emplace(loop.header, loop.blocks);
+        if (!m_allow_auto_cache || manual_scope || m_current_function->is_cached || fenced || caches || m_cache_trips.count(loop.header) ||
             cfg.predecessors[loop.header].size() != 2 || header.instructions.empty()) continue;
+        // A trip count unknown here is assumed small but repeated: one cold
+        // fill then cached iterations. Selection still requires the loop to be
+        // laid out after its entry and to fit one window; a constant count
+        // below replaces this estimate.
+        if (m_cache_trips.size() < 32) {
+            m_cache_trips.emplace(loop.header, AssumedDynamicTrips);
+            m_cache_loop_blocks.emplace(loop.header, loop.blocks);
+        }
         const auto& branch = header.instructions.back();
         if (branch.opcode != IROpcode::CondBranch || branch.targets.size() != 2 ||
             !loop.blocks.count(branch.targets[0].value) || loop.blocks.count(branch.targets[1].value)) continue;
@@ -1512,7 +1689,10 @@ void IRCodeGenerator::planLoopCaches() {
         bool exits = false;
         for (const auto b : loop.blocks) if (b != loop.header) for (const auto target : cfg.successors[b])
             exits = exits || !loop.blocks.count(target);
-        if (!exits && m_cache_trips.size() < 32) m_cache_trips.emplace(loop.header, static_cast<std::uint32_t>(trips));
+        if (!exits && m_cache_trips.count(loop.header)) {
+            m_cache_trips[loop.header] = static_cast<std::uint32_t>(trips);
+            m_constant_cache_trips.insert(loop.header);
+        }
     }
 }
 
@@ -1520,30 +1700,89 @@ void IRCodeGenerator::selectAutomaticCaches() {
     if (m_auto_caches.empty()) return;
     m_had_cache_probe = true;
     const IRControlFlow cfg(*m_current_function);
-    std::set<std::uint32_t> selected;
-    for (const auto& candidate : m_auto_caches) {
-        for (const auto& loop : cfg.loops) if (loop.header == candidate.header.value) {
-            const auto anchor = candidate.entry_slot ? m_block_addresses.at(loop.header) : candidate.offset + 1;
-            std::size_t end = anchor;
-            bool ordered = true;
-            bool overlaps = false;
-            for (const auto block : loop.blocks) {
-                const auto start = m_block_addresses.at(block);
-                ordered = ordered && start >= anchor;
-                overlaps = overlaps || selected.count(block) != 0;
-                const auto next = static_cast<std::size_t>(block) + 1;
-                end = std::max(end, next < m_current_function->blocks.size() ? m_block_addresses.at(static_cast<std::uint32_t>(next)) :
-                    m_object_file.code_section.size());
+    const auto loopOf = [&](IRBlockId header) -> const IRControlFlow::Loop* {
+        for (const auto& loop : cfg.loops) if (loop.header == header.value) return &loop;
+        return nullptr;
+    };
+    // Outer loops first: one window over a whole nest stays valid across its
+    // outer iterations, and blocks of a selected loop cannot be claimed again
+    // by a nested or overlapping candidate. Further entries of a selected
+    // loop are converted too, so every way in starts the same window.
+    std::vector<std::size_t> order(m_auto_caches.size());
+    for (std::size_t n = 0; n < order.size(); ++n) order[n] = n;
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        const auto* x = loopOf(m_auto_caches[a].header);
+        const auto* y = loopOf(m_auto_caches[b].header);
+        return (x ? x->blocks.size() : 0) > (y ? y->blocks.size() : 0);
+    });
+    std::set<std::uint32_t> selected, selected_headers;
+    for (const auto index : order) {
+        const auto& candidate = m_auto_caches[index];
+        const auto* loop = loopOf(candidate.header);
+        if (!loop) continue;
+        const auto anchor = candidate.entry_slot ? m_block_addresses.at(loop->header) : candidate.offset + 1;
+        std::size_t end = anchor;
+        bool ordered = true;
+        bool overlaps = false;
+        for (const auto block : loop->blocks) {
+            const auto start = m_block_addresses.at(block);
+            ordered = ordered && start >= anchor;
+            overlaps = overlaps || selected.count(block) != 0;
+            const auto next = static_cast<std::size_t>(block) + 1;
+            end = std::max(end, next < m_current_function->blocks.size() ? m_block_addresses.at(static_cast<std::uint32_t>(next)) :
+                m_object_file.code_section.size());
+        }
+        const auto bytes = end - anchor;
+        // The linker can place this object at any byte alignment. Reserve
+        // 15 bytes, not just the current object's observed low PC bits.
+        const auto cold = 80u * ((bytes + 30u) / 16u);
+        const bool fits = ordered && bytes <= 496;
+        if (selected_headers.count(loop->header) ? fits :
+            fits && !overlaps && static_cast<std::uint64_t>(candidate.trips - 1) * bytes * 4 > cold + 80) {
+            m_object_file.code_section.at(candidate.offset) = static_cast<std::uint8_t>(OpCode::CACHE);
+            m_selected_auto_cache = true;
+            // Division kernels inside this window would otherwise anchor CBR
+            // on their own line and flush the window on every pass. Slots are
+            // offsets into this function's append-only emission; each is
+            // demoted once and must still hold the kernel's CACHE.
+            const auto inside = [&](std::size_t slot) { return slot >= anchor && slot < end; };
+            for (const auto slot : m_division_caches) if (inside(slot)) {
+                auto& byte = m_object_file.code_section.at(slot);
+                if (byte != static_cast<std::uint8_t>(OpCode::CACHE))
+                    fail("Internal error: division CACHE slot was overwritten before window selection.",
+                        Token(TokenType::UNKNOWN, m_current_function->name, 1, 1));
+                byte = static_cast<std::uint8_t>(OpCode::NOP);
             }
-            const auto bytes = end - anchor;
-            // The linker can place this object at any byte alignment. Reserve
-            // 15 bytes, not just the current object's observed low PC bits.
-            const auto cold = 80u * ((bytes + 30u) / 16u);
-            if (ordered && !overlaps && bytes <= 496 && static_cast<std::uint64_t>(candidate.trips - 1) * bytes * 4 > cold + 80) {
-                m_object_file.code_section.at(candidate.offset) = static_cast<std::uint8_t>(OpCode::CACHE);
-                m_selected_auto_cache = true;
-                selected.insert(loop.blocks.begin(), loop.blocks.end());
+            m_division_caches.erase(std::remove_if(m_division_caches.begin(), m_division_caches.end(), inside),
+                m_division_caches.end());
+            if (!selected_headers.count(loop->header) && m_constant_cache_trips.count(loop->header)) {
+                // Os exchange evidence in candidateSpeed's units (bytes times
+                // structural loop weight): a warm cached byte costs 1 clock
+                // instead of 5, and each conservatively counted cold line costs
+                // 16 uncached bytes per entry into the window. The structural
+                // weight assumes 64 trips per loop level; a smaller proved count
+                // scales the saving down. Unknown trip counts earn no credit.
+                std::uint64_t saving = 0;
+                for (const auto block : loop->blocks) {
+                    const auto start = m_block_addresses.at(block);
+                    const auto next = static_cast<std::size_t>(block) + 1;
+                    const auto stop = next < m_current_function->blocks.size() ?
+                        m_block_addresses.at(static_cast<std::uint32_t>(next)) : m_object_file.code_section.size();
+                    if (stop <= start) continue;
+                    saving = GSUCost::saturatedAdd(saving, GSUCost::saturatedMultiply(stop - start,
+                        GSUCostModel::blockWeight(cfg.loop_depth.at(block))) / 5 * 4);
+                }
+                saving = saving / 64 * std::min<std::uint64_t>(candidate.trips, 64);
+                const auto depth = cfg.loop_depth.at(loop->header);
+                const auto cold_cost = GSUCost::saturatedMultiply(cold / 5,
+                    GSUCostModel::blockWeight(depth ? depth - 1u : 0u));
+                if (saving > cold_cost) {
+                    auto& credit = m_cache_credit[m_current_function->name];
+                    credit = GSUCost::saturatedAdd(credit, saving - cold_cost);
+                }
             }
+            selected.insert(loop->blocks.begin(), loop->blocks.end());
+            selected_headers.insert(loop->header);
         }
     }
 }
@@ -1553,10 +1792,21 @@ void IRCodeGenerator::emitBranch(IRBlockId target, const Token& source) {
         IRInstruction edge; edge.targets = {target}; edge.source = source;
         emitLoopBoundary(edge, true);
         emitPhiCopies(target, source);
+        emitSoftwareRegionalValues(static_cast<std::uint32_t>(m_current_block_index), target);
     }
     const bool bypass = m_cached_backedges.count({static_cast<std::uint32_t>(m_current_block_index), target.value}) != 0;
     const auto alias = bypass ? loopEntrySymbol(target, true) : std::string{};
     if (!bypass && target.isValid() && target.value == m_current_block_index + 1) {
+        // Falling into a candidate loop from outside: a selector-reset NOP
+        // here can become CACHE, anchoring CBR at the header that follows.
+        // It costs a byte even when unused, so size mode keeps only the
+        // existing free delay-slot candidates.
+        const auto loop = m_cache_loop_blocks.find(target.value);
+        if (!sizeOptimized() && loop != m_cache_loop_blocks.end() &&
+            !loop->second.count(static_cast<std::uint32_t>(m_current_block_index))) {
+            m_auto_caches.push_back({m_object_file.code_section.size(), target, m_cache_trips.at(target.value), false});
+            emitByte(static_cast<std::uint8_t>(OpCode::NOP));
+        }
         return;
     }
     const auto serial = m_branch_serial++;
@@ -1687,8 +1937,8 @@ void IRCodeGenerator::emitConditionalBranch(const IRInstruction& instruction) {
     // in one place and also makes nested comparisons ordinary values.
     materialize(instruction.operands.front());
     if (optimized()) {
-        emitRegisterLiteral(scratchRegister(), 0);
-        emitByte(0x3f); emitByte(static_cast<std::uint8_t>(0x60 | scratchRegister()));
+        // MOVES scratch, R0 sets Z like CMP R0,#0; only BEQ/BNE consume it.
+        emitByte(static_cast<std::uint8_t>(0x20 | scratchRegister())); emitByte(0xb0);
         const auto yes = instruction.targets[0], no = instruction.targets[1];
         if (no.value == m_current_block_index + 1) emitBlockBranch(8, yes, instruction.source);
         else { emitBlockBranch(9, no, instruction.source); emitBranch(yes, instruction.source); }
@@ -1895,7 +2145,7 @@ void IRCodeGenerator::emitInstruction(const IRInstruction& instruction) {
             materialize(instruction.operands.front());
             if (instruction.operation == "rom.byte") {
                 const auto& address = producer(instruction.operands.front(), instruction.source).type;
-                emitAddressCheck(address, 1);
+                if (!provenAddress(instruction.operands.front(), address, 1)) emitAddressCheck(address, 1);
                 if (isFarPointer(address)) emitSelectBank(4, AddressSpace::ROM);
                 else { emitNearBank(3, AddressSpace::ROM); emitSelectBank(3, AddressSpace::ROM); }
                 emitMove(Register::R14_LR, 0);
@@ -1975,12 +2225,14 @@ void IRCodeGenerator::emitBlock(const IRBasicBlock& block) {
     // Emission order does not prove that a predecessor (or an earlier loop
     // trip) ran. Only straight-line stack credit is valid at this entry.
     m_stack_check_credit.reset();
+    m_stack_proof.beginBlock();
     m_accumulator_value = IRValueId{};
     m_last_ram_word_address = IRValueId{};
     // POR is unknown at a CFG join/backedge. Only elide straight-line repeats.
     m_known_plot_options = -1;
     m_known_color = -1;
     m_materialized_values.clear();
+    if (!m_parameter_inputs.empty() && block.id.value == m_current_function->entry.value) emitParameterInputs();
     for (const auto& instruction : block.instructions) {
         m_current_instruction_position = m_emission_position++;
         if (globallyOptimized()) m_spill_cache.enter(m_register_allocator.spareRegisters(m_current_instruction_position));
@@ -2000,6 +2252,7 @@ void IRCodeGenerator::emitBlock(const IRBasicBlock& block) {
         if (instruction.producesValue()) {
             if (instruction.opcode == IROpcode::Phi) continue;
             if (m_cursor_elided_values.count(instruction.result.value)) continue;
+            if (m_parameter_inputs.count(instruction.result.value)) continue; // Already in its home.
             if (optimized()) {
                 if (m_branch_comparisons.count(instruction.result.value)) continue;
                 const auto* location = m_register_allocator.find(instruction.result);
@@ -2128,15 +2381,26 @@ void IRCodeGenerator::recordFinalSpillPlan() {
     record(m_divmod_offsets, SpillCategory::DivModAuxiliary);
 }
 
-bool IRCodeGenerator::preferCandidate(const GeneratedCandidate& candidate, const GeneratedCandidate& current) const {
+namespace {
+std::size_t candidateBytes(const ObjectFile& object) {
+    return object.code_section.size() + object.data_section.size() +
+        (object.data_section.empty() ? 0u : static_cast<unsigned>(object.code_section.size() & 1u));
+}
+}
+
+bool IRCodeGenerator::preferCandidate(const GeneratedCandidate& candidate, const GeneratedCandidate& current,
+                                      std::size_t smallest) const {
     if (m_config.require_no_spills && candidate.issues.empty() != current.issues.empty())
         return candidate.issues.empty();
-    const auto bytes = [](const ObjectFile& object) {
-        return object.code_section.size() + object.data_section.size() +
-            (object.data_section.empty() ? 0u : static_cast<unsigned>(object.code_section.size() & 1u));
-    };
-    const auto proposed = bytes(candidate.object), existing = bytes(current.object);
-    return proposed < existing || (proposed == existing && candidate.speed_score < current.speed_score);
+    return sizeFirstPreferred({candidateBytes(candidate.object), candidate.inclusive_score, candidate.speed_score},
+                              {candidateBytes(current.object), current.inclusive_score, current.speed_score}, smallest);
+}
+
+bool IRCodeGenerator::preferUncachedCandidate(const GeneratedCandidate& uncached, const GeneratedCandidate& cached) const {
+    // A local smallest enables the existing exchange rule: CACHE may cost at
+    // most max(2, smallest/64) bytes, and only for a >=25% lower inclusive
+    // estimate. Outside Os inclusive scores are zero, so bytes decide.
+    return preferCandidate(uncached, cached, std::min(candidateBytes(uncached.object), candidateBytes(cached.object)));
 }
 
 ObjectFile IRCodeGenerator::finishCandidate(GeneratedCandidate candidate) const {
@@ -2150,12 +2414,49 @@ ObjectFile IRCodeGenerator::finishCandidate(GeneratedCandidate candidate) const 
     return std::move(candidate.object);
 }
 
+void IRCodeGenerator::collectStaticObjects() {
+    // Mirror the RAM layout below: only objects this candidate defines, at
+    // the alignment it pads them to. Extern objects belong to another
+    // object's RAM segment, which this object's marker does not constrain.
+    m_static_objects.clear();
+    std::uint32_t id = 0;
+    for (const auto& pair : m_data_manager.getEntries()) {
+        const auto& entry = pair.second;
+        if (entry.is_extern || entry.bytes.empty() || entry.bytes.size() > 65536u) continue;
+        // Non-RAM entries become word-aligned DATA objects (see the layout
+        // below); the linker aligns concatenated DATA to two bytes too.
+        if (entry.storage == AddressSpace::RAM)
+            m_static_objects.emplace(pair.first, GSUAddressProof::StaticObject{
+                id++, static_cast<std::uint32_t>(entry.bytes.size()),
+                static_cast<unsigned>(std::max(2, entry.type.alignment)), AddressSpace::RAM});
+        else if (entry.storage == AddressSpace::ROM)
+            m_static_objects.emplace(pair.first, GSUAddressProof::StaticObject{
+                id++, static_cast<std::uint32_t>(entry.bytes.size()), 2u, AddressSpace::ROM});
+    }
+}
+
+void IRCodeGenerator::runAddressProof(const IRFunction& function, std::size_t frame_bytes) {
+    // run() resets the proof; keep whether the previous facts were relied on.
+    m_static_ram_proof_used = m_static_ram_proof_used || m_address_proof.usedStaticObjectProof();
+    m_address_proof.run(function, localSymbols(function), m_static_objects, frame_bytes, m_checked_pointer_mode);
+}
+
 IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRModule& module) {
     m_object_file = ObjectFile();
     m_spill_issues.clear();
     m_relaxation_pending.clear();
     m_selected_auto_cache = m_had_cache_probe = false;
+    m_cache_credit.clear();
     m_division_helpers.clear();
+    m_address_proof = GSUAddressProof{};
+    m_static_ram_proof_used = false;
+    m_stack_proof.clear();
+    if (globallyOptimized() && m_config.static_stack_proof && m_config.target == TargetKind::GSU) m_stack_proof.plan(module);
+    planRegisterArguments(module);
+    m_static_frame_sizes.clear(); m_static_frame_slots.clear(); m_static_frame_owner.clear();
+    m_short_frame_offsets.clear(); m_short_frame_layout.clear(); m_short_frame_sizes.clear(); m_short_ram_admitted = 0;
+    planStaticFrames(module);
+    collectStaticObjects();
     m_object_file.config = m_config;
     m_object_file.config.bitmap = module.bitmap;
     if (globallyOptimized()) planCallClobbers(module);
@@ -2192,14 +2493,18 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
         m_last_ram_word_address = IRValueId{};
         m_local_label_serial = 0;
         m_stack_check_credit.reset();
+        m_stack_proof.enter(function.link_name.empty() ? function.name : function.link_name);
+        m_parameter_inputs = parameterInputs(function);
+        m_static_frame_owner.clear(); m_static_frame_bytes = 0; m_frameless = false;
         m_boundary_stores_emitted.clear();
+        m_static_ram_proof_used = m_static_ram_proof_used || m_address_proof.usedStaticObjectProof();
         m_address_proof = GSUAddressProof{};
         m_checked_pointer_mode = function.return_type.pointer_level > 0;
         m_has_hardware_loop = false;
         m_register_hardware_loops.clear();
-        m_regional_loop_values.clear();
-        m_auto_caches.clear(); m_manual_cache = function.is_cached;
-        m_cache_trips.clear(); m_hardware_headers.clear();
+        m_regional_loop_values.clear(); m_regional_software_loops.clear();
+        m_auto_caches.clear(); m_division_caches.clear(); m_manual_cache = function.is_cached;
+        m_cache_trips.clear(); m_constant_cache_trips.clear(); m_cache_loop_blocks.clear(); m_hardware_headers.clear();
         m_cached_headers.clear(); m_cached_backedges.clear();
         m_cursor_updates.clear(); m_cursor_elided_values.clear(); m_ephemeral_values.clear();
         m_ephemeral_address_widths.clear();
@@ -2238,16 +2543,14 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
             }
         }
         if (globallyOptimized()) {
-            m_address_proof.run(function, localSymbols(function),
-                static_cast<std::size_t>(function.total_local_alloc_size), m_checked_pointer_mode);
+            runAddressProof(function, static_cast<std::size_t>(function.total_local_alloc_size));
             planLocalValues();
             planLoopCaches();
         }
         int frame_bytes = planFrameStorage();
         if (!optimized()) buildRegisterAllocation(function);
         if (globallyOptimized()) {
-            m_address_proof.run(function, localSymbols(function),
-                                static_cast<std::size_t>(frame_bytes), m_checked_pointer_mode);
+            runAddressProof(function, static_cast<std::size_t>(frame_bytes));
             const bool lost_proof = std::any_of(m_ephemeral_address_widths.begin(), m_ephemeral_address_widths.end(),
                 [&](const std::pair<const std::uint32_t, int>& address) {
                     return !provenAddress(IRValueId{address.first}, m_values.at(address.first)->type, address.second);
@@ -2259,35 +2562,67 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
                 for (const auto& address : m_ephemeral_address_widths) m_ephemeral_values.erase(address.first);
                 m_ephemeral_address_widths.clear();
                 frame_bytes = planFrameStorage();
-                m_address_proof.run(function, localSymbols(function),
-                                    static_cast<std::size_t>(frame_bytes), m_checked_pointer_mode);
+                runAddressProof(function, static_cast<std::size_t>(frame_bytes));
             }
             planHardwareLoopPreservation();
             planRegionalLoopValues();
         }
 
         recordFinalSpillPlan();
+        const auto frame_owner = function.link_name.empty() ? function.name : function.link_name;
+        if (frame_bytes > 0 && m_static_frame_functions.count(frame_owner)) {
+            // Even size keeps every word slot at FP-relative parity.
+            m_static_frame_owner = frame_owner;
+            m_static_frame_bytes = (frame_bytes + 1) & ~1;
+            m_static_frame_sizes[frame_owner] = m_static_frame_bytes;
+        }
+        planShortFrame();
+        const bool static_frame = !m_static_frame_owner.empty();
+        // Without stack parameters and FP-relative frame slots nothing in the
+        // body reads R9, so it is left untouched (hence preserved). `main`
+        // keeps its frame: its STOP state includes SP and the FP+4 reload.
+        const bool stack_parameters = !function.parameters.empty() && !m_register_arguments.count(frame_owner);
+        m_frameless = globallyOptimized() && function.name != "main" && !stack_parameters &&
+            (frame_bytes == 0 || static_frame);
+        if (framePointerAllocatable(function) && !m_frameless)
+            fail("IR codegen: R9-allocating function needs a frame pointer.", function.blocks.front().instructions.front().source);
         const auto function_offset = static_cast<std::uint32_t>(m_object_file.code_section.size());
         m_object_file.symbol_table.push_back({function.link_name.empty() ? function.name : function.link_name, SymbolSection::CODE, function_offset});
         if (function.is_cached) emitByte(static_cast<std::uint8_t>(OpCode::CACHE));
-        emitStackGuard(static_cast<std::size_t>(frame_bytes) + 4, Token(TokenType::UNKNOWN, function.name, 1, 1));
+        emitStackGuard(static_cast<std::size_t>(static_frame ? 0 : frame_bytes) + (m_frameless ? 2 : 4),
+                       Token(TokenType::UNKNOWN, function.name, 1, 1));
         if (m_checked_pointer_mode) {
             emitMove(Register::R0, 10);
             emitByte(0x3e); emitByte(0x71);
             emitGuard(OpCode::BEQ, 1);
             std::size_t parameters = 0;
-            for (const auto& parameter : function.parameters)
-                parameters += isFarPointer(parameter.type) ? 4 : 2;
-            emitCompare(Register::R10_SP, static_cast<std::uint16_t>(65535u - parameters));
-            emitGuard(OpCode::BCC, 2);
+            if (!m_register_arguments.count(function.link_name.empty() ? function.name : function.link_name))
+                for (const auto& parameter : function.parameters)
+                    parameters += isFarPointer(parameter.type) ? 4 : 2;
+            // Without a stack argument area the ceiling is $FFFF: only an odd
+            // SP reaches it, and the alignment guard above already stopped that.
+            if (parameters) {
+                emitCompare(Register::R10_SP, static_cast<std::uint16_t>(65535u - parameters));
+                emitGuard(OpCode::BCC, 2);
+            }
         }
 
         emitPush(GSUAbi::LinkRegister);
-        emitPush(GSUAbi::FramePointerRegister);
-        emitMove(static_cast<Register>(GSUAbi::FramePointerRegister), GSUAbi::StackPointerRegister);
-        if (frame_bytes > 0) {
+        if (!m_frameless) {
+            emitPush(GSUAbi::FramePointerRegister);
+            emitMove(static_cast<Register>(GSUAbi::FramePointerRegister), GSUAbi::StackPointerRegister);
+        }
+        if (frame_bytes > 0 && !static_frame) {
             emitAdjustStack(static_cast<std::size_t>(frame_bytes), false,
                             Token(TokenType::UNKNOWN, "", 0, 0));
+        }
+        if (m_stack_proof.active()) {
+            // Saved R12/R13 words are the only pushes that outlive a block.
+            std::size_t saved_loop_bytes = 0;
+            for (const auto& block : function.blocks) for (const auto& instruction : block.instructions)
+                if (instruction.opcode == IROpcode::HardwareLoop && !m_register_hardware_loops.count(instruction.loop_id))
+                    saved_loop_bytes += 4;
+            m_stack_proof.beginBody(saved_loop_bytes);
         }
 
         for (std::size_t block_index = 0; block_index < function.blocks.size(); ++block_index) {
@@ -2309,7 +2644,11 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
     // needlessly forced unrelated, already-short branches into long forms.
     if (!m_relaxation_pending.empty()) throw NeedsLongBranch{};
 
+    // Shared helpers keep their own runtime guards and stack frames.
+    m_stack_proof.leave();
+    m_static_frame_owner.clear(); m_short_frame_offsets.clear();
     emitDivisionHelpers();
+    m_static_ram_proof_used = m_static_ram_proof_used || m_address_proof.usedStaticObjectProof();
 
     for (const auto& pair : m_data_manager.getEntries()) {
         const auto& entry = pair.second;
@@ -2333,6 +2672,15 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
         m_object_file.symbol_table.push_back({entry.link_name, SymbolSection::DATA, offset});
         m_object_file.data_section.insert(m_object_file.data_section.end(),
                                           entry.bytes.begin(), entry.bytes.end());
+    }
+    layoutStaticFrames(module);
+    // Static-object proofs assumed a nonzero base; make the linker check it.
+    if (m_static_ram_proof_used)
+        m_object_file.symbol_table.push_back({GSUAbi::StaticRamProofSymbol, SymbolSection::RAM, 0});
+    // Omitted guards assumed this bound at `main`; make the linker prove it.
+    if (const auto stack_bound = m_stack_proof.bound()) {
+        if (stack_bound > 65535u) fail("Stack requirement exceeds one bank.", Token(TokenType::UNKNOWN, "main", 1, 1));
+        m_object_file.symbol_table.push_back({GSUAbi::StaticStackBoundPrefix + std::to_string(stack_bound), SymbolSection::RAM, 0});
     }
     struct PoolEntry { std::vector<std::uint8_t> bytes; unsigned alignment; std::uint32_t offset; };
     std::vector<PoolEntry> pool;
@@ -2360,7 +2708,12 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
     result.object = std::move(m_object_file); result.issues = std::move(m_spill_issues);
     if (globallyOptimized()) {
         result.speed_score = candidateSpeed(module, result.object);
-        if (sizeOptimized()) recordCandidateMetrics(module, result);
+        result.cache_credit = std::move(m_cache_credit);
+        m_cache_credit.clear();
+        if (sizeOptimized()) {
+            result.inclusive_score = inclusiveSpeed(module, result.object, nullptr, &result.cache_credit);
+            recordCandidateMetrics(module, result);
+        }
     }
     return result;
 }
@@ -2370,7 +2723,8 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
         IRCodeGenerator& generator;
         ~Cleanup() { generator.resetCandidateEmissionState(); }
     } cleanup{*this};
-    m_function_candidates.clear(); m_function_policies.clear(); m_function_division_policies.clear();
+    m_function_candidates.clear(); m_function_smallest.clear();
+    m_function_policies.clear(); m_function_division_policies.clear();
     m_function_pool_policies.clear(); m_pool_enabled = true;
     m_collect_function_candidates = false;
     std::size_t instructions = 0;
@@ -2391,12 +2745,18 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
         // eligibility does not prove that DATA plus checks is cheaper.
         auto best = generateOptimized(module, OptimizationLevel::O2, IRCompactionPolicy::Enabled, bounded);
         if (!bounded) return finishCandidate(std::move(best));
+        // The exchange budget is fixed by the smallest complete candidate seen.
+        std::size_t smallest = candidateBytes(best.object);
+        const auto better = [&](const GeneratedCandidate& candidate) {
+            smallest = std::min(smallest, candidateBytes(candidate.object));
+            return preferCandidate(candidate, best, smallest);
+        };
         for (const auto policy : {OptimizationLevel::O2, OptimizationLevel::Size}) {
             for (const bool shared : {false, true}) {
                 if (policy == OptimizationLevel::O2 && !shared) continue;
                 m_share_division = shared;
                 auto candidate = generateOptimized(module, policy);
-                if (preferCandidate(candidate, best)) best = std::move(candidate);
+                if (better(candidate)) best = std::move(candidate);
             }
         }
         // LOOP's ABI saves and pointer SSA can be faster yet larger. Retain
@@ -2406,7 +2766,7 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
             for (const bool shared : {false, true}) {
                 m_share_division = shared;
                 auto candidate = generateOptimized(module, policy, IRCompactionPolicy::Disabled);
-                if (preferCandidate(candidate, best)) best = std::move(candidate);
+                if (better(candidate)) best = std::move(candidate);
             }
         }
         if (pool_capable) for (const auto policy : {OptimizationLevel::O2, OptimizationLevel::Size}) {
@@ -2414,11 +2774,11 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
             // helper/compaction search. Start from original unplanned input.
             m_share_division = false;
             auto candidate = generateOptimized(module, policy, IRCompactionPolicy::Enabled, false);
-            if (preferCandidate(candidate, best)) best = std::move(candidate);
+            if (better(candidate)) best = std::move(candidate);
         }
         m_collect_function_candidates = false;
         auto mixed = generateMixedCandidate(module);
-        if (preferCandidate(mixed, best)) best = std::move(mixed);
+        if (better(mixed)) best = std::move(mixed);
         // Anchor every extension to this complete emitted winner, not the
         // independently greedy function snapshots or a later mutable best.
         const CandidateReference legacy(best);
@@ -2431,11 +2791,11 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
         m_collect_function_candidates = true;
         for (const auto policy : {OptimizationLevel::O2, OptimizationLevel::Size}) {
             auto candidate = generateOptimized(module, policy, IRCompactionPolicy::PointerPromotionOnly, true, &legacy);
-            if (admissibleExtension(candidate, legacy) && preferCandidate(candidate, best)) best = std::move(candidate);
+            if (admissibleExtension(candidate, legacy) && better(candidate)) best = std::move(candidate);
         }
         m_collect_function_candidates = false;
         auto enriched = generateMixedCandidate(module);
-        if (admissibleExtension(enriched, legacy) && preferCandidate(enriched, best)) best = std::move(enriched);
+        if (admissibleExtension(enriched, legacy) && better(enriched)) best = std::move(enriched);
         return finishCandidate(std::move(best));
     }
     auto best = generateOptimized(module, m_config.optimization, IRCompactionPolicy::Enabled, bounded);
@@ -2500,7 +2860,7 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateOptimized(const IRM
             auto uncached = emit();
             const bool discard_probe = !selected && (!m_config.require_no_spills ||
                 uncached.issues.empty() == result.issues.empty());
-            if (discard_probe || preferCandidate(uncached, result)) result = std::move(uncached);
+            if (discard_probe || preferUncachedCandidate(uncached, result)) result = std::move(uncached);
         }
         m_allow_auto_cache = true;
         considerFunctionCandidates(optimized_module, result, legacy);

@@ -243,6 +243,9 @@ void promote(IRFunction& f, const Analyzer::LocalSymbolTable& locals, bool near_
     std::map<Cell, IRValueId> pointer_initial_loads;
     for (auto c = candidates.begin(); c != candidates.end();) {
         if (!c->second.parameter || !c->second.type.pointer_level) { ++c; continue; }
+        // A pointer whose value check emits no guard loads exactly like an
+        // integer: reading its ABI slot cannot fault, so it needs no anchor.
+        if (pointerValueCheckIsTrivial(c->second.type, pointerValueCheckWidth(c->second.type))) { ++c; continue; }
         IRValueId initial;
         for (const auto& i : f.blocks.at(f.entry.value).instructions) {
             if (i.opcode != IROpcode::LoadIndirect && i.opcode != IROpcode::StoreIndirect) continue;
@@ -517,6 +520,204 @@ void inlineLeaves(IRModule& module, const std::map<std::string, Analyzer::LocalS
     }
 }
 
+std::string linkSymbol(const IRFunction& f) { return f.link_name.empty() ? f.name : f.link_name; }
+bool internalFunction(const IRFunction& f) {
+    return !f.link_name.empty() && f.link_name.front() == '\x01' && f.name != "main";
+}
+
+bool hasCycle(const IRFunction& f) {
+    // Iterative three-colour DFS: bounded by blocks + edges, no recursion.
+    std::vector<unsigned char> colour(f.blocks.size(), 0);
+    std::vector<std::pair<std::size_t, std::size_t>> stack{{f.entry.value, 0}};
+    colour.at(f.entry.value) = 1;
+    while (!stack.empty()) {
+        auto& top = stack.back();
+        const auto& block = f.blocks.at(top.first);
+        std::vector<IRBlockId> successors;
+        if (!block.instructions.empty() && block.instructions.back().isTerminator()) successors = block.instructions.back().targets;
+        if (top.second == successors.size()) { colour[top.first] = 2; stack.pop_back(); continue; }
+        const auto next = successors[top.second++].value;
+        if (colour.at(next) == 1) return true;
+        if (colour[next] == 0) { colour[next] = 1; stack.push_back({next, 0}); }
+    }
+    return false;
+}
+
+// Loop-free leaf callees only. Merging a callee's loops or remaining calls
+// into its caller's live ranges measurably raised spills and caller-save
+// pushes (interactive shapes: +12% GSU clocks) under linear-scan allocation;
+// a straight-line leaf adds at most its own short-lived values. Each
+// parameter is a read-only input (its address feeds only loads), no other
+// callee frame storage exists, and no hardware LOOP, plot context or bank
+// state is cloned. CACHE windows keep their manual regime.
+struct ParameterInputs {
+    std::map<std::uint32_t, std::size_t> loads; // load result -> parameter index
+    std::set<std::uint32_t> addresses;         // folded away with their loads
+};
+
+bool singleSiteInlinable(const IRFunction& caller, const IRInstruction& call, const IRFunction& callee,
+                         const Analyzer::LocalSymbolTable* symbols, ParameterInputs& inputs) {
+    if (call.in_plot_context || callee.is_cached || !callee.immutable_local_arrays.empty() || callee.storage_layout_valid ||
+        call.operands.size() != callee.parameters.size() || callee.blocks.empty())
+        return false;
+    if (call.result.isValid() && !sameScalar(callee.return_type, call.type)) return false;
+    const auto caller_defs = definitions(caller);
+    for (std::size_t p = 0; p < call.operands.size(); ++p)
+        if (!sameScalar(caller_defs.at(call.operands[p].value).type, callee.parameters[p].type)) return false;
+    bool caller_manual = caller.is_cached, callee_manual = false, returns = false;
+    for (const auto& b : caller.blocks) for (const auto& i : b.instructions) {
+        caller_manual = caller_manual || i.opcode == IROpcode::Cache;
+        if (i.opcode == IROpcode::HardwareLoop || i.opcode == IROpcode::HardwareLoopEnd || i.opcode == IROpcode::HardwareLoopLeave)
+            return false;
+    }
+    std::map<std::uint32_t, std::size_t> parameter_addresses;
+    for (const auto& b : callee.blocks) for (const auto& i : b.instructions) {
+        // PHI targets name predecessors; only a branch into the entry would
+        // need an incoming value for the new caller edge.
+        if (i.opcode != IROpcode::Phi) for (const auto target : i.targets) if (target.value == callee.entry.value) return false;
+        if (i.in_plot_context) return false;
+        switch (i.opcode) {
+            case IROpcode::HardwareLoop: case IROpcode::HardwareLoopEnd: case IROpcode::HardwareLoopLeave:
+            case IROpcode::PlotCoordinateRead: case IROpcode::PlotCoordinateWrite: case IROpcode::PlotBegin:
+            case IROpcode::PlotEnd: case IROpcode::Plot: case IROpcode::SetColor: case IROpcode::CMode:
+            case IROpcode::Rpix: case IROpcode::MemoryInitialize:
+            case IROpcode::Call: case IROpcode::DivMod:
+                return false;
+            case IROpcode::Binary:
+                // Division/modulo lower to helper calls with their own pushes.
+                if (i.operation == "/" || i.operation == "%") return false;
+                break;
+            case IROpcode::Cache: callee_manual = true; break;
+            case IROpcode::Return: case IROpcode::ReturnVoid: returns = true; break;
+            default: break;
+        }
+        // A promoted PHI keeps its variable only as metadata; clones drop it.
+        if (i.opcode == IROpcode::Phi || !i.symbol_id.isValid() || !symbols) continue;
+        const auto local = symbols->find(i.symbol_id);
+        if (local == symbols->end()) continue;
+        std::size_t parameter = callee.parameters.size();
+        for (std::size_t p = 0; p < callee.parameters.size(); ++p)
+            if (callee.parameters[p].name.lexeme == i.symbol) parameter = p;
+        if (i.opcode != IROpcode::Address || !i.operation.empty() || local->second.stackOffset <= 0 ||
+            parameter == callee.parameters.size() || !i.result.isValid())
+            return false;
+        parameter_addresses.emplace(i.result.value, parameter);
+    }
+    if (!returns || (callee_manual && !caller_manual) || hasCycle(callee)) return false;
+    for (const auto& b : callee.blocks) for (const auto& i : b.instructions) {
+        for (std::size_t o = 0; o < i.operands.size(); ++o) {
+            const auto address = parameter_addresses.find(i.operands[o].value);
+            if (address == parameter_addresses.end()) continue;
+            if (i.opcode != IROpcode::LoadIndirect || o != 0 || i.operands.size() != 1 || i.memory_volatile ||
+                !sameScalar(i.type, callee.parameters[address->second].type))
+                return false;
+            inputs.loads[i.result.value] = address->second;
+        }
+    }
+    for (const auto& address : parameter_addresses) inputs.addresses.insert(address.first);
+    return true;
+}
+
+// Splits the call's block: the prefix branches to a clone of the callee and
+// every return branches to a continuation holding the suffix. The call's own
+// result becomes the continuation's PHI, so later uses keep their value ID.
+void spliceCall(IRFunction& caller, std::size_t block_index, std::size_t position, const IRFunction& callee,
+                const ParameterInputs& inputs) {
+    const auto& parameter_loads = inputs.loads;
+    const auto& parameter_addresses = inputs.addresses;
+    const auto call = caller.blocks.at(block_index).instructions.at(position);
+    const auto base = static_cast<std::uint32_t>(caller.blocks.size());
+    if (callee.blocks.size() > 65536u || base > 65536u) throw CompilerError("O2 inline block growth limit exceeded.", call.source);
+    const IRBlockId continuation{base + static_cast<std::uint32_t>(callee.blocks.size())};
+    const auto original = caller.blocks[block_index].id;
+    std::map<std::uint32_t, IRValueId> values;
+    for (const auto& load : parameter_loads) values.emplace(load.first, call.operands.at(load.second));
+    for (const auto& b : callee.blocks) for (const auto& i : b.instructions)
+        if (i.result.isValid() && !values.count(i.result.value) && !parameter_addresses.count(i.result.value))
+            values.emplace(i.result.value, newValue(caller));
+    std::vector<IRBasicBlock> clones;
+    IRInstruction phi;
+    phi.opcode = IROpcode::Phi; phi.type = call.type; phi.result = call.result; phi.source = call.source;
+    for (const auto& b : callee.blocks) {
+        IRBasicBlock clone;
+        clone.id = IRBlockId{base + b.id.value};
+        clone.label = b.label;
+        for (auto i : b.instructions) {
+            if (i.result.isValid() && (parameter_loads.count(i.result.value) || parameter_addresses.count(i.result.value))) continue;
+            for (auto& v : i.operands) v = values.at(v.value);
+            for (auto& t : i.targets) t = IRBlockId{base + t.value};
+            if (i.result.isValid()) i.result = values.at(i.result.value);
+            if (i.opcode == IROpcode::Phi) i.symbol_id = SymbolId{};
+            if (i.opcode == IROpcode::Return || i.opcode == IROpcode::ReturnVoid) {
+                if (call.result.isValid()) {
+                    if (i.operands.empty()) throw CompilerError("O2 inline: value return has no operand.", i.source);
+                    phi.operands.push_back(i.operands.front());
+                    phi.targets.push_back(clone.id);
+                }
+                IRInstruction branch;
+                branch.opcode = IROpcode::Branch; branch.targets = {continuation}; branch.source = i.source;
+                i = std::move(branch);
+            }
+            clone.instructions.push_back(std::move(i));
+        }
+        clones.push_back(std::move(clone));
+    }
+    auto& block = caller.blocks[block_index];
+    IRBasicBlock tail;
+    tail.id = continuation; tail.label = "inline.continue";
+    if (call.result.isValid()) tail.instructions.push_back(std::move(phi));
+    tail.instructions.insert(tail.instructions.end(), std::make_move_iterator(block.instructions.begin() + static_cast<std::ptrdiff_t>(position) + 1),
+        std::make_move_iterator(block.instructions.end()));
+    block.instructions.erase(block.instructions.begin() + static_cast<std::ptrdiff_t>(position), block.instructions.end());
+    IRInstruction enter;
+    enter.opcode = IROpcode::Branch; enter.targets = {IRBlockId{base + callee.entry.value}}; enter.source = call.source;
+    block.instructions.push_back(std::move(enter));
+    // The original terminator now leaves from the continuation.
+    for (auto& b : caller.blocks) for (auto& i : b.instructions)
+        if (i.opcode == IROpcode::Phi) for (auto& t : i.targets) if (t.value == original.value) t = continuation;
+    for (auto& clone : clones) caller.blocks.push_back(std::move(clone));
+    caller.blocks.push_back(std::move(tail));
+}
+
+// A non-exported function with exactly one direct call is cloned into that
+// caller: no call, argument, frame or return sequence remains, and the
+// callee is then unreferenced. Each round removes a function, so the loop is
+// bounded by the module's function count.
+void inlineSingleCallSites(IRModule& module, const std::map<std::string, Analyzer::LocalSymbolTable>& locals) {
+    for (std::size_t round = 0, limit = module.functions.size(); round < limit; ++round) {
+        std::map<std::string, unsigned> calls;
+        std::set<std::string> referenced;
+        for (const auto& f : module.functions) for (const auto& b : f.blocks) for (const auto& i : b.instructions) {
+            if (i.opcode == IROpcode::Call) ++calls[i.symbol];
+            else if (i.opcode == IROpcode::Address && !i.symbol.empty()) referenced.insert(i.symbol);
+        }
+        bool changed = false;
+        for (std::size_t c = 0; c < module.functions.size() && !changed; ++c) {
+            const auto& callee = module.functions[c];
+            const auto key = linkSymbol(callee);
+            if (!internalFunction(callee) || calls[key] != 1 || referenced.count(key) || referenced.count(callee.name)) continue;
+            for (std::size_t f = 0; !changed && f < module.functions.size(); ++f) {
+                if (f == c) continue;
+                auto& caller = module.functions[f];
+                // Test `changed` first: the erase below invalidates `caller`.
+                for (std::size_t b = 0; !changed && b < caller.blocks.size(); ++b)
+                    for (std::size_t n = 0; !changed && n < caller.blocks[b].instructions.size(); ++n) {
+                        const auto& call = caller.blocks[b].instructions[n];
+                        if (call.opcode != IROpcode::Call || call.symbol != key) continue;
+                        const auto symbols = locals.find(callee.name);
+                        ParameterInputs inputs;
+                        if (!singleSiteInlinable(caller, call, callee, symbols == locals.end() ? nullptr : &symbols->second, inputs))
+                            break;
+                        spliceCall(caller, b, n, callee, inputs);
+                        module.functions.erase(module.functions.begin() + static_cast<std::ptrdiff_t>(c));
+                        changed = true;
+                    }
+            }
+        }
+        if (!changed) return;
+    }
+}
+
 void rematerializeBranchPredicates(IRFunction& f) {
     if (f.value_count > 16000 || f.blocks.size() > 256) return;
     const auto defs = definitions(f);
@@ -679,6 +880,23 @@ void strengthReduce(IRFunction& f) {
 }
 }
 
+void IRGlobalOptimizer::removeDeadInternalFunctions(IRModule& module) {
+    // Fixed point over removals: a dead function's own calls stop keeping its
+    // callees alive. Self-references never do. Each round removes a function.
+    for (bool changed = true; changed;) {
+        changed = false;
+        std::set<std::string> referenced;
+        for (const auto& f : module.functions) for (const auto& b : f.blocks) for (const auto& i : b.instructions) {
+            if ((i.opcode != IROpcode::Call && i.opcode != IROpcode::Address) || i.symbol.empty()) continue;
+            if (i.symbol != linkSymbol(f) && i.symbol != f.name) referenced.insert(i.symbol);
+        }
+        const auto dead = std::find_if(module.functions.begin(), module.functions.end(), [&](const IRFunction& f) {
+            return internalFunction(f) && !referenced.count(linkSymbol(f)) && !referenced.count(f.name);
+        });
+        if (dead != module.functions.end()) { module.functions.erase(dead); changed = true; }
+    }
+}
+
 void IRGlobalOptimizer::run(IRModule& module, const std::map<std::string, Analyzer::LocalSymbolTable>& locals,
                             OptimizationLevel policy, IRCompactionPolicy compaction) {
     const bool size_policy = policy == OptimizationLevel::Size;
@@ -695,6 +913,8 @@ void IRGlobalOptimizer::run(IRModule& module, const std::map<std::string, Analyz
     IRLocalOptimizer::run(module, locals);
     IRValueOptimizer::run(module);
     inlineLeaves(module, locals, size_policy);
+    inlineSingleCallSites(module, locals);
+    removeDeadInternalFunctions(module);
     IRVerifier::verify(module);
     IRConditionalOptimizer::run(module);
     IRLocalOptimizer::run(module, locals);
@@ -735,5 +955,7 @@ void IRGlobalOptimizer::run(IRModule& module, const std::map<std::string, Analyz
     IRLocalOptimizer::run(module, locals);
     if (!size_policy) IRValueOptimizer::splitLoopLifetimes(module);
     for (auto& f : module.functions) rematerializeBranchPredicates(f);
+    // Folding may have removed the last call of a function.
+    removeDeadInternalFunctions(module);
     IRVerifier::verify(module);
 }

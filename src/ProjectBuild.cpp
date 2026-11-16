@@ -1,5 +1,6 @@
 #include "ProjectBuild.hpp"
 #include "ProjectManifest.hpp"
+#include "ABI.hpp"
 #include "CompilerDriver.hpp"
 #include "LinkerDriver.hpp"
 #include "ModuleLoader.hpp"
@@ -119,6 +120,31 @@ int buildProject(const std::vector<std::string>& arguments) {
             link.insert(link.end(), {"--emit-asm", absolutePath(manifest.string("output.assembly"), output_directory)});
         link.insert(link.end(), link_flags.begin(), link_flags.end());
         link = configurationArguments(link, Consumer::Linker, &manifest);
+        // A compile-time stack proof must match the link actually performed:
+        // the runtime entering `main`. Command-line switches may override the
+        // manifest for the linker only, so derive it from the final arguments.
+        bool runtime_entry = false;
+        std::string entry = "main";
+        for (std::size_t index = 1; index < link.size(); ++index) {
+            if (link[index] == "--init-runtime") runtime_entry = true;
+            else if (link[index] == "--no-init-runtime") runtime_entry = false;
+            else if (link[index] == "--entry") entry = link.at(++index);
+            else if (optionTakesValue(link[index], Consumer::Linker)) ++index;
+        }
+        if (!runtime_entry || entry != "main")
+            compile.erase(std::remove(compile.begin(), compile.end(), std::string("--static-stack-proof")), compile.end());
+        // Short RAM holds static-frame slots, so it follows the stack proof.
+        // Each implementation unit claims an equal even share of the window.
+        for (std::size_t index = 1; index + 1 < compile.size(); ++index) {
+            if (compile[index] != "--short-ram") continue;
+            if (std::find(compile.begin(), compile.end(), std::string("--static-stack-proof")) == compile.end()) {
+                compile.erase(compile.begin() + static_cast<std::ptrdiff_t>(index),
+                              compile.begin() + static_cast<std::ptrdiff_t>(index) + 2);
+                break;
+            }
+            compile[index + 1] = std::to_string((GSUAbi::ShortRamCapacity / std::max<std::size_t>(sources.size(), 1u)) & ~std::size_t{1});
+            break;
+        }
         std::string binary, assembly;
         for (std::size_t index = 1; index < link.size(); ++index) {
             if (link[index] == "-o") binary = link.at(++index);

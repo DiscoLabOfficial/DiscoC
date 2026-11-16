@@ -58,21 +58,33 @@ not turn the instruction-level regression model into a full SNES emulator.
 ## Linker/object/runtime acceptance
 
 `object_file_hardening` checks independent little-endian fixtures, versions
-3–7, unknown versions/enums, impossible counts, section/name/total-file limits,
+3–10, unknown versions/enums, impossible counts, section/name/total-file limits,
 truncated/trailing records, duplicate/control-character names, symbol bounds
 and overlapping relocation operands. Adjacent bank/offset records remain legal.
+It checks default version-7 emission, version-8/9 proof-marker round trips,
+marker placement/identity constraints and rejected downgrades. Version-10
+coverage includes short RAM images/symbols, the 510-byte section limit, GSU-only
+use and `ADDR8_SHORT_RAM` placement on `ALT1`/`ALT2` plus `LMS`/`SMS` opcodes.
 Writer rejection must leave an existing destination unchanged. Test directories
 are process-private so concurrent build suites do not remove each other's files.
 
 `linker_hardening` uses the canonical in-process linker, not a second layout
 implementation. Golden payload bytes cover CODE, aligned multi-object DATA,
-RAM bases and all five relocation types. Negative cases cover non-CODE/end-label
+RAM/short RAM bases and all six relocation types. Negative cases cover non-CODE/end-label
 calls, invalid RAM relocation targets, missing/private/duplicate symbols,
 reserved contexts, incompatible metadata, origin/bank/stack constraints,
 alignment-induced bank crossing and bitmap/static/payload/stack conflicts.
 Existing binary and assembly sentinels must survive every rejected layout.
 Independent startup bytes cover RAMBR banks 0/1, R10 and the entry jump;
 threshold tests reserve RAM code below the descending stack.
+Proof cases reject a marked static RAM segment at address zero and enforce
+static stack bounds against the final stack floor, runtime initialization and
+entry `main`, including relocations that could enter `main` outside startup.
+Short RAM cases check aligned multi-object placement from `$0002`, word-index
+relocations, ordinary RAM references to short RAM symbols, initialization,
+window overflow and bitmap/static RAM/payload/stack conflicts. Startup execution
+checks both RAM banks, poisoned short RAM and writes confined to the two RAM
+initialization regions.
 
 `language_globals` additionally executes recursive exhaustion with R6=2 through
 direct and assembled paths. A statically impossible frame is now a link failure;
@@ -109,6 +121,11 @@ initialization, HiROM, and frontend-only SPC700 checks. Objects, final payloads,
 and assembly are compared with explicit tool invocations; final assembly is
 reassembled byte-for-byte. The GSU model checks RAM bank/stack initialization
 and the 46 + 103 result. These run in both CTest and the direct-build registry.
+Short RAM manifest coverage checks boolean validation and its dependence on
+runtime entry `main`. A two-unit project divides the window into equal even
+claims, compares objects with explicit `--static-stack-proof --short-ram`
+invocations, requires `LMS`/`SMS` in the final assembly, and executes its
+spill-heavy result.
 
 `module_loader` checks the actual dependency graph, diamond edges, physical-file
 deduplication, deterministic order, owned API projections, cached AST transfer,
@@ -231,7 +248,8 @@ a deliberately non-16-byte-aligned origin to exercise linker padding.
 Warning tests check all categories, suppression, Werror and definite assignment.
 CLI tests check migration errors, invalid origins and target restrictions.
 The object-reader unit checks malformed v6 DATA/RAM alignment, retaining legacy
-v3/v4/v5/v6 compatibility checks and malformed v7 bitmap records.
+v3/v4/v5/v6 compatibility checks, malformed v7 bitmap records, v8/v9 proof
+markers and v10 short RAM records. See [linker/object/runtime acceptance](#linkerobjectruntime-acceptance).
 
 Model execution is not cache timing, SNES/PPU display, hardware or full-emulator
 validation. The shared test registry is also used by direct build helpers;
@@ -278,8 +296,9 @@ with ten host-input vectors through all three payload paths. It checks phase
 masking, independent pixel/color counts, planar byte landmarks, poisoned-RAM
 clearing, untouched memory outside the bitmap, startup/stack/bank state, one
 RPIX, zero GETC and identical payload hashes. The renderer stays within the
-existing instruction-model execution limit. Both explicit CACHE requests must
-remain in the final assembly export, with checked execution counts and CBR.
+existing instruction-model execution limit. The final assembly export must keep
+its CACHE topology (the clear window, one window per edge/fill pass and the
+optional divider window), with checked execution counts and CBR.
 Hand-encoded model self-tests cover the functional 512-byte instruction cache:
 selector/ALT reset, prefetched-PC alignment, preserving/rebasing cached lines,
 RAM fallback outside the window and payload-bound checks. No cache-cycle or
@@ -457,6 +476,13 @@ include the proof test unit. Stack-credit reuse requires straight-line
 dominance; every CFG block entry and local-label binding must fence it, even
 in call-free loops. The conservative reset repair has 540 stack-boundary cases
 covering successful returns and fail-stop behavior.
+Additional O2/Os fixtures execute internal register arguments, static frames,
+frameless calls and short RAM homes while comparing results and preserved ABI
+state. `--static-stack-proof` coverage retains guards for ineligible call graphs
+and emits link-checked bounds for eligible runtime-entered `main` graphs.
+Near-ROM table proofs keep their bank relocation, retain checks for unbounded
+accesses, and reject incompatible RAM-origin or ROM-bank links through direct
+objects, compiler assembly and final linked exports.
 
 `gsu_size_optimization_unit` checks conditional/remainder-first divmod fusion,
 matching/dominance/type exclusions, malformed projections, bounded/idempotent
@@ -561,13 +587,17 @@ functional test, and optional Mesen integration measures the same workload
 profile at O2. Model counts are not timing; emulator cycles are not hardware
 measurements. Optimization does not relax the language conformance contract.
 
-The rotating demo additionally validates an owned `getScreenBuffer()` snapshot
-against all 49,152 visible reference pixels before saving a pose PNG. Capture
-waits three refreshes for asynchronous screenshot decoding, independently of
-the synchronous RAM/VRAM publication checks and completed-pose FPS probe. The
-fixed NTSC raw-buffer dimensions/top-border offset are checked; a missing pose
-fails after a bounded wait. This prevents a previous-frame PNG from being
+The rotating demo's verifier compares an owned `getScreenBuffer()` snapshot
+against all 49,152 visible reference pixels before saving a pose PNG. It queues
+up to eight publications, starts matching on the next refresh and tries the
+newest eligible reference first. Superseded poses can be captured on later laps;
+success requires all 64 poses and phase wrap, while more than six unmatched
+refreshes or queue overflow fails. This is independent of synchronous RAM/VRAM
+publication checks and the completed-pose FPS probe. Fixed NTSC raw-buffer
+dimensions/top-border offset are checked, so a previous-frame PNG cannot be
 silently labeled as the next pose. No host throttle or timing sample changes.
+The [0.3.0 validation record](releases/v0.3.0/validation.md) records the actual
+end-to-end result for the current preparation.
 
 ## Optional full SNES triangle integration
 
@@ -789,12 +819,15 @@ The actual-source raster, private-raster and paint corpora execute 432, 568 and
 and byte-exact build/assembly paths. This includes the conservative stack-credit
 reset repair; the older recovery results above do not validate that repair.
 
-Current O2 full-scene Mesen positive/negative and ten-capture checks also passed
+That snapshot's O2 full-scene Mesen positive/negative and ten-capture checks also passed
 under the original 120-second CLI and external bounds with unchanged frame caps.
 The confirming bounded runs supersede an initial run with a 180-second CLI
 limit; that earlier attempt remains preserved. Full-scene Os Mesen execution
-is unrun. No physical-hardware, new sanitizer or CI result is implied. Exact
-source/tool identities and scope are in the [scene validation snapshot](../examples/snes/gem_chess/README.md#local-validation-snapshot-2026-10-20).
+was unrun for this October snapshot. No physical-hardware, new sanitizer or CI
+result is implied by these historical checks. Exact source/tool identities and
+scope are in the [scene validation snapshot](../examples/snes/gem_chess/README.md#historical-local-validation-snapshot-2026-10-20).
+The [0.3.0 record](releases/v0.3.0/validation.md) reports the fresh preparation
+checks separately.
 
 ## Optional libFuzzer target
 

@@ -1,7 +1,7 @@
 # Project Setup
 cmake_minimum_required(VERSION 3.15)
 
-project(DiscoC-Toolchain VERSION 0.2.0 LANGUAGES CXX)
+project(DiscoC-Toolchain VERSION 0.3.0 LANGUAGES CXX)
 
 # CMake's project VERSION is numeric; an empty suffix selects the stable version.
 set(DISCO_VERSION_PRERELEASE "" CACHE STRING "SemVer prerelease suffix (empty for stable builds)")

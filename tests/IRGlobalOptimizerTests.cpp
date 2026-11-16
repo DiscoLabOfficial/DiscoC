@@ -387,6 +387,39 @@ int main() {
             catch (const CompilerError& error) { rejected = error.getMessage().find("exposed hardware-loop") != std::string::npos; }
             require(rejected, "Liveness accepted a hidden hardware-loop backedge");
         }, true);
+        // Unreferenced internal functions are dropped; exported ones stay.
+        check("internal word dead(word v) { return v + 1; } word kept(word v) { return v; } word main() { return 3; }",
+            [](const IRModule& original, const IRModule& m) {
+                require(original.functions.size() == 3 && m.functions.size() == 2 &&
+                    std::none_of(m.functions.begin(), m.functions.end(), [](const IRFunction& f) { return f.name == "dead"; }),
+                    "Dead internal function was not removed, or an exported one was");
+            });
+        // A single-site, loop-free, call-free internal callee is cloned into
+        // its caller, including PHI joins and reassigned parameters.
+        check("internal word span(word a, word b) { if (a > b) { word t = a; a = b; b = t; } if (b - a > 9) return 9; return b - a; }"
+              "word main() { word x = *(volatile word*)0x100; return span(x, 7) + 1; }",
+            [](const IRModule&, const IRModule& m) {
+                require(m.functions.size() == 1 && count(m, IROpcode::Call) == 0,
+                    "Single-site loop-free leaf was not inlined");
+                allocation(m.functions[0]);
+            });
+        const auto kept = [](const char* source, const char* function, const char* message) {
+            check(source, [&](const IRModule&, const IRModule& m) {
+                require(std::any_of(m.functions.begin(), m.functions.end(), [&](const IRFunction& f) { return f.name == function; }) &&
+                    count(m, IROpcode::Call) != 0, message);
+            });
+        };
+        kept("internal word twice(word a) { if (a > 3) return 1; return 2; }"
+             "word main() { word x = *(volatile word*)0x100; return twice(x) + twice(x + 1); }", "twice",
+             "A callee with two call sites was inlined");
+        kept("internal word sum(word n) { word s = 0; while (n > 0) { s += n; n--; } return s; }"
+             "word main() { return sum(*(volatile word*)0x100); }", "sum", "A looping callee was inlined");
+        kept("word ext(word v); internal word wrap(word a) { if (a > 1) return ext(a); return 0; }"
+             "word main() { return wrap(*(volatile word*)0x100); }", "wrap", "A callee with a call was inlined");
+        kept("internal word quotient(word a) { if (a > 1) return 100 / a; return 0; }"
+             "word main() { return quotient(*(volatile word*)0x100); }", "quotient", "A callee with a division helper was inlined");
+        kept("word pub(word a) { if (a > 1) return 1; return 0; }"
+             "word main() { return pub(*(volatile word*)0x100); }", "pub", "An exported callee was inlined");
         std::string oversized = "word main() {";
         for (std::size_t i = 0; i < 1025; ++i) oversized += "word v" + std::to_string(i) + " = 0;";
         oversized += "return 0; }";

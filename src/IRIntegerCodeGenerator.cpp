@@ -185,7 +185,7 @@ bool IRCodeGenerator::emitConstantArithmetic(const IRInstruction& instruction) {
     if (op == "/") {
         if (count != 0) {
             const auto positive = localLabel();
-            emitCompare(Register::R0, 0); emitLocalJump(positive, 10);
+            emitZeroTest(Register::R0); emitLocalJump(positive, 10);
             // Bias a negative dividend before ASR to truncate toward zero,
             // not toward minus infinity. This sum cannot overflow a word.
             emitImmediateArithmetic(OpCode::ADD_R, mask, instruction.source);
@@ -195,7 +195,7 @@ bool IRCodeGenerator::emitConstantArithmetic(const IRInstruction& instruction) {
         if (negate) { emitByte(0x4f); emitByte(0xd0); }
     } else {
         const auto positive = localLabel(), done = localLabel();
-        emitCompare(Register::R0, 0); emitLocalJump(positive, 10);
+        emitZeroTest(Register::R0); emitLocalJump(positive, 10);
         // The remainder follows the dividend's sign, even for a negative
         // divisor; the unsigned magnitude also represents abs(-32768).
         emitByte(0x4f); emitByte(0xd0); emitWordMask(mask);
@@ -244,7 +244,7 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
         emitCompare(Register::R6_LMULT_HI, 16);
         emitGuard(OpCode::BCC, 5);
         const auto loop = localLabel(), end = localLabel();
-        emitCompare(Register::R6_LMULT_HI, 0);
+        emitZeroTest(Register::R6_LMULT_HI);
         emitLocalJump(end, 9);
         bindLabel(loop);
         if (operation == "<<") emitByte(0x50); // ADD R0: modular left shift.
@@ -309,8 +309,12 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
     // kernel follows it within one cache window. Explicit cache ownership
     // still wins; calls have no cache-base preservation ABI. The backedge
     // skips CACHE itself.
-    if (globallyOptimized() && !m_manual_cache)
+    // An enclosing automatic window, once selected, demotes this CACHE back
+    // to the NOP so that the kernel does not rebase CBR on every outer pass.
+    if (globallyOptimized() && !m_manual_cache) {
         m_object_file.code_section.at(division_guard_slot) = static_cast<std::uint8_t>(OpCode::CACHE);
+        m_division_caches.push_back(division_guard_slot);
+    }
     bindLabel(loop);
     emitByte(0xb1); emitByte(0x11); emitByte(0x51); // Shift quotient/input into carry.
     emitByte(0xb2); emitByte(0x12); emitByte(0x3d); emitByte(0x52); // ADC R2.
@@ -349,9 +353,9 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
     if (combined) {
         // Save the unused component before plotting restores R1/R2. A later
         // projection cannot assume those physical helper registers survive.
-        emitRegisterLiteral(3, static_cast<std::uint16_t>(m_divmod_offsets.at(instruction.result.value)));
-        emitByte(0xb9); emitByte(0x13); emitByte(0x53);
-        emitStore(Register::R3, operation == "/" ? 2 : 1, false);
+        const auto slot = m_divmod_offsets.at(instruction.result.value);
+        if (shortFrameSlot(slot)) emitShortFrameAccess(false, operation == "/" ? 2 : 1, slot);
+        else { emitFrameAddress(Register::R3, slot); emitStore(Register::R3, operation == "/" ? 2 : 1, false); }
         emitMove(Register::R0, operation == "/" ? 1 : 2);
     }
     if (m_isInPlottingContext) { emitPop(2); emitPop(1); }
@@ -366,8 +370,10 @@ void IRCodeGenerator::emitDivMod(const IRInstruction& instruction) {
 void IRCodeGenerator::emitDivModResult(const IRInstruction& instruction) {
     if (!globallyOptimized()) fail("IR codegen: divmod.result requires the O2 backend.", instruction.source);
     m_last_ram_word_address = IRValueId{};
-    emitRegisterLiteral(3, static_cast<std::uint16_t>(m_divmod_offsets.at(instruction.operands.at(0).value)));
-    emitByte(0xb9); emitByte(0x13); emitByte(0x53); emitByte(0x43);
+    const auto slot = m_divmod_offsets.at(instruction.operands.at(0).value);
+    if (shortFrameSlot(slot)) { emitShortFrameAccess(true, 0, slot); return; }
+    emitFrameAddress(Register::R3, slot);
+    emitByte(0x43);
 }
 
 void IRCodeGenerator::emitSharedDivision(const IRInstruction& instruction) {
@@ -389,9 +395,9 @@ void IRCodeGenerator::emitSharedDivision(const IRInstruction& instruction) {
     // Never carry caller-only stack credit into an outlined implementation.
     m_stack_check_credit.reset();
     if (instruction.opcode == IROpcode::DivMod) {
-        emitRegisterLiteral(3, static_cast<std::uint16_t>(m_divmod_offsets.at(instruction.result.value)));
-        emitByte(0xb9); emitByte(0x13); emitByte(0x53);
-        emitStore(Register::R3, instruction.operation == "/" ? 2 : 1, false);
+        const auto slot = m_divmod_offsets.at(instruction.result.value);
+        if (shortFrameSlot(slot)) emitShortFrameAccess(false, instruction.operation == "/" ? 2 : 1, slot);
+        else { emitFrameAddress(Register::R3, slot); emitStore(Register::R3, instruction.operation == "/" ? 2 : 1, false); }
     }
     emitMove(Register::R0, instruction.operation == "/" ? 1 : 2);
     if (m_isInPlottingContext) { emitPop(2); emitPop(1); }

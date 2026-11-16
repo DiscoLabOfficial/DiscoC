@@ -88,8 +88,10 @@ Ubuntu/macOS/sanitizer runs or establish physical-hardware/cycle correctness.
 ## Compatibility and non-goals
 
 - Rebuild all tools together, then rebuild `.o` files and relink when upgrading.
-  Current emission is little-endian object format v7; documented legacy readers
-  are compatibility aids, not a promise that older tools accept new objects.
+  Object serialization is little-endian, with v7 as the default writer and
+  v8–10 for proof metadata and short RAM. See [object compatibility](object-format.md#compatibility-and-evolution).
+  Legacy readability is a compatibility aid, not a promise that older tools
+  accept new objects or implement the current ABI.
 - Payloads are fixed-origin and must fit one accessible program bank. `.incbin`
   storage and copying do not relocate embedded addresses. Relink for a new origin.
 - Host bus ownership, real cartridge capacity, code copying and SNES/PPU setup

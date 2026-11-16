@@ -7,17 +7,20 @@ The format is intentionally small and implementation-owned. It is not ELF, SNES 
 ## Binary layout
 
 All multi-byte integer fields are serialized explicitly in little-endian byte
-order, independent of the host architecture. The current format version is
-7. The format is serialized in this order:
+order, independent of the host architecture. The reader accepts versions 3–10;
+writers select version 7 by default. Versions 8 and 9 keep the version-7 layout
+and carry the static-RAM or static stack-bound proof marker described below.
+Version 10 adds a short RAM section. The writer selects the highest version
+required by an object's proof markers, short RAM section, short RAM symbols or
+short RAM relocations. Older readers reject unsupported versions instead of
+ignoring required placement or proof constraints.
 
-Version 7 remains the Baseline 0.1 writer format. The stabilization checks do
-not change the wire layout; they reject malformed records previously accepted.
-Readers accept documented legacy versions 3–6, not future/unknown versions.
+The version-7 layout and its version-10 extension are serialized in this order:
 
 | Field | Encoding |
 | --- | --- |
 | Magic | 5 ASCII bytes: `DISCO` |
-| Format version | `uint8_t`: currently `7` |
+| Format version | `uint8_t`: `7` by default, `8`/`9` for proof markers, `10` for short RAM |
 | Target | `uint8_t`: `0` = GSU, `1` = SPC700 |
 | Memory mapping | `uint8_t`: `0` = LoROM, `1` = HiROM |
 | Code start address | `uint32_t` |
@@ -28,6 +31,7 @@ Readers accept documented legacy versions 3–6, not future/unknown versions.
 | Code section | `uint32_t` byte count, followed by raw code bytes |
 | Data section | `uint32_t` byte count, followed by raw data bytes |
 | RAM initialization image | `uint32_t` byte count, followed by initial RAM bytes (version 5) |
+| Short RAM image | `uint32_t` byte count (at most 510), followed by its initial bytes (version 10 only) |
 | Symbol count | `uint32_t` |
 | Symbols | Repeated symbol records |
 | Relocation count | `uint32_t` |
@@ -52,7 +56,8 @@ uint8_t section
 uint32_t offset
 ```
 
-The section value is 0 for CODE, 1 for ROM DATA, and 2 for RAM. Offsets are
+The section value is 0 for CODE, 1 for ROM DATA, 2 for RAM, and 3 for short
+RAM (version 10). Offsets are
 relative to that object's section/image. Names beginning with byte 0x01 are
 object-private: relocations can resolve them only in that object. Other
 definitions participate in public cross-object lookup. Compiler internal
@@ -84,6 +89,7 @@ The relocation types are:
 | `2` | `ADDR24_BANK` | Bank byte of a far address |
 | `3` | `ADDR24_OFFSET` | 16-bit offset portion of a far address |
 | `4` | `ADDR16_RAM` | 16-bit address in the configured near RAM bank (version 5) |
+| `5` | `ADDR8_SHORT_RAM` | `LMS`/`SMS` word index: even near RAM address below `$0200`, halved (version 10) |
 
 The relocation section identifies the CODE/DATA section containing the
 placeholder. RAM-image patch records are not supported. The compiler primarily
@@ -102,14 +108,16 @@ cannot request a huge table by its count alone. Resource caps are:
 
 - 128 MiB for the complete serialized object;
 - 64 MiB each for CODE and DATA; 64 KiB for a RAM image;
+- 510 bytes for a short RAM image;
 - 4,096 bytes per symbol/relocation name;
 - 1,000,000 entries each for symbol and relocation tables, additionally bounded
   by file size.
 
 These are container bounds, not target-placement permissions: a linked GSU
 payload must still fit its single accessible program bank. The linker also caps
-combined input sections/names/table records at 128 MiB, charged in the v7 layout
-even for legacy inputs, and rejects impossible GSU section totals while loading
+combined input sections/names/table records at a 128 MiB decoded-record budget,
+including short RAM contents and charging legacy inputs at the same rate. It
+rejects impossible GSU section totals while loading
 instead of retaining the full input set first. Structural writer
 validation runs before opening its destination. Link configuration validation
 runs before opening payload/assembly destinations. I/O failure during final
@@ -129,13 +137,14 @@ writing is not a transactional-output guarantee.
 7. Applies relocations.
 8. Writes code, alignment padding, and data to the output file.
 
-Versions 6/7 allocate each object's RAM image with its declared alignment, from
+Versions 6–10 allocate each object's RAM image with its declared alignment, from
 `--ram-origin` in `--ram-bank`. RAM bytes are not appended to ROM DATA.
 `--init-runtime` encodes zeroing/nonzero initialization in startup; otherwise
 nonempty RAM requires `--host-initialized-globals`. Public/private RAM targets
 use their own object's RAM base, independently of CODE/DATA bases.
-`ADDR16_RAM` requires a RAM symbol or reserved stack limit and validates the
-near RAM bank before narrowing; CODE/DATA cannot masquerade as static RAM.
+`ADDR16_RAM` requires a RAM/short RAM symbol or reserved stack limit and
+validates the near RAM bank before narrowing; CODE/DATA cannot masquerade as
+static RAM.
 
 Compiler DATA sections request alignment 2 and align their individual objects.
 Raw assembly defaults to DATA alignment 1 and RAM alignment 2.
@@ -146,7 +155,7 @@ base, not an unpadded sum. Padding counts toward the payload's bank limit and is
 preserved in final assembly exports. This metadata does not align arbitrary
 word declarations inside a hand-written packed section.
 
-For 16-bit address relocations, the linker patches the two bytes after the opcode placeholder. For bank relocations, it patches the byte after the opcode. For offset relocations, it patches the two-byte address field.
+For 16-bit address relocations, the linker patches the two bytes after the opcode placeholder. For bank relocations, it patches the byte after the opcode. For offset relocations, it patches the two-byte address field. An `ADDR8_SHORT_RAM` relocation patches the single word-index byte after the `LMS`/`SMS` opcode.
 
 Undefined symbols and duplicate definitions are linker errors. Objects with incompatible target configurations are rejected before output is written.
 
@@ -210,9 +219,40 @@ raised by selected framebuffer reservations and (with runtime initialization)
 RAM payloads below the configured descending stack, plus the required stack
 space. Known frames that cannot fit the initial R10 are rejected at link time;
 otherwise generated frame/push checks stop with R6=2 on dynamic exhaustion.
-Recursive/cumulative depth is not proved by linking. Input definitions of these
-symbols are forbidden. Without known reservations the floor is zero. These
-checks do not reserve unrelated host resources or infer host-owned stack space.
+These ordinary stack-limit references do not prove recursive or cumulative
+depth. Input definitions of these symbols are forbidden. Without known
+reservations the floor is zero. These checks do not reserve unrelated host
+resources or infer host-owned stack space.
+
+With `--static-stack-proof` (implied by a manifest that enables runtime
+initialization with entry `main`), O2/Os omit every stack guard in `main` and in
+the internal functions reached only from it, without recursion or address use.
+The object then carries a private RAM marker `__disco_static_stack_<bytes>` at
+offset 0: the cumulative depth those functions can reach below `main`'s entry
+SP. Such objects require at least format version 9 (version 10 when they also
+use short RAM), which older readers refuse.
+The linker accepts the marker only with runtime initialization, entry `main`
+defined by that object and referenced by no relocation, and `floor + bytes <=
+--stack-pointer`; otherwise linking fails. No omitted guard can then fail, so
+the remaining guards (exported, recursive or shared callees, helpers) keep the
+precise R6=2 fault behaviour. Version 8 likewise marks objects whose static RAM
+accesses omit null checks (`__disco_static_ram_nonnull`, nonzero RAM origin).
+Final linked assembly carries neither marker.
+
+Short RAM (version 10) is static RAM the linker places in the only range
+`LMS`/`SMS` reach: `$0000-$01FF` of the near RAM bank. Every object's short RAM
+section is placed word-aligned, in link order, from `$0002`, so address zero
+stays a null pointer and the window holds 510 bytes in total; more is rejected.
+Short RAM symbols resolve like RAM symbols (also for `ADDR16_RAM`). An
+`ADDR8_SHORT_RAM` relocation must patch the operand of an `ALT1`/`ALT2` plus
+`IBT`-opcode instruction (`LMS`/`SMS`), and its target must resolve to an even
+near-RAM address below `$0200`. The linker rejects a short RAM window that
+overlaps the bitmap framebuffer, static RAM, a RAM payload or the initial stack
+word, raises the stack floor above it, and initializes it like static RAM
+(runtime initialization or host-initialized globals). The compiler emits short
+RAM only with `--short-ram` (see [architecture](architecture.md)). In assembly,
+the section is `.segment "SHORTRAM"` and a relocated access is written
+`lms rN, (short(name))` or `sms (short(name)), rN`.
 
 RAM execution requires copying the payload to cartridge RAM and matching the
 configured program bank/PC. ROM-qualified accesses still require ROM-resident
@@ -238,15 +278,22 @@ The linker's `.bin` output is the final linked GSU payload for the object set. I
 
 The reader accepts version 3 as packed DATA (alignment 1) and version 4 with
 DATA alignment, both without a RAM image. Version 5 includes RAM with default
-alignment 2. Version 6 records RAM alignment explicitly. Writers emit version 7,
-which additionally records optional host bitmap metadata. Versions 3 through 6
-have no bitmap field; the reader supplies an unselected profile.
-Versions 3/4 cannot contain RAM symbols or relocation type 4. Other versions,
-invalid alignment bytes, truncated bitmap records, invalid flags and invalid
-profiles are rejected. RAM images are bounded to 64 KiB. Rebuild
-compiler objects when changing the pointer ABI: reading an old container does
-not make its old far argument layout ABI-compatible, and cross-unit signatures
-are not stored or checked by this format.
+alignment 2. Version 6 records RAM alignment explicitly. Version 7 adds optional
+host bitmap metadata and remains the default writer format. Versions 3 through
+6 have no bitmap field; the reader supplies an unselected profile.
+Version 8 permits the static-RAM proof marker; version 9 also permits a static
+stack-bound marker. Version 10 adds short RAM images, symbols and relocations,
+and requires at least one of those short RAM features. Proof markers may also
+appear in later supported versions; changing only a version byte cannot safely
+downgrade an object that relies on them.
+
+Versions 3/4 cannot contain RAM symbols or relocation type 4. Short RAM symbols
+and relocation type 5 require version 10. Versions outside 3–10, invalid
+alignment bytes, truncated bitmap records, invalid flags and invalid profiles
+are rejected. RAM images are bounded to 64 KiB and short RAM images to 510
+bytes. Rebuild all three tools and compiler objects when upgrading: accepting
+an older container does not establish ABI compatibility, and cross-unit
+signatures are not stored or checked by this format.
 
 The format has no checksum, per-symbol alignment table, or section flags. The
 version byte is validated by `ObjectFile::read`. Changes to the

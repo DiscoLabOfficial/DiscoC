@@ -9,9 +9,11 @@ optimization_level = 2
 [target.gsu]
 memory_mapping = "lorom"
 execution_memory = "ram"
-origin = 0x708000
+origin = 0x708400
 ram_bank = 0
 stack_pointer = 0xEFFE
+ram_origin = 0xD000
+short_ram = true
 
 [runtime]
 initialize = true

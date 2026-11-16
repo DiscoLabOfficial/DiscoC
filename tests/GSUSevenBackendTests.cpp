@@ -293,8 +293,11 @@ void legacyMixedIncumbent() {
 }
 
 void strictCandidateReuse() {
+    // Four carried words keep the software-counter candidate spilling even
+    // with body-local R11 in the allocation pool.
     const std::string source = "word main(){word a=*(volatile word*)0x100;word b=*(volatile word*)0x102;"
-        "word c=*(volatile word*)0x104;for(word i=0;i<32;i++){a+=b*3;b+=c*3;c+=a*3;}return a^b^c;}"
+        "word c=*(volatile word*)0x104;word d=*(volatile word*)0x106;"
+        "for(word i=0;i<32;i++){a+=b*3;b+=c*3;c+=d*3;d+=a*3;}return a^b^c^d;}"
         "word last_spill_free(){return 42;}";
     const auto ordinary = compile(source, OptimizationLevel::Size).object;
     // compile() also repeats generate on this SAME strict backend instance.
@@ -305,21 +308,22 @@ void strictCandidateReuse() {
         "Strict mixed-function Os lost its exact larger spill-free selected candidate");
     for (const auto* object : {&ordinary, &strict}) for (const auto initial : {0u, 1u, 32768u, 65535u}) {
         DiscoGSU::Machine machine(linked(*object), 0x008000);
-        std::uint16_t values[] = {static_cast<std::uint16_t>(initial), 5, 7};
-        for (unsigned n = 0; n < 3; ++n) {
+        std::uint16_t values[] = {static_cast<std::uint16_t>(initial), 5, 7, 11};
+        for (unsigned n = 0; n < 4; ++n) {
             machine.seed(0x700100 + n * 2, static_cast<std::uint8_t>(values[n]), false);
             machine.seed(0x700101 + n * 2, static_cast<std::uint8_t>(values[n] >> 8), false);
         }
         for (unsigned n = 0; n < 32; ++n) {
             values[0] = static_cast<std::uint16_t>(values[0] + values[1] * 3);
             values[1] = static_cast<std::uint16_t>(values[1] + values[2] * 3);
-            values[2] = static_cast<std::uint16_t>(values[2] + values[0] * 3);
+            values[2] = static_cast<std::uint16_t>(values[2] + values[3] * 3);
+            values[3] = static_cast<std::uint16_t>(values[3] + values[0] * 3);
         }
         machine.run();
-        require(machine.reg(0) == (values[0] ^ values[1] ^ values[2]) && machine.reg(6) == 0 &&
+        require(machine.reg(0) == (values[0] ^ values[1] ^ values[2] ^ values[3]) && machine.reg(6) == 0 &&
             machine.reg(9) == 0x1ffc && machine.reg(10) == 0x1ffc && machine.reg(12) == 0xbeef && machine.reg(13) == 0xcafe,
             "Strict selected-candidate reuse changed execution or ABI restoration");
-        for (unsigned n = 0; n < 3; ++n) require(machine.accesses(0x700100 + n * 2, false) == 1 &&
+        for (unsigned n = 0; n < 4; ++n) require(machine.accesses(0x700100 + n * 2, false) == 1 &&
             machine.accesses(0x700100 + n * 2, true) == 0, "Strict selected candidate changed volatile reads");
     }
 }

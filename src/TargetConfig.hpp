@@ -58,6 +58,14 @@ struct CompilerConfig {
     OptimizationLevel optimization = OptimizationLevel::Baseline;
     // Invocation-only allocation constraint, not serialized placement/ABI metadata.
     bool require_no_spills = false;
+    // Invocation-only: `main` is entered solely by the runtime at its initial
+    // SP. O2/Os may then omit provably unfailing stack guards and record the
+    // proven bound in the object for the linker to check.
+    bool static_stack_proof = false;
+    // Invocation-only: bytes of the short RAM window (at most
+    // GSUAbi::ShortRamCapacity) this unit may claim for the word slots of its
+    // static frames, which LMS/SMS then address directly. 0 claims none.
+    std::uint16_t short_ram_bytes = 0;
     bool warn_on_cache_overflow = true;
     BitmapConfig bitmap;
 };

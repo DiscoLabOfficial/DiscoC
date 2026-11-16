@@ -11,6 +11,9 @@ namespace {
 bool nearRam(const Type& type) {
     return type.pointer_level > 0 && !isFarPointer(type) && type.space == AddressSpace::RAM;
 }
+bool nearRom(const Type& type) {
+    return type.pointer_level > 0 && !isFarPointer(type) && type.space == AddressSpace::ROM;
+}
 unsigned alignmentOfOffset(std::int64_t offset) {
     // Offsets are bounded by the proof domain to at most one bank.
     const auto magnitude = static_cast<std::uint64_t>(offset < 0 ? -offset : offset);
@@ -255,14 +258,18 @@ void GSUAddressProof::refineControlFlow(
     }
 }
 
-GSUAddressProof::Fact GSUAddressProof::displaced(Fact address, Fact displacement) const {
+GSUAddressProof::Fact GSUAddressProof::displaced(Fact address, const Fact& displacement) const {
     const auto low = displacement.low, high = displacement.high;
-    if (address.kind != Kind::Frame && address.kind != Kind::Absolute) return {};
+    if (address.kind != Kind::Frame && address.kind != Kind::Absolute && address.kind != Kind::Symbol) return {};
     if (low < -65535 || high > 65535 || low > high) return {};
     address.low += low;
     address.high += high;
     address.alignment = std::min(address.alignment, displacement.alignment);
     if (address.kind == Kind::Absolute && (address.low < 0 || address.high > 65535)) return {};
+    // Stay strictly inside the object. One past its end may be base+extent
+    // == $10000, which a 16-bit address represents as null.
+    if (address.kind == Kind::Symbol &&
+        (address.low < 0 || address.high >= static_cast<std::int64_t>(address.extent))) return {};
     if (address.kind == Kind::Frame &&
         (!m_checked_frame || address.low < m_frame_low || address.high >= m_frame_end)) return {};
     return address;
@@ -270,7 +277,7 @@ GSUAddressProof::Fact GSUAddressProof::displaced(Fact address, Fact displacement
 
 GSUAddressProof::Fact GSUAddressProof::transfer(
     const IRInstruction& instruction, const Analyzer::LocalSymbolTable& locals,
-    const std::vector<const IRInstruction*>& definitions) const {
+    const StaticObjects& statics, const std::vector<const IRInstruction*>& definitions) const {
     const auto full = scalarRange(instruction.type);
     const auto block = instruction.result.isValid() && instruction.result.value < m_definition_blocks.size() ?
         m_definition_blocks[instruction.result.value] : static_cast<std::uint32_t>(IRBlockId::Invalid);
@@ -304,18 +311,34 @@ GSUAddressProof::Fact GSUAddressProof::transfer(
             const auto next = get(incoming);
             // Unknown backedges are never ignored. A cyclic pointer PHI is
             // intentionally left unproved instead of assuming its first trip.
-            if (next.kind == Kind::Unknown || next.kind != merged.kind) return full;
+            if (next.kind == Kind::Unknown || next.kind != merged.kind || next.object != merged.object ||
+                next.space != merged.space) return full;
             merged.low = std::min(merged.low, next.low);
             merged.high = std::max(merged.high, next.high);
             merged.alignment = std::min(merged.alignment, next.alignment);
         }
         return merged;
     }
+    if (instruction.opcode == IROpcode::Address && nearRom(instruction.type)) {
+        // Only this object's static ROM data has a proof domain: no frame,
+        // absolute, member or extern ROM address does (see StaticObject).
+        if (!instruction.operation.empty()) return {};
+        const auto object = statics.find(instruction.symbol);
+        if (object == statics.end() || object->second.space != AddressSpace::ROM || object->second.bytes == 0) return {};
+        return {Kind::Symbol, 0, 0, object->second.alignment, object->second.id, object->second.bytes, AddressSpace::ROM};
+    }
     if (instruction.opcode == IROpcode::Address && nearRam(instruction.type)) {
         if (instruction.operation == "member" && instruction.operands.size() == 1 &&
             instruction.immediate >= 0 && instruction.immediate <= 65535)
             return displaced(a, {Kind::Scalar, instruction.immediate, instruction.immediate,
                                  commonAlignment(a.alignment, instruction.immediate)});
+        // The backend emits a plain Address naming a static RAM object as
+        // that object's linked base, whatever its symbol ID. Mirror it.
+        if (instruction.operation.empty()) {
+            const auto object = statics.find(instruction.symbol);
+            if (object != statics.end() && object->second.space == AddressSpace::RAM && object->second.bytes > 0)
+                return {Kind::Symbol, 0, 0, object->second.alignment, object->second.id, object->second.bytes};
+        }
         if (!m_checked_frame) return {};
         std::int64_t offset = instruction.immediate;
         if (instruction.operation.empty()) {
@@ -326,7 +349,7 @@ GSUAddressProof::Fact GSUAddressProof::transfer(
         if (offset < m_frame_low || offset >= m_frame_end) return {};
         return {Kind::Frame, offset, offset, commonAlignment(2, offset)};
     }
-    if (instruction.opcode == IROpcode::PointerOffset && nearRam(instruction.type) &&
+    if (instruction.opcode == IROpcode::PointerOffset && (nearRam(instruction.type) || nearRom(instruction.type)) &&
         instruction.operands.size() == 2 && (instruction.operation == "+" || instruction.operation == "-") &&
         instruction.immediate > 0 && instruction.immediate <= 65535 && b.kind == Kind::Scalar) {
         const auto stride = instruction.immediate;
@@ -392,7 +415,7 @@ GSUAddressProof::Fact GSUAddressProof::transfer(
 }
 
 void GSUAddressProof::run(const IRFunction& function, const Analyzer::LocalSymbolTable& locals,
-                          std::size_t frame_bytes, bool checked_frame) {
+                          const StaticObjects& statics, std::size_t frame_bytes, bool checked_frame) {
     *this = GSUAddressProof{};
     // A bounded conservative analysis must never turn hostile IR into an
     // unbounded allocation/fixed-point computation. Reaching a cap loses only
@@ -447,7 +470,7 @@ void GSUAddressProof::run(const IRFunction& function, const Analyzer::LocalSymbo
             const auto cost = instruction.operands.size() + 1;
             if (cost > 25000000 - work) return;
             work += cost;
-            const auto next = transfer(instruction, locals, definitions);
+            const auto next = transfer(instruction, locals, statics, definitions);
             auto& fact = m_facts[instruction.result.value];
             if (!(fact == next)) { fact = next; changed = true; }
         }
@@ -456,13 +479,28 @@ void GSUAddressProof::run(const IRFunction& function, const Analyzer::LocalSymbo
 }
 
 bool GSUAddressProof::provesAccess(IRValueId value, const Type& pointer, int width) const {
-    if (!nearRam(pointer) || width <= 0 || width > 65535) return false;
+    const bool rom = nearRom(pointer);
+    if ((!rom && !nearRam(pointer)) || width <= 0 || width > 65535) return false;
     const auto fact = get(value);
     const auto alignment = storageAlignment(pointeeType(pointer));
     if (width > 1 && (alignment <= 0 || fact.alignment < static_cast<unsigned>(alignment))) return false;
+    if (rom) {
+        // In-object ROM bytes lie in one bank's ROM window after CODE, so the
+        // near offset is nonnull and cannot wrap (see StaticObject). Only
+        // Symbol facts of ROM objects reach here; RAM facts never do.
+        return fact.kind == Kind::Symbol && fact.space == AddressSpace::ROM &&
+            fact.low >= 0 && fact.high <= static_cast<std::int64_t>(fact.extent) - width;
+    }
     if (fact.kind == Kind::Frame)
         return m_checked_frame && fact.low >= m_frame_low && fact.high <= m_frame_end - width;
     if (fact.kind == Kind::Absolute) return fact.low > 0 && fact.high <= 65536 - width;
+    if (fact.kind == Kind::Symbol && fact.space == AddressSpace::RAM) {
+        // base > 0 (linker-checked marker) and base + extent <= $10000 (one
+        // bank): an in-object access is nonnull and cannot wrap.
+        if (fact.low < 0 || fact.high > static_cast<std::int64_t>(fact.extent) - width) return false;
+        m_static_proof_used = true;
+        return true;
+    }
     return false;
 }
 

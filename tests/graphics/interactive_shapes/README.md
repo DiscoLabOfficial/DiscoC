@@ -35,8 +35,8 @@ image. This does not promise 60 newly rendered poses per second.
 The default is **O2, OBJ/4bpp, CLSR=1, normal multiply timing**, approximately
 21.477 MHz on NTSC, without emulator overclocking. `-DOPTIMIZATION=s` builds the
 size-oriented variant. This particular bank70 RAM host requires O2 or Os:
-O0/O1 exceed its code reservation. That is a placement limitation, not a new
-language rule. Native O1 regressions use the GSU's full-width ROM mirror bank;
+O0/O1 do not fit alongside the framebuffer and static RAM. That is a placement
+limitation, not a new language rule. Native O1 regressions use the GSU's full-width ROM mirror bank;
 O0 tests explicitly verify oversized-program rejection.
 
 Explicit tool locations are supported. Quote paths containing spaces:
@@ -71,29 +71,37 @@ The contour collector batches shallow-edge pixels into one interval per row;
 only `minY..maxY` is initialized and scanned. Negative projected face area selects
 visible outward faces. Face colors are flat palette colors, not lighting.
 
-Opaque zero-color cached PLOT spans clear both panels before any new geometry,
+Cached word stores clear both panels before any new geometry,
 so arbitrary angle, size and mode changes leave no trails. `flush;` drains the
 pixel caches before STOP. Pixel loops use PLOT's X increment, not a manual one.
 Checked pointer operations remain enabled; no runtime safety checks were removed.
 
 | Cartridge RAM | Reservation |
 | --- | --- |
-| `$70:0000..7FFF` | Full 32-KiB OBJ/4bpp addressing domain |
-| `$70:8000..DFFF` | Fixed-origin payload reservation |
-| Above code, below `$70:EFFE` | Checked descending stack; initial R10=`$EFFE` |
+| `$70:0002..01FF` | Short RAM: hot static-frame word slots, addressed with `LMS`/`SMS` |
+| `$70:0400..83FF` | Full 32-KiB OBJ/4bpp addressing domain (SCBR 1) |
+| `$70:8400..CFFF` | Available fixed-origin payload region |
+| `$70:D000` upward | Static spans, face coordinates and projected vertices |
+| Descending from `$70:EFFE`, above code and static RAM | Checked stack; initial R10=`$EFFE` |
 | `$70:F000` | Primitive count, also returned in R0 |
 | `$70:F002/F004/F006/F008` | Input yaw, pitch, size and filled flag |
 | `$70:F010/F012/F014/F016` | Normalized input echoes |
 
 The sprite panels occupy `(32..95,64..127)` and `(160..223,64..127)`. OBJ metadata
-is SCBR=`$00`, SCMR mode bits=`$25`; the host uses SCMR=`$2D` for RAM ownership
+is SCBR=`$01`, SCMR mode bits=`$25`; the host uses SCMR=`$2D` for RAM ownership
 and POR object mode. OBSEL=`$40` selects 64x64 sprites, with tiles `$84` in the
 first and second character tables. Sixteen 256-byte transfers upload **4096
 bytes per changed pose** during VBlank, using register-held source/destination
 addresses. The host checks the beam position and displays red on failure.
 The ROM declares 64 KiB cartridge RAM and does not access bank71.
+The linker rejects payload/static-RAM overlap and places the stack floor above
+both linked regions.
 
 ## Verification and performance
+
+The [v0.3.0 validation record](../../../docs/releases/v0.3.0/validation.md)
+lists checks performed for the release candidate. The comparisons below retain
+their original development snapshots and do not certify the final revision.
 
 With MesenCE available, run full image/control checks and real GSU timing:
 
@@ -108,9 +116,9 @@ visible PPU image, sprites/palette, ABI/STOP, CACHE and VBlank completion. Its
 edge oracle uses a direct rational formula, not the production accumulator.
 A separate deliberately wrong-result ROM must show a solid red backdrop.
 
-The compiler-only [loop-state comparison](../../../docs/optimization.md#phase-2-loop-state-refinements-and-demo-measurements)
-preserves this source and host. At yaw 8, pitch 5, size 12, O2 shrinks the
-payload from 13,794 to 12,987 bytes, reduces wireframe GSU cycles from 469,556
+The historical compiler-only [loop-state comparison](../../../docs/optimization.md#phase-2-loop-state-refinements-and-demo-measurements)
+keeps its earlier renderer and host unchanged. At yaw 8, pitch 5, size 12, O2
+shrinks the payload from 13,794 to 12,987 bytes, reduces wireframe GSU cycles from 469,556
 to 407,584, and steady-state filled cycles from 1,901,192 to 1,739,658.
 Os selects 12,978 bytes with a different speed tradeoff. These are emulator
 GSU timings excluding host/DMA/presentation, not measured interactive FPS or
@@ -130,8 +138,8 @@ waiting and DMA; these numbers are **not displayed FPS**. The separately built
 benchmark host intentionally repeats unchanged poses, unlike the interactive
 ROM. Cold CACHE and the 21 MHz profile are asserted.
 
-Measured in local MesenCE, O2, comparing the straightforward icosahedron renderer
-with this optimized renderer (not comparing against the discarded planar disk):
+An earlier local MesenCE O2 comparison measured the straightforward icosahedron
+renderer against the revision using shared projection and PLOT clearing:
 
 | Same geometry/pose | Payload bytes | Wire GSU cycles | Filled steady GSU cycles |
 | --- | ---: | ---: | ---: |
@@ -142,6 +150,29 @@ That is about **65.0% fewer wire cycles** and **54.7% fewer filled cycles**, at
 the cost of a larger payload. The first filled sample is slightly cheaper;
 the table uses the repeated steady sample. Re-run measurements after compiler
 changes. This is emulator evidence, not a physical-hardware guarantee.
+
+### Source rewrite snapshot (2026-11-15)
+
+Same compiler (working tree at commit `60e83ce` plus its uncommitted changes),
+same host and pose, Mesen 2.2.1, `benchmark.json` steady samples. Only
+`main.dc` differs; both builds pass the full image/control oracle.
+
+| Configuration | Payload bytes | Wire GSU cycles | Filled steady GSU cycles |
+| --- | ---: | ---: | ---: |
+| Previous source, O2 | 6,740 | 226,141 | 601,501 |
+| Rewritten source, O2 | 5,456 | 196,698 (-13.0%) | 347,215 (-42.3%) |
+| Previous source, Os | 6,544 | 235,492 | 665,885 |
+| Rewritten source, Os | 5,201 | 203,949 (-13.4%) | 402,806 (-39.5%) |
+
+The changes follow how DiscoC compiles for the GSU. Span rows are indexed with
+`& 63`, a no-op for panel rows that proves each access in-bank, so no span
+access carries a runtime address check. Faces and projected vertices live in
+small static arrays instead of behind pointer parameters, which the backend
+would have to check on every access. `edge_draw()` and `polygon()` take at
+most four arguments (the panel origin and ink are globals): a fifth moves every
+argument to the stack. The polygon fill caches its whole row walk, not just
+each row's PLOT run. Wireframe time is dominated by PLOT's pixel-cache flushes,
+which the source cannot avoid.
 
 Owned-screen BMP captures and verification logs are written alongside the ROM.
 Any GIF assembled from those captures is a preview, not a timing measurement.

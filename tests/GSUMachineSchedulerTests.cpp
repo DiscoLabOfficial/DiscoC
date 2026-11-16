@@ -187,8 +187,16 @@ void targetPrefixSlots() {
             if (fence == 3) unsafe.code_section[8] = 0x3d; // Live ALT1 changes literal semantics.
             if (fence == 4) unsafe.code_section[12] = 0x31; // Fallthrough consumes WITH instead of resetting it.
             const auto saved = unsafe;
-            require(GSUMachineScheduler::run(unsafe).delay_slots == 0 && unsafe.code_section == saved.code_section,
+            const auto stats = GSUMachineScheduler::run(unsafe);
+            // Fence 1's own BRA may receive a copy of its target (jump slot);
+            // the guard and its taken-edge selector must stay untouched.
+            require(stats.delay_slots == 0 && unsafe.code_section.size() == saved.code_section.size() &&
+                std::equal(saved.code_section.begin(), saved.code_section.begin() + 20, unsafe.code_section.begin()) &&
+                stats.jump_slots == (fence == 1 ? 1u : 0u),
                 "Taken-edge prefix crossed another entry, relocation, or unsafe fallthrough state");
+            if (fence == 1)
+                require(unsafe.code_section[20] == 5 && unsafe.code_section[21] == 0xfb && unsafe.code_section[22] == 0x2a,
+                    "BRA slot did not copy its target opcode and skip it");
         }
     }
 }
@@ -235,7 +243,13 @@ void privatePixelSlots() {
             unsafe.symbol_table[0].offset = 8;
         }
         const auto saved = unsafe;
-        require(GSUMachineScheduler::run(unsafe).private_pixel_loops == 0 && unsafe.code_section == saved.code_section,
+        const auto stats = GSUMachineScheduler::run(unsafe);
+        // Fence 5's appended BRA may copy its PLOT target into its own slot;
+        // the private loop itself must stay untouched.
+        const auto kept = saved.code_section.size() - (fence == 5 ? 3u : 0u);
+        require(stats.private_pixel_loops == 0 && unsafe.code_section.size() == saved.code_section.size() &&
+            std::equal(saved.code_section.begin(), saved.code_section.begin() + static_cast<std::ptrdiff_t>(kept),
+                unsafe.code_section.begin()) && stats.jump_slots == (fence == 5 ? 1u : 0u),
             "Private pixel slot crossed an external/secondary entry, LINK/ALT state or non-R13 relocation");
     }
 }
@@ -286,7 +300,12 @@ void pipelinePlan() {
             if (fence == 3) unsafe.relocation_table.push_back({"\x01head", SymbolSection::CODE, 5, RelocationType::ADDR24_BANK});
             if (fence == 4) unsafe.relocation_table.push_back({"\x01head", SymbolSection::CODE, 7, RelocationType::ADDR24_BANK});
             const auto saved = unsafe;
-            require(GSUMachineScheduler::run(unsafe).entry_slots == 0 && unsafe.code_section == saved.code_section &&
+            const auto stats = GSUMachineScheduler::run(unsafe);
+            // Without the entry slot, the first BRA may copy INC/DEC into its
+            // own slot and skip it, unless a relocation still patches that byte.
+            auto expected = saved.code_section;
+            if (fence != 3) { expected[2] = 3; expected[3] = opcode; }
+            require(stats.entry_slots == 0 && stats.jump_slots == (fence == 3 ? 0u : 1u) && unsafe.code_section == expected &&
                 unsafe.symbol_table[0].offset == saved.symbol_table[0].offset &&
                 unsafe.relocation_table.size() == saved.relocation_table.size(),
                 "Entry scheduling crossed a public entry, branch/slot label, or relocated byte");
@@ -416,8 +435,220 @@ void cacheProvenance() {
     require(caller.cacheRequests() == 3 && caller.cacheBase() == 0x8000, "Call continuation did not restore its CACHE window");
 }
 
+// Two alignment (1) and two null (2) guards. Each later guard can share the
+// other's island, so one island per category remains; the earlier guards
+// branch to it and take their continuation opcode into the delay slot.
+std::vector<std::uint8_t> guardedFixture(std::size_t gap = 0, bool fenced = false) {
+    std::vector<std::uint8_t> bytes{0xf0, 0, 0};
+    const auto alignment = [&](std::uint8_t next) {
+        bytes.insert(bytes.end(), {0xb0, 0x13, 0x03, 0x0c, 5, 1, 0xa6, 1, 0, 1, next});
+    };
+    const auto null = [&](std::uint8_t next) { bytes.insert(bytes.end(), {0x23, 0xb0, 0x08, 5, 1, 0xa6, 2, 0, 1, next}); };
+    alignment(0xd5); null(0xd7);
+    bytes.insert(bytes.end(), gap, 1);
+    if (fenced) bytes.push_back(2); // A public function-entry CACHE: layout may pad before it.
+    alignment(0xd5); null(0xd7);
+    bytes.insert(bytes.end(), {0, 1});
+    return bytes;
+}
+void sharedFaultStubs() {
+    for (const unsigned value : {0u, 1u, 2u, 0x8000u, 0xffffu}) {
+        auto o = object(guardedFixture());
+        o.code_section[1] = static_cast<std::uint8_t>(value); o.code_section[2] = static_cast<std::uint8_t>(value >> 8);
+        const auto before = o;
+        const auto stats = GSUMachineScheduler::run(o);
+        require(stats.shared_fault_stubs == 2 && stats.guard_slots == 2 && o.code_section.size() + 10 == before.code_section.size(),
+            "Duplicate in-range fault islands were not shared, or guard slots were not filled");
+        DiscoGSU::Machine a(linked(before), 0x008000), b(linked(o), 0x008000);
+        a.run(); b.run();
+        const bool fault = value == 0 || (value & 1);
+        // The fault contract is the category in R6, the stop, and memory.
+        // Register-only continuation opcodes may also run before that STOP.
+        require(a.reg(6) == b.reg(6) && a.reg(6) == (value & 1 ? 1u : value == 0 ? 2u : 0u),
+            "A shared fault island changed the reported category or its priority");
+        require(a.metrics().stores == 0 && b.metrics().stores == 0, "Fault fixture unexpectedly stored");
+        if (!fault) for (unsigned r = 0; r < 11; ++r) require(a.reg(r) == b.reg(r), "Shared islands changed a successful path");
+        require(Assembler().assemble(AssemblyGenerator(o).generate()).code_section == o.code_section,
+            "Shared fault islands lost byte-exact assembly export");
+        const auto again = o;
+        const auto second = GSUMachineScheduler::run(o);
+        require(second.shared_fault_stubs == 0 && second.guard_slots == 0 && o.code_section == again.code_section,
+            "Fault-island sharing is not idempotent");
+    }
+    // Out of signed-byte range, or across a point where layout may pad.
+    for (const bool fenced : {false, true}) {
+        auto o = object(guardedFixture(fenced ? 0 : 120, fenced));
+        if (fenced) o.symbol_table.push_back({"function", SymbolSection::CODE, 24});
+        const auto before = o;
+        const auto stats = GSUMachineScheduler::run(o);
+        require(stats.shared_fault_stubs == 0 && stats.guard_slots == 0 &&
+            o.code_section.size() == before.code_section.size() + stats.cache_padding,
+            "A fault island was shared out of branch range or across a padded function entry");
+    }
+    // An island with its own label stays; the other guard may still use it.
+    auto labeled = object(guardedFixture());
+    labeled.symbol_table.push_back({"\x01island", SymbolSection::CODE, 9});
+    const auto stats = GSUMachineScheduler::run(labeled);
+    require(stats.shared_fault_stubs == 2 && labeled.symbol_table[0].offset == 9 && labeled.code_section[9] == 0xa6,
+        "A labeled fault island was removed or moved");
+}
+void jumpSlots() {
+    auto o = object({0xf0,5,0, 5,3, 1, 0xd1,0, 0xd0, 0xd0, 0,1});
+    const auto before = o;
+    const auto stats = GSUMachineScheduler::run(o);
+    require(stats.jump_slots == 1 && o.code_section.size() == before.code_section.size() &&
+        o.code_section[4] == 4 && o.code_section[5] == 0xd0, "BRA slot did not copy its target opcode and skip it");
+    equivalent(before, o);
+    // CACHE depends on its own PC, STOP ends the program, and a transfer cannot
+    // occupy another transfer's slot.
+    for (const std::uint8_t opcode : {std::uint8_t{2}, std::uint8_t{0}, std::uint8_t{0x9b}, std::uint8_t{0x3c}}) {
+        auto unsafe = object({0xf0,5,0, 5,3, 1, 0xd1,0, opcode, 0xd0, 0,1});
+        const auto saved = unsafe;
+        require(GSUMachineScheduler::run(unsafe).jump_slots == 0 && unsafe.code_section == saved.code_section,
+            "A position-dependent or control opcode was copied into a BRA slot");
+    }
+    // A pending WITH would reach the copy in the slot, not the NOP-reset target.
+    auto prefixed = object({0xf0,5,0, 0x21, 5,3, 1, 0xd1, 0xd0, 0x10, 0,1});
+    require(GSUMachineScheduler::run(prefixed).jump_slots == 0, "A BRA with live selectors received a copied opcode");
+}
+
+// Observes C, Z and S after the fixture's operation in R7/R8/R9, so the
+// register comparison in equivalent() also covers the condition codes.
+void appendFlagProbe(std::vector<std::uint8_t>& bytes) {
+    bytes.insert(bytes.end(), {0x0d,2,1,0xd7, 0x09,2,1,0xd8, 0x0b,2,1,0xd9, 0,1});
+}
+void copyPeepholes() {
+    // MOVE whose destination the next instruction overwrites unread.
+    for (const auto& overwrite : std::vector<std::vector<std::uint8_t>>{
+             {0x15,0x40}, {0x15,0x3d,0x40}, {0xa5,7}, {0xf5,0x34,0x12}}) {
+        std::vector<std::uint8_t> bytes{0xf1,0x34,0x12, 0xf0,0x00,0x90, 0x21,0x15};
+        bytes.insert(bytes.end(), overwrite.begin(), overwrite.end());
+        bytes.insert(bytes.end(), {0,1});
+        auto o = object(bytes); const auto before = o;
+        require(GSUMachineScheduler::run(o).dead_copies == 1 && o.code_section.size() + 2 == before.code_section.size(),
+            "Overwritten MOVE destination kept its dead copy");
+        equivalent(before, o);
+    }
+    // The load reads the copied register as its address: the copy is live.
+    auto address = object({0xf1,0x00,0x90, 0xa0,0, 0x21,0x15, 0x10,0x45, 0,1}); auto saved = address;
+    require(GSUMachineScheduler::run(address).dead_copies == 0, "A MOVE feeding the load address was removed");
+    equivalent(saved, address);
+    // A different destination, an intervening reader and a named overwrite keep it.
+    auto other = object({0xf1,0x34,0x12, 0x21,0x15, 0xa7,7, 0,1});
+    require(GSUMachineScheduler::run(other).dead_copies == 0, "A MOVE was removed before an unrelated literal");
+    auto entered = object({0xf1,0x34,0x12, 0x21,0x15, 0xa5,7, 0,1});
+    entered.symbol_table.push_back({"entry",SymbolSection::CODE,5});
+    require(GSUMachineScheduler::run(entered).dead_copies == 0, "A MOVE was removed before a separately entered overwrite");
+
+    // MOVE Ra,R0 + accumulator operation -> FROM Ra + operation.
+    struct Case { std::vector<std::uint8_t> operation; bool rewritten; };
+    const Case cases[] = {
+        {{0x3e,0x58},true}, {{0x52},true}, {{0x3d,0x52},true}, {{0x62},true}, {{0x3e,0x63},true},
+        {{0x72},true}, {{0x3e,0x7f},true}, {{0xc2},true}, {{0x3d,0xc2},true}, {{0x82},true},
+        {{0x03},true}, {{0x04},true}, {{0x4d},true}, {{0x4f},true}, {{0x95},true}, {{0x96},true},
+        {{0x3d,0x96},true}, {{0x97},true}, {{0x9e},true}, {{0xc0},true},
+        {{0x50},false},      // ADD R0 reads the copied accumulator.
+        {{0x3f,0x62},false}, // CMP leaves the copy in R0.
+        {{0x12,0x52},false}, // Another destination: R0 keeps the copy.
+        {{0xd0},false}};     // INC R0 is not a source-selected operation.
+    for (const auto& item : cases) for (const auto value : {0x0000u,0x0001u,0x7fffu,0x8000u,0xffffu,0x1234u}) {
+        std::vector<std::uint8_t> bytes{0xf1,static_cast<std::uint8_t>(value),static_cast<std::uint8_t>(value >> 8),
+            0xf2,0xcd,0xab, 0xf0,0x55,0xaa, 0x21,0x10};
+        bytes.insert(bytes.end(), item.operation.begin(), item.operation.end());
+        appendFlagProbe(bytes);
+        auto o = object(bytes); const auto before = o;
+        const auto stats = GSUMachineScheduler::run(o);
+        require((stats.accumulator_sources == 1) == item.rewritten, "Accumulator source rewrite crossed its operand rules");
+        equivalent(before, o, false);
+    }
+    // A private anchor nothing refers to is not an entry; a public symbol is.
+    auto anchored = object({0xf1,0x34,0x12, 0x21,0x10, 0x3e,0x58, 0,1});
+    anchored.symbol_table.push_back({std::string("\x01") + "anchor",SymbolSection::CODE,3}); saved = anchored;
+    require(GSUMachineScheduler::run(anchored).accumulator_sources == 1 && anchored.symbol_table[0].offset == 3 &&
+        anchored.code_section[3] == 0xb1, "An unreferenced private anchor blocked or lost the rewrite");
+    equivalent(saved, anchored, false);
+    auto exported = object({0xf1,0x34,0x12, 0x21,0x10, 0x3e,0x58, 0,1});
+    exported.symbol_table.push_back({"entry",SymbolSection::CODE,3});
+    require(GSUMachineScheduler::run(exported).accumulator_sources == 0, "A public entry's selector state was assumed");
+    auto split = object({0xf1,0x34,0x12, 0x21,0x10, 0x3e,0x58, 0,1});
+    split.symbol_table.push_back({std::string("\x01") + "inner",SymbolSection::CODE,5});
+    require(GSUMachineScheduler::run(split).accumulator_sources == 0, "A rewrite erased a named instruction boundary");
+
+    // FROM Rx / TO Rx (either order) + operation -> WITH Rx + operation.
+    for (const auto& pair : std::vector<std::vector<std::uint8_t>>{{0xb1,0x11},{0x11,0xb1}})
+        for (const auto& operation : std::vector<std::vector<std::uint8_t>>{{0x51},{0x3d,0x51},{0x62},{0x3e,0x53},{0x03},{0x4d}})
+            for (const auto value : {0x0001u,0x7fffu,0x8000u,0xffffu}) {
+                std::vector<std::uint8_t> bytes{0xf1,static_cast<std::uint8_t>(value),static_cast<std::uint8_t>(value >> 8),
+                    0xf2,0xcd,0xab};
+                bytes.insert(bytes.end(), pair.begin(), pair.end());
+                bytes.insert(bytes.end(), operation.begin(), operation.end());
+                appendFlagProbe(bytes);
+                auto o = object(bytes); const auto before = o;
+                require(GSUMachineScheduler::run(o).paired_selectors == 1 && o.code_section[6] == 0x21,
+                    "A FROM/TO pair on one register was not folded into WITH");
+                equivalent(before, o, false);
+            }
+    // WITH's B flag would turn a following TO/FROM into MOVE/MOVES.
+    for (const std::uint8_t follower : {std::uint8_t{0x12}, std::uint8_t{0xb2}}) {
+        auto chained = object({0xf1,0x34,0x12, 0xf2,0xcd,0xab, 0xb1,0x11,follower,0x52, 0,1}); saved = chained;
+        require(GSUMachineScheduler::run(chained).paired_selectors == 0, "WITH was introduced before another selector");
+        equivalent(saved, chained, false);
+    }
+    auto distinct = object({0xf1,0x34,0x12, 0xb1,0x12,0x51, 0,1});
+    require(GSUMachineScheduler::run(distinct).paired_selectors == 0, "Different source/destination registers were folded");
+}
+
+// WITH Rx / op / MOVE Rx,R0 -> FROM Rx / op needs Rx provably dead.
+void accumulatorResults() {
+    for (const auto& operation : std::vector<std::vector<std::uint8_t>>{
+             {0x51},{0x3d,0x51},{0x61},{0x3e,0x53},{0x3e,0x63},{0x71},{0x3d,0xc1},{0x50},{0x4f},{0x03},{0x4d},{0x96}})
+        for (const auto value : {0x0000u,0x0001u,0x7fffu,0x8000u,0xffffu,0x1234u}) {
+            std::vector<std::uint8_t> bytes{0xf5,static_cast<std::uint8_t>(value),static_cast<std::uint8_t>(value >> 8),
+                0xf1,0xcd,0xab, 0xf0,0x55,0xaa, 0x25};
+            bytes.insert(bytes.end(), operation.begin(), operation.end());
+            bytes.insert(bytes.end(), {0x25,0x10, 0xa5,3}); // MOVE R5,R0, then R5 is overwritten.
+            appendFlagProbe(bytes);
+            auto o = object(bytes); const auto before = o;
+            require(GSUMachineScheduler::run(o).accumulator_results == 1 && o.code_section.size() + 2 == before.code_section.size(),
+                "A result computed in a dead home was not delivered straight to R0");
+            equivalent(before, o, false);
+        }
+    // Still read, compared rather than written, never overwritten before STOP,
+    // or overwritten only past a real entry: the home stays authoritative.
+    const std::vector<std::vector<std::uint8_t>> kept = {
+        {0xf5,0x34,0x12, 0xf1,0xcd,0xab, 0x25,0x51, 0x25,0x10, 0x25,0x16, 0xa5,3, 0,1},
+        {0xf5,0x34,0x12, 0xf1,0xcd,0xab, 0x25,0x3f,0x61, 0x25,0x10, 0xa5,3, 0,1},
+        {0xf5,0x34,0x12, 0xf1,0xcd,0xab, 0x25,0x51, 0x25,0x10, 0,1},
+        {0xf5,0x34,0x12, 0xf1,0xcd,0xab, 0x25,0x51, 0x25,0x10, 0x16,0x45, 0xa5,3, 0,1}}; // LDW (R5)
+    for (const auto& bytes : kept) {
+        auto o = object(bytes); const auto before = o;
+        require(GSUMachineScheduler::run(o).accumulator_results == 0, "A live or unproved result home was bypassed");
+        equivalent(before, o);
+    }
+    auto entered = object({0xf5,0x34,0x12, 0xf1,0xcd,0xab, 0x25,0x51, 0x25,0x10, 0xa5,3, 0,1});
+    entered.symbol_table.push_back({"entry",SymbolSection::CODE,10});
+    require(GSUMachineScheduler::run(entered).accumulator_results == 0, "Liveness was assumed across a public entry");
+    // A return ends R5-R8 and R3; R1/R2 are the private divmod results.
+    for (const std::uint8_t home : {std::uint8_t{5}, std::uint8_t{7}, std::uint8_t{8}, std::uint8_t{2}, std::uint8_t{4}}) {
+        auto o = object({0xfb,0,0, static_cast<std::uint8_t>(0xf0 | home),0x34,0x12, 0xf1,0xcd,0xab,
+            static_cast<std::uint8_t>(0x20 | home),0x51, static_cast<std::uint8_t>(0x20 | home),0x10, 0x9b,1, 0,1});
+        o.symbol_table.push_back({"exit",SymbolSection::CODE,15});
+        o.relocation_table.push_back({"exit",SymbolSection::CODE,0,RelocationType::ADDR16_IWT});
+        const auto before = o;
+        const bool caller_dead = home == 5 || home == 7 || home == 8;
+        require((GSUMachineScheduler::run(o).accumulator_results == 1) == caller_dead,
+            "Return liveness crossed the result/preserved register set");
+        DiscoGSU::Machine a(linked(before), 0x008000), b(linked(o), 0x008000);
+        a.run(); b.run();
+        require(a.reg(0) == b.reg(0) && a.reg(0) == static_cast<std::uint16_t>(0x1234 + 0xabcd) && a.reg(1) == b.reg(1),
+            "Returning a result through R0 changed the returned value");
+        if (!caller_dead) require(a.reg(home) == b.reg(home), "A register live at return was changed");
+    }
+}
+
 int main() {
     try {
+        sharedFaultStubs(); jumpSlots(); copyPeepholes(); accumulatorResults();
         conditionSlots(); targetPrefixSlots(); compactBranches(); shortJumps(); privatePixelSlots(); pipelinePlan(); nestedCacheDelaySlots(); cacheProvenance();
         auto bra = object({0xf0,0,0,0xd0,5,2,1,1,0,1}); auto before = bra;
         require(GSUMachineScheduler::run(bra).delay_slots == 1 && bra.code_section.size() == 9,

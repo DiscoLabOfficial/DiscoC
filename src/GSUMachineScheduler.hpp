@@ -17,6 +17,13 @@ public:
         unsigned entry_slots = 0;
         unsigned immediate_slots = 0;
         unsigned nested_caches = 0;
+        unsigned shared_fault_stubs = 0; // Removed duplicate IBT R6/STOP/NOP islands.
+        unsigned guard_slots = 0;        // Continuation opcodes moved into a fault guard's slot.
+        unsigned jump_slots = 0;         // Target opcodes copied into a BRA slot.
+        unsigned dead_copies = 0;        // Removed MOVE pairs whose destination was overwritten unread.
+        unsigned accumulator_sources = 0; // MOVE Ra,R0 + accumulator op rewritten as FROM Ra + op.
+        unsigned paired_selectors = 0;    // FROM Rx / TO Rx before an operation rewritten as WITH Rx.
+        unsigned accumulator_results = 0; // WITH Rx / op / MOVE Rx,R0 with Rx dead rewritten as FROM Rx / op.
     };
     static Statistics run(ObjectFile& object);
 };

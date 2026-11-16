@@ -1,0 +1,1488 @@
+{
+  "schema_version": 1,
+  "validation_date": "2026-11-16",
+  "profile": "NTSC; GSU=100%; CLSR=1; normal multiply; deterministic power-on; no extra PPU scanlines; disabled frame skipping; --doNotSaveSettings; serial emulator runs; existing 120-second limits",
+  "source_change": {
+    "path": "tests/graphics/rotating_triangle/snes_host.asm",
+    "change": "Initialize the byte TEST_STATUS mailbox to zero immediately after DB bootstrap, before display setup spans multiple frames. Lua checks and GSU source remain unchanged.",
+    "before_sha256": "102a6af704fbb6f40ed1bc50eea913a520311f2d5bf8383fdf760d9214de22df",
+    "after_sha256": "339e04fdb56d1abd306b6cbb90c3cac73bff64bd4180bc3cf9c90aedbde9351e",
+    "gsu_source_unchanged_sha256": "fda55cfcf853563e5b9f687e859fce2508cf124b017a50ad8bd4780dcf5bf578"
+  },
+  "tools": [
+    {
+      "path": "build/release-v0.3.0-preparation/bin/discc",
+      "bytes": 2821800,
+      "sha256": "84694b8e01a062721a9cf314ea386452a4411bbb1e732053b639fd83f685f7ac"
+    },
+    {
+      "path": "build/release-v0.3.0-preparation/bin/discas",
+      "bytes": 172816,
+      "sha256": "affd780de1ad62c72cb8180b63cab2dd67c7861c6e28d08833d90cacf5e56466"
+    },
+    {
+      "path": "build/release-v0.3.0-preparation/bin/discld",
+      "bytes": 358400,
+      "sha256": "ff44db95c73df961a73e557bce35955273a02a8f3d4d81d91423deea171e708b"
+    },
+    {
+      "path": "mesen/Mesen",
+      "bytes": 83517872,
+      "sha256": "64bc63dc04ae9dfe78fc6089155d5321b68fd4e5198b3c973a80532a8e285334"
+    },
+    {
+      "path": "mesen/MesenCore.so",
+      "bytes": 14330464,
+      "sha256": "f45cd3fd53d48176f66a1d2ff9713394e4428fae98bee53df69bed5a442e7e79"
+    },
+    {
+      "path": "/usr/local/bin/wla-65816",
+      "bytes": 450904,
+      "sha256": "27ebbd7d39bf4312daf39fe34cab0f2339776daec7a2ead5669d637171982258"
+    },
+    {
+      "path": "/usr/local/bin/wlalink",
+      "bytes": 240640,
+      "sha256": "7a0f494da834c352b359aa5e70249c5be120d06994e7d938f97ffb975cbe3a10"
+    }
+  ],
+  "source_inputs": [
+    {
+      "path": "examples/snes/gem_chess/main.dc",
+      "bytes": 33268,
+      "sha256": "b8ccd24b582f616310a740799f785abace8262547993efce75420a499eb934a9"
+    },
+    {
+      "path": "examples/snes/gem_chess/snes_host.asm",
+      "bytes": 7288,
+      "sha256": "0368a8e05f3e5c2ce9a3e4e6204f85b7c05df3a26811dcc19f0f02062672b7d6"
+    },
+    {
+      "path": "examples/snes/gem_chess/discoc.toml",
+      "bytes": 390,
+      "sha256": "39a31f78dfec7e903dcfd811238e21f29af828ed807d1c22b2cabab284dd545e"
+    },
+    {
+      "path": "examples/snes/gem_chess/build-snes.cmake",
+      "bytes": 3814,
+      "sha256": "36a58e5681b97f130eaec7c1d8c1321fecaeb7177674174845ac4c3d3133e8b5"
+    },
+    {
+      "path": "examples/snes/gem_chess/verify.lua",
+      "bytes": 9563,
+      "sha256": "e8fc9563a44a971e32f292437fc3f9b1a7b8aeb60c1abe8b3449698c4f896d44"
+    },
+    {
+      "path": "tests/graphics/interactive_shapes/main.dc",
+      "bytes": 13254,
+      "sha256": "f9a642be74579266f1b4a0ffee88b63f3d09b484eedd5572469c97e0bcc278bf"
+    },
+    {
+      "path": "tests/graphics/interactive_shapes/snes_host.asm",
+      "bytes": 8037,
+      "sha256": "9ba67af1865e2aa92063f25cafaf53c0c3e2c546007c7d8efdb3ead0eb9d5491"
+    },
+    {
+      "path": "tests/graphics/interactive_shapes/discoc.toml",
+      "bytes": 420,
+      "sha256": "3b3b713af1ced9d9e634e94c0978e575351c8f6c9558055c6e197e8300db6a76"
+    },
+    {
+      "path": "tests/graphics/interactive_shapes/build-snes.cmake",
+      "bytes": 4472,
+      "sha256": "84062ed476e8f78de19fe92ffe8746bce3f6754d841695224191009b9f83ee69"
+    },
+    {
+      "path": "tests/graphics/interactive_shapes/verify.lua",
+      "bytes": 13560,
+      "sha256": "e66ea83114c4a41a152bf38defba48bfe50f33e7b43d2ce07ac3a497eac326dd"
+    },
+    {
+      "path": "tests/graphics/rotating_triangle/triangle.dc",
+      "bytes": 7436,
+      "sha256": "fda55cfcf853563e5b9f687e859fce2508cf124b017a50ad8bd4780dcf5bf578"
+    },
+    {
+      "path": "tests/graphics/rotating_triangle/snes_host.asm",
+      "bytes": 6406,
+      "sha256": "339e04fdb56d1abd306b6cbb90c3cac73bff64bd4180bc3cf9c90aedbde9351e"
+    },
+    {
+      "path": "tests/graphics/rotating_triangle/build-snes.cmake",
+      "bytes": 7182,
+      "sha256": "fc15122ab615322b036688f415a4323a60cd8ddd482301cb14b6db6168c08a67"
+    },
+    {
+      "path": "tests/graphics/rotating_triangle/verify.lua",
+      "bytes": 10386,
+      "sha256": "b0d8fae790af8a0e5914fda1af73c50213b39ed8a5bed77bd74d091d60b98f13"
+    },
+    {
+      "path": "examples/snes/snes_demo_helpers.cmake",
+      "bytes": 4691,
+      "sha256": "0e395ff36ada9a0747e317731736d841d52b011796a4eb1426792e262613910e"
+    }
+  ],
+  "attempts": [
+    {
+      "demo": "rotating-triangle",
+      "policy": "O2",
+      "output_dir": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2",
+      "attempt": "first_failure",
+      "build_and_roundtrip": true,
+      "roundtrip_payloads": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2/triangle.bin",
+          "bytes": 2328,
+          "sha256": "16b207779ffa775f7ff85aeec0c7a0870e89e861f45a0c2bbf79feb8d1c40e72"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2/triangle-assembled.bin",
+          "bytes": 2328,
+          "sha256": "16b207779ffa775f7ff85aeec0c7a0870e89e861f45a0c2bbf79feb8d1c40e72"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2/triangle-roundtrip.bin",
+          "bytes": 2328,
+          "sha256": "16b207779ffa775f7ff85aeec0c7a0870e89e861f45a0c2bbf79feb8d1c40e72"
+        }
+      ],
+      "resultCode": 1,
+      "verification": "failed_before_first_publication",
+      "negative_verification": "not_run_builder_stopped_after_positive_failure",
+      "verification_logs": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2/rotating-triangle-verification.log",
+          "bytes": 39,
+          "sha256": "59aeb8371897cf07d1737777be2f61892480ec9c62db3f8803c389841bd71ff8",
+          "text": "FAIL rotating triangle: host status=38"
+        }
+      ],
+      "payload": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2/triangle.bin",
+        "bytes": 2328,
+        "sha256": "16b207779ffa775f7ff85aeec0c7a0870e89e861f45a0c2bbf79feb8d1c40e72"
+      },
+      "rom": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2/rotating-triangle.sfc",
+        "bytes": 65536,
+        "sha256": "2092a061ea43ab1e344d2b104dd1c183f1d1352cb00f16db2f1c42e176cf5e9e"
+      },
+      "negative_rom": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2/rotating-triangle-negative.sfc",
+        "bytes": 65536,
+        "sha256": "451884700f3eab1cafa118feddce83b8d9f8f2fdaf34be49e12b6d3fb99f6be6"
+      },
+      "host_source_sha256": "102a6af704fbb6f40ed1bc50eea913a520311f2d5bf8383fdf760d9214de22df",
+      "gsu_source_sha256": "fda55cfcf853563e5b9f687e859fce2508cf124b017a50ad8bd4780dcf5bf578"
+    },
+    {
+      "demo": "rotating-triangle",
+      "policy": "Os",
+      "output_dir": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os",
+      "attempt": "first_failure",
+      "build_and_roundtrip": true,
+      "roundtrip_payloads": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os/triangle.bin",
+          "bytes": 2158,
+          "sha256": "d1fa3119b5f188fc8e9f73f50060374ddc7bf8e83c4f1f070939f4e34296641f"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os/triangle-assembled.bin",
+          "bytes": 2158,
+          "sha256": "d1fa3119b5f188fc8e9f73f50060374ddc7bf8e83c4f1f070939f4e34296641f"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os/triangle-roundtrip.bin",
+          "bytes": 2158,
+          "sha256": "d1fa3119b5f188fc8e9f73f50060374ddc7bf8e83c4f1f070939f4e34296641f"
+        }
+      ],
+      "resultCode": 1,
+      "verification": "failed_before_first_publication",
+      "negative_verification": "not_run_builder_stopped_after_positive_failure",
+      "verification_logs": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os/rotating-triangle-verification.log",
+          "bytes": 40,
+          "sha256": "ad0ed3058d4a6fea3b95d58c83c5d2c7f5ba34cee0a8721d56aae26eaea02a52",
+          "text": "FAIL rotating triangle: host status=208"
+        }
+      ],
+      "payload": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os/triangle.bin",
+        "bytes": 2158,
+        "sha256": "d1fa3119b5f188fc8e9f73f50060374ddc7bf8e83c4f1f070939f4e34296641f"
+      },
+      "rom": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os/rotating-triangle.sfc",
+        "bytes": 65536,
+        "sha256": "f8369e585ec5070e77a98cfdb4d70fef405c090c1088eb46e889a850ce25d4d4"
+      },
+      "negative_rom": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os/rotating-triangle-negative.sfc",
+        "bytes": 65536,
+        "sha256": "5a256cdc07763db6ef2ecf8d7eabd15502f34231f9d523136274aa0cd0ba318f"
+      },
+      "host_source_sha256": "102a6af704fbb6f40ed1bc50eea913a520311f2d5bf8383fdf760d9214de22df",
+      "gsu_source_sha256": "fda55cfcf853563e5b9f687e859fce2508cf124b017a50ad8bd4780dcf5bf578"
+    },
+    {
+      "demo": "interactive-shapes",
+      "policy": "O2",
+      "output_dir": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2",
+      "attempt": "final",
+      "build_and_roundtrip": true,
+      "roundtrip_payloads": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2/triangle.bin",
+          "bytes": 5456,
+          "sha256": "07d1e398499cbc9a15330442aff28d912b9a8af958ccdf86f81c5c89cd944fd3"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2/triangle-manual.bin",
+          "bytes": 5456,
+          "sha256": "07d1e398499cbc9a15330442aff28d912b9a8af958ccdf86f81c5c89cd944fd3"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2/triangle-assembled.bin",
+          "bytes": 5456,
+          "sha256": "07d1e398499cbc9a15330442aff28d912b9a8af958ccdf86f81c5c89cd944fd3"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2/triangle-roundtrip.bin",
+          "bytes": 5456,
+          "sha256": "07d1e398499cbc9a15330442aff28d912b9a8af958ccdf86f81c5c89cd944fd3"
+        }
+      ],
+      "resultCode": 0,
+      "verification": "pass",
+      "negative_verification": "pass",
+      "verification_logs": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2/interactive-shapes-negative-verification.log",
+          "bytes": 80,
+          "sha256": "f26222147eafd57aa10ffac26b53ad201a555af4c2bb1925ddfcd0ea605cfc46",
+          "text": "PASS interactive shapes negative: deliberate result mismatch gives a red screen"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2/interactive-shapes-verification.log",
+          "bytes": 184,
+          "sha256": "ca1467543bd85ecffdfcf23b9d999e1d9a909e8fe1665a894b2231dc884ae2c7",
+          "text": "PASS interactive shapes: 61 full OBJ framebuffers, 255 controller polls, A edge/hold/repress, both rotation axes, Select resize/clamps, opposing directions, PPU sprites and VBlank DMA"
+        }
+      ],
+      "payload": {
+        "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2/triangle.bin",
+        "bytes": 5456,
+        "sha256": "07d1e398499cbc9a15330442aff28d912b9a8af958ccdf86f81c5c89cd944fd3"
+      },
+      "rom": {
+        "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2/interactive-shapes.sfc",
+        "bytes": 65536,
+        "sha256": "bc9cf784485414815ffb6cf83145d65a211d62f574533988392982a833343f7d"
+      },
+      "negative_rom": {
+        "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2/interactive-shapes-negative.sfc",
+        "bytes": 65536,
+        "sha256": "4e6c4547c88c19725ae84cf6ff95637026ab49309897bdf02c0064c0c5b0a064"
+      },
+      "benchmark": {
+        "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-O2/benchmark.json",
+        "bytes": 214,
+        "sha256": "3d4f614cbcee4ba272704c267c3ecf1adeab8b2a3ecacf61feffc4a3d62a5a46",
+        "data": {
+          "profile": "NTSC CLSR=1 GSU=100% normal multiply RAM CACHE cold",
+          "pose": {
+            "yaw": 8,
+            "pitch": 5,
+            "size": 12
+          },
+          "payload_bytes": 5456,
+          "wire_cycles": [
+            196698,
+            196698,
+            196698,
+            196698
+          ],
+          "filled_cycles": [
+            347182,
+            347215,
+            347215,
+            347215
+          ]
+        }
+      }
+    },
+    {
+      "demo": "interactive-shapes",
+      "policy": "Os",
+      "output_dir": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os",
+      "attempt": "final",
+      "build_and_roundtrip": true,
+      "roundtrip_payloads": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os/triangle.bin",
+          "bytes": 5201,
+          "sha256": "76e1caa81e7685975145e6d4504d58ed00c23e7ca4a8620a7120e1c04b0db6b8"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os/triangle-manual.bin",
+          "bytes": 5201,
+          "sha256": "76e1caa81e7685975145e6d4504d58ed00c23e7ca4a8620a7120e1c04b0db6b8"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os/triangle-assembled.bin",
+          "bytes": 5201,
+          "sha256": "76e1caa81e7685975145e6d4504d58ed00c23e7ca4a8620a7120e1c04b0db6b8"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os/triangle-roundtrip.bin",
+          "bytes": 5201,
+          "sha256": "76e1caa81e7685975145e6d4504d58ed00c23e7ca4a8620a7120e1c04b0db6b8"
+        }
+      ],
+      "resultCode": 0,
+      "verification": "pass",
+      "negative_verification": "pass",
+      "verification_logs": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os/interactive-shapes-negative-verification.log",
+          "bytes": 80,
+          "sha256": "f26222147eafd57aa10ffac26b53ad201a555af4c2bb1925ddfcd0ea605cfc46",
+          "text": "PASS interactive shapes negative: deliberate result mismatch gives a red screen"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os/interactive-shapes-verification.log",
+          "bytes": 184,
+          "sha256": "584a15ef63a1dc0f3c97be3b7de34333d4bb49eb1217885521d654a931cd250a",
+          "text": "PASS interactive shapes: 59 full OBJ framebuffers, 255 controller polls, A edge/hold/repress, both rotation axes, Select resize/clamps, opposing directions, PPU sprites and VBlank DMA"
+        }
+      ],
+      "payload": {
+        "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os/triangle.bin",
+        "bytes": 5201,
+        "sha256": "76e1caa81e7685975145e6d4504d58ed00c23e7ca4a8620a7120e1c04b0db6b8"
+      },
+      "rom": {
+        "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os/interactive-shapes.sfc",
+        "bytes": 65536,
+        "sha256": "5666a18698a7e228a7ca7bc5a8a32e1e5fd3b27406b84d3d3a81ce67a036531d"
+      },
+      "negative_rom": {
+        "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os/interactive-shapes-negative.sfc",
+        "bytes": 65536,
+        "sha256": "241e44af4da29302545fdaa8bd659baf4307a893fc42166df6afea5cc8a529fc"
+      },
+      "benchmark": {
+        "path": "build/release-v0.3.0-preparation/demos/interactive-shapes-Os/benchmark.json",
+        "bytes": 214,
+        "sha256": "74e5d0159b0e471bec5f4b9a7333274d51b2113b66f1d7c18e4b5a07d09a59a4",
+        "data": {
+          "profile": "NTSC CLSR=1 GSU=100% normal multiply RAM CACHE cold",
+          "pose": {
+            "yaw": 8,
+            "pitch": 5,
+            "size": 12
+          },
+          "payload_bytes": 5201,
+          "wire_cycles": [
+            203949,
+            203949,
+            203949,
+            203949
+          ],
+          "filled_cycles": [
+            402542,
+            402806,
+            402806,
+            402806
+          ]
+        }
+      }
+    },
+    {
+      "demo": "gem-chess",
+      "policy": "O2",
+      "output_dir": "build/release-v0.3.0-preparation/demos/gem-chess-O2",
+      "attempt": "final",
+      "build_and_roundtrip": true,
+      "roundtrip_payloads": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-O2/triangle.bin",
+          "bytes": 13940,
+          "sha256": "448029a9e4ccd3f43d5bab65948b0500246f46eaebd8cb07521dba66e5eea8ea"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-O2/triangle-manual.bin",
+          "bytes": 13940,
+          "sha256": "448029a9e4ccd3f43d5bab65948b0500246f46eaebd8cb07521dba66e5eea8ea"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-O2/triangle-assembled.bin",
+          "bytes": 13940,
+          "sha256": "448029a9e4ccd3f43d5bab65948b0500246f46eaebd8cb07521dba66e5eea8ea"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-O2/triangle-roundtrip.bin",
+          "bytes": 13940,
+          "sha256": "448029a9e4ccd3f43d5bab65948b0500246f46eaebd8cb07521dba66e5eea8ea"
+        }
+      ],
+      "resultCode": 0,
+      "verification": "pass",
+      "negative_verification": "pass",
+      "verification_logs": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-O2/gem-chess-negative-verification.log",
+          "bytes": 74,
+          "sha256": "5255382a40a8eff96a1c00d78ac59175764da9f5ad06a4ccc6fad1b31e2e60bf",
+          "text": "PASS gem chess negative: deliberate result mismatch produces a red screen"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-O2/gem-chess-verification.log",
+          "bytes": 265,
+          "sha256": "8acbe84282df84a61ee6b8b9a0c6ed6b618e58726de3dd5ec4566dd38569ecea",
+          "text": "PASS gem chess: 10 camera views, 18 publications, 933 real controller polls; full framebuffer/VRAM/PPU, both buffers, STOP/ABI, wireframe, reset, zoom/elevation and VBlank DMA; 4224 camera envelopes, 720 outward band triangles, planar/nonplanar culling regressions"
+        }
+      ],
+      "payload": {
+        "path": "build/release-v0.3.0-preparation/demos/gem-chess-O2/triangle.bin",
+        "bytes": 13940,
+        "sha256": "448029a9e4ccd3f43d5bab65948b0500246f46eaebd8cb07521dba66e5eea8ea"
+      },
+      "rom": {
+        "path": "build/release-v0.3.0-preparation/demos/gem-chess-O2/gem-chess.sfc",
+        "bytes": 65536,
+        "sha256": "c7487c44a7ca7e4e74053b76238beb0e16368197e00a796748f808bbaae115a1"
+      },
+      "negative_rom": {
+        "path": "build/release-v0.3.0-preparation/demos/gem-chess-O2/gem-chess-negative.sfc",
+        "bytes": 65536,
+        "sha256": "f31a176215bae64fa01a27de28cc0640eb37e6b813a220025647cb9efeae3588"
+      },
+      "timings_csv": {
+        "path": "build/release-v0.3.0-preparation/demos/gem-chess-O2/gem-chess-timings.csv",
+        "bytes": 855,
+        "sha256": "c20085d42366c6ae6f8ee3b6af57924b72ac79d0ecb222e901afae1d4c817985",
+        "retained_path": "docs/releases/v0.3.0/raw/gem-chess-O2-timings.csv"
+      },
+      "timing_summary": {
+        "publications": 18,
+        "default_view_gsu_cycles": 15847054,
+        "filled_samples_including_reset": 16,
+        "filled_mean_gsu_cycles": 16200157.8125,
+        "wire_samples": 2,
+        "wire_mean_gsu_cycles": 14219885
+      }
+    },
+    {
+      "demo": "gem-chess",
+      "policy": "Os",
+      "output_dir": "build/release-v0.3.0-preparation/demos/gem-chess-Os",
+      "attempt": "final",
+      "build_and_roundtrip": true,
+      "roundtrip_payloads": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-Os/triangle.bin",
+          "bytes": 13440,
+          "sha256": "6f08208673fe19a708bc10540211336b8ea5df0d6e1d892da191e5b1d2037b50"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-Os/triangle-manual.bin",
+          "bytes": 13440,
+          "sha256": "6f08208673fe19a708bc10540211336b8ea5df0d6e1d892da191e5b1d2037b50"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-Os/triangle-assembled.bin",
+          "bytes": 13440,
+          "sha256": "6f08208673fe19a708bc10540211336b8ea5df0d6e1d892da191e5b1d2037b50"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-Os/triangle-roundtrip.bin",
+          "bytes": 13440,
+          "sha256": "6f08208673fe19a708bc10540211336b8ea5df0d6e1d892da191e5b1d2037b50"
+        }
+      ],
+      "resultCode": 0,
+      "verification": "pass",
+      "negative_verification": "pass",
+      "verification_logs": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-Os/gem-chess-negative-verification.log",
+          "bytes": 74,
+          "sha256": "5255382a40a8eff96a1c00d78ac59175764da9f5ad06a4ccc6fad1b31e2e60bf",
+          "text": "PASS gem chess negative: deliberate result mismatch produces a red screen"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/gem-chess-Os/gem-chess-verification.log",
+          "bytes": 266,
+          "sha256": "df8245782d9725a71e2eb1c8f0bd53467b61593463b7d0dabd313323e76633c5",
+          "text": "PASS gem chess: 10 camera views, 18 publications, 1065 real controller polls; full framebuffer/VRAM/PPU, both buffers, STOP/ABI, wireframe, reset, zoom/elevation and VBlank DMA; 4224 camera envelopes, 720 outward band triangles, planar/nonplanar culling regressions"
+        }
+      ],
+      "payload": {
+        "path": "build/release-v0.3.0-preparation/demos/gem-chess-Os/triangle.bin",
+        "bytes": 13440,
+        "sha256": "6f08208673fe19a708bc10540211336b8ea5df0d6e1d892da191e5b1d2037b50"
+      },
+      "rom": {
+        "path": "build/release-v0.3.0-preparation/demos/gem-chess-Os/gem-chess.sfc",
+        "bytes": 65536,
+        "sha256": "a418c9d874cc402f603ab550681e64980bc8df0f6ba2340afa5b978880ba53ed"
+      },
+      "negative_rom": {
+        "path": "build/release-v0.3.0-preparation/demos/gem-chess-Os/gem-chess-negative.sfc",
+        "bytes": 65536,
+        "sha256": "48b438e6d22fc699711fd59b040eee74e6bba59cad7f232ed705eb9adf2d99c2"
+      },
+      "timings_csv": {
+        "path": "build/release-v0.3.0-preparation/demos/gem-chess-Os/gem-chess-timings.csv",
+        "bytes": 856,
+        "sha256": "6e4ce0c9fea5dc319da544239515d739b24fc95a45cf59c9f2fd84a6ffa54a5b",
+        "retained_path": "docs/releases/v0.3.0/raw/gem-chess-Os-timings.csv"
+      },
+      "timing_summary": {
+        "publications": 18,
+        "default_view_gsu_cycles": 17653952,
+        "filled_samples_including_reset": 16,
+        "filled_mean_gsu_cycles": 18076948.8125,
+        "wire_samples": 2,
+        "wire_mean_gsu_cycles": 22347513.5
+      }
+    },
+    {
+      "demo": "rotating-triangle",
+      "policy": "O2",
+      "output_dir": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2-initialized",
+      "attempt": "initialized_host",
+      "build_and_roundtrip": true,
+      "roundtrip_payloads": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2-initialized/triangle.bin",
+          "bytes": 2328,
+          "sha256": "16b207779ffa775f7ff85aeec0c7a0870e89e861f45a0c2bbf79feb8d1c40e72"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2-initialized/triangle-assembled.bin",
+          "bytes": 2328,
+          "sha256": "16b207779ffa775f7ff85aeec0c7a0870e89e861f45a0c2bbf79feb8d1c40e72"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2-initialized/triangle-roundtrip.bin",
+          "bytes": 2328,
+          "sha256": "16b207779ffa775f7ff85aeec0c7a0870e89e861f45a0c2bbf79feb8d1c40e72"
+        }
+      ],
+      "resultCode": 0,
+      "verification": "pass",
+      "negative_verification": "pass",
+      "verification_logs": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2-initialized/rotating-triangle-negative-verification.log",
+          "bytes": 67,
+          "sha256": "935e74f8ac9c797e738f51374d1851605444b82a491f736282a5d534b029bdc6",
+          "text": "PASS rotating triangle negative: status=2 result=3281 red backdrop"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2-initialized/rotating-triangle-verification.log",
+          "bytes": 151,
+          "sha256": "6d98de4936cdd400750d1df360c612c01d9cfa6749b0181aa7d53c1944a32c0a",
+          "text": "PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; 134 SNES frames"
+        }
+      ],
+      "payload": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2-initialized/triangle.bin",
+        "bytes": 2328,
+        "sha256": "16b207779ffa775f7ff85aeec0c7a0870e89e861f45a0c2bbf79feb8d1c40e72"
+      },
+      "rom": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2-initialized/rotating-triangle.sfc",
+        "bytes": 65536,
+        "sha256": "f5a933362d4de0fe5938faec33f008c316e5a0fab59962e505d30031bc724286"
+      },
+      "negative_rom": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2-initialized/rotating-triangle-negative.sfc",
+        "bytes": 65536,
+        "sha256": "5fc30d1b76d1b4a0d12b59df5cfda950b3de6eb76b954724e0fd1ce4d0d8c19b"
+      },
+      "host_source_sha256": "339e04fdb56d1abd306b6cbb90c3cac73bff64bd4180bc3cf9c90aedbde9351e",
+      "gsu_source_sha256": "fda55cfcf853563e5b9f687e859fce2508cf124b017a50ad8bd4780dcf5bf578",
+      "fps": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-O2-initialized/fps.json",
+        "bytes": 4495,
+        "sha256": "11ef7c940ec3813ed35944dce9bfa53dd16594214027d322faa10d81741b66e3",
+        "data": {
+          "profile": "NTSC CLSR=1 GSU=100% CACHE RAM; no artificial presentation hold",
+          "measurement": "64 completed-image intervals after VRAM DMA; excludes boot and first render",
+          "master_clock_hz": 21477270,
+          "intervals": 64,
+          "master_clocks": 45742830,
+          "seconds": 2.129825159343,
+          "displayed_pose_fps": 30.049414957492,
+          "snes_frames": 128,
+          "repeated_refreshes": 64,
+          "samples": [
+            {
+              "frame": 1,
+              "phase": 0,
+              "master_clock": 1782422,
+              "snes_frame": 5
+            },
+            {
+              "frame": 2,
+              "phase": 1,
+              "master_clock": 2497132,
+              "snes_frame": 7
+            },
+            {
+              "frame": 3,
+              "phase": 2,
+              "master_clock": 3211896,
+              "snes_frame": 9
+            },
+            {
+              "frame": 4,
+              "phase": 3,
+              "master_clock": 3926632,
+              "snes_frame": 11
+            },
+            {
+              "frame": 5,
+              "phase": 4,
+              "master_clock": 4641366,
+              "snes_frame": 13
+            },
+            {
+              "frame": 6,
+              "phase": 5,
+              "master_clock": 5356074,
+              "snes_frame": 15
+            },
+            {
+              "frame": 7,
+              "phase": 6,
+              "master_clock": 6070800,
+              "snes_frame": 17
+            },
+            {
+              "frame": 8,
+              "phase": 7,
+              "master_clock": 6785554,
+              "snes_frame": 19
+            },
+            {
+              "frame": 9,
+              "phase": 8,
+              "master_clock": 7500260,
+              "snes_frame": 21
+            },
+            {
+              "frame": 10,
+              "phase": 9,
+              "master_clock": 8215024,
+              "snes_frame": 23
+            },
+            {
+              "frame": 11,
+              "phase": 10,
+              "master_clock": 8929758,
+              "snes_frame": 25
+            },
+            {
+              "frame": 12,
+              "phase": 11,
+              "master_clock": 9644478,
+              "snes_frame": 27
+            },
+            {
+              "frame": 13,
+              "phase": 12,
+              "master_clock": 10359202,
+              "snes_frame": 29
+            },
+            {
+              "frame": 14,
+              "phase": 13,
+              "master_clock": 11073938,
+              "snes_frame": 31
+            },
+            {
+              "frame": 15,
+              "phase": 14,
+              "master_clock": 11788652,
+              "snes_frame": 33
+            },
+            {
+              "frame": 16,
+              "phase": 15,
+              "master_clock": 12503378,
+              "snes_frame": 35
+            },
+            {
+              "frame": 17,
+              "phase": 16,
+              "master_clock": 13218112,
+              "snes_frame": 37
+            },
+            {
+              "frame": 18,
+              "phase": 17,
+              "master_clock": 13932850,
+              "snes_frame": 39
+            },
+            {
+              "frame": 19,
+              "phase": 18,
+              "master_clock": 14647582,
+              "snes_frame": 41
+            },
+            {
+              "frame": 20,
+              "phase": 19,
+              "master_clock": 15362324,
+              "snes_frame": 43
+            },
+            {
+              "frame": 21,
+              "phase": 20,
+              "master_clock": 16077054,
+              "snes_frame": 45
+            },
+            {
+              "frame": 22,
+              "phase": 21,
+              "master_clock": 16791768,
+              "snes_frame": 47
+            },
+            {
+              "frame": 23,
+              "phase": 22,
+              "master_clock": 17506496,
+              "snes_frame": 49
+            },
+            {
+              "frame": 24,
+              "phase": 23,
+              "master_clock": 18221242,
+              "snes_frame": 51
+            },
+            {
+              "frame": 25,
+              "phase": 24,
+              "master_clock": 18935960,
+              "snes_frame": 53
+            },
+            {
+              "frame": 26,
+              "phase": 25,
+              "master_clock": 19650726,
+              "snes_frame": 55
+            },
+            {
+              "frame": 27,
+              "phase": 26,
+              "master_clock": 20365470,
+              "snes_frame": 57
+            },
+            {
+              "frame": 28,
+              "phase": 27,
+              "master_clock": 21080178,
+              "snes_frame": 59
+            },
+            {
+              "frame": 29,
+              "phase": 28,
+              "master_clock": 21794888,
+              "snes_frame": 61
+            },
+            {
+              "frame": 30,
+              "phase": 29,
+              "master_clock": 22509636,
+              "snes_frame": 63
+            },
+            {
+              "frame": 31,
+              "phase": 30,
+              "master_clock": 23224354,
+              "snes_frame": 65
+            },
+            {
+              "frame": 32,
+              "phase": 31,
+              "master_clock": 23939110,
+              "snes_frame": 67
+            },
+            {
+              "frame": 33,
+              "phase": 32,
+              "master_clock": 24653860,
+              "snes_frame": 69
+            },
+            {
+              "frame": 34,
+              "phase": 33,
+              "master_clock": 25368584,
+              "snes_frame": 71
+            },
+            {
+              "frame": 35,
+              "phase": 34,
+              "master_clock": 26083328,
+              "snes_frame": 73
+            },
+            {
+              "frame": 36,
+              "phase": 35,
+              "master_clock": 26798050,
+              "snes_frame": 75
+            },
+            {
+              "frame": 37,
+              "phase": 36,
+              "master_clock": 27512786,
+              "snes_frame": 77
+            },
+            {
+              "frame": 38,
+              "phase": 37,
+              "master_clock": 28227514,
+              "snes_frame": 79
+            },
+            {
+              "frame": 39,
+              "phase": 38,
+              "master_clock": 28942238,
+              "snes_frame": 81
+            },
+            {
+              "frame": 40,
+              "phase": 39,
+              "master_clock": 29656978,
+              "snes_frame": 83
+            },
+            {
+              "frame": 41,
+              "phase": 40,
+              "master_clock": 30371722,
+              "snes_frame": 85
+            },
+            {
+              "frame": 42,
+              "phase": 41,
+              "master_clock": 31086442,
+              "snes_frame": 87
+            },
+            {
+              "frame": 43,
+              "phase": 42,
+              "master_clock": 31801144,
+              "snes_frame": 89
+            },
+            {
+              "frame": 44,
+              "phase": 43,
+              "master_clock": 32515896,
+              "snes_frame": 91
+            },
+            {
+              "frame": 45,
+              "phase": 44,
+              "master_clock": 33230646,
+              "snes_frame": 93
+            },
+            {
+              "frame": 46,
+              "phase": 45,
+              "master_clock": 33945362,
+              "snes_frame": 95
+            },
+            {
+              "frame": 47,
+              "phase": 46,
+              "master_clock": 34660114,
+              "snes_frame": 97
+            },
+            {
+              "frame": 48,
+              "phase": 47,
+              "master_clock": 35374832,
+              "snes_frame": 99
+            },
+            {
+              "frame": 49,
+              "phase": 48,
+              "master_clock": 36089572,
+              "snes_frame": 101
+            },
+            {
+              "frame": 50,
+              "phase": 49,
+              "master_clock": 36804278,
+              "snes_frame": 103
+            },
+            {
+              "frame": 51,
+              "phase": 50,
+              "master_clock": 37519012,
+              "snes_frame": 105
+            },
+            {
+              "frame": 52,
+              "phase": 51,
+              "master_clock": 38233774,
+              "snes_frame": 107
+            },
+            {
+              "frame": 53,
+              "phase": 52,
+              "master_clock": 38948466,
+              "snes_frame": 109
+            },
+            {
+              "frame": 54,
+              "phase": 53,
+              "master_clock": 39663224,
+              "snes_frame": 111
+            },
+            {
+              "frame": 55,
+              "phase": 54,
+              "master_clock": 40377932,
+              "snes_frame": 113
+            },
+            {
+              "frame": 56,
+              "phase": 55,
+              "master_clock": 41092664,
+              "snes_frame": 115
+            },
+            {
+              "frame": 57,
+              "phase": 56,
+              "master_clock": 41807402,
+              "snes_frame": 117
+            },
+            {
+              "frame": 58,
+              "phase": 57,
+              "master_clock": 42522130,
+              "snes_frame": 119
+            },
+            {
+              "frame": 59,
+              "phase": 58,
+              "master_clock": 43236888,
+              "snes_frame": 121
+            },
+            {
+              "frame": 60,
+              "phase": 59,
+              "master_clock": 43951616,
+              "snes_frame": 123
+            },
+            {
+              "frame": 61,
+              "phase": 60,
+              "master_clock": 44666324,
+              "snes_frame": 125
+            },
+            {
+              "frame": 62,
+              "phase": 61,
+              "master_clock": 45381086,
+              "snes_frame": 127
+            },
+            {
+              "frame": 63,
+              "phase": 62,
+              "master_clock": 46095824,
+              "snes_frame": 129
+            },
+            {
+              "frame": 64,
+              "phase": 63,
+              "master_clock": 46810554,
+              "snes_frame": 131
+            },
+            {
+              "frame": 65,
+              "phase": 0,
+              "master_clock": 47525252,
+              "snes_frame": 133
+            }
+          ]
+        }
+      }
+    },
+    {
+      "demo": "rotating-triangle",
+      "policy": "Os",
+      "output_dir": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os-initialized",
+      "attempt": "initialized_host",
+      "build_and_roundtrip": true,
+      "roundtrip_payloads": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os-initialized/triangle.bin",
+          "bytes": 2158,
+          "sha256": "d1fa3119b5f188fc8e9f73f50060374ddc7bf8e83c4f1f070939f4e34296641f"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os-initialized/triangle-assembled.bin",
+          "bytes": 2158,
+          "sha256": "d1fa3119b5f188fc8e9f73f50060374ddc7bf8e83c4f1f070939f4e34296641f"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os-initialized/triangle-roundtrip.bin",
+          "bytes": 2158,
+          "sha256": "d1fa3119b5f188fc8e9f73f50060374ddc7bf8e83c4f1f070939f4e34296641f"
+        }
+      ],
+      "resultCode": 0,
+      "verification": "pass",
+      "negative_verification": "pass",
+      "verification_logs": [
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os-initialized/rotating-triangle-negative-verification.log",
+          "bytes": 67,
+          "sha256": "935e74f8ac9c797e738f51374d1851605444b82a491f736282a5d534b029bdc6",
+          "text": "PASS rotating triangle negative: status=2 result=3281 red backdrop"
+        },
+        {
+          "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os-initialized/rotating-triangle-verification.log",
+          "bytes": 151,
+          "sha256": "6d98de4936cdd400750d1df360c612c01d9cfa6749b0181aa7d53c1944a32c0a",
+          "text": "PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; 134 SNES frames"
+        }
+      ],
+      "payload": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os-initialized/triangle.bin",
+        "bytes": 2158,
+        "sha256": "d1fa3119b5f188fc8e9f73f50060374ddc7bf8e83c4f1f070939f4e34296641f"
+      },
+      "rom": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os-initialized/rotating-triangle.sfc",
+        "bytes": 65536,
+        "sha256": "aa4412bded63d53feef2495f83396dd1d510b11098051dea9fc4f3d20bb87dcc"
+      },
+      "negative_rom": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os-initialized/rotating-triangle-negative.sfc",
+        "bytes": 65536,
+        "sha256": "bf0418f6d88e44e436a24f2e8010a4e0d92ba9e4ef022b993f4f96fcdabb2e27"
+      },
+      "host_source_sha256": "339e04fdb56d1abd306b6cbb90c3cac73bff64bd4180bc3cf9c90aedbde9351e",
+      "gsu_source_sha256": "fda55cfcf853563e5b9f687e859fce2508cf124b017a50ad8bd4780dcf5bf578",
+      "fps": {
+        "path": "build/release-v0.3.0-preparation/demos/rotating-triangle-Os-initialized/fps.json",
+        "bytes": 4495,
+        "sha256": "7763e25e5c0511f6041007d1005ba65acb9224c02ffa2e3927b02e163a1bfd80",
+        "data": {
+          "profile": "NTSC CLSR=1 GSU=100% CACHE RAM; no artificial presentation hold",
+          "measurement": "64 completed-image intervals after VRAM DMA; excludes boot and first render",
+          "master_clock_hz": 21477270,
+          "intervals": 64,
+          "master_clocks": 45742864,
+          "seconds": 2.129826742412,
+          "displayed_pose_fps": 30.049392622202,
+          "snes_frames": 128,
+          "repeated_refreshes": 64,
+          "samples": [
+            {
+              "frame": 1,
+              "phase": 0,
+              "master_clock": 1782402,
+              "snes_frame": 5
+            },
+            {
+              "frame": 2,
+              "phase": 1,
+              "master_clock": 2497160,
+              "snes_frame": 7
+            },
+            {
+              "frame": 3,
+              "phase": 2,
+              "master_clock": 3211874,
+              "snes_frame": 9
+            },
+            {
+              "frame": 4,
+              "phase": 3,
+              "master_clock": 3926606,
+              "snes_frame": 11
+            },
+            {
+              "frame": 5,
+              "phase": 4,
+              "master_clock": 4641370,
+              "snes_frame": 13
+            },
+            {
+              "frame": 6,
+              "phase": 5,
+              "master_clock": 5356102,
+              "snes_frame": 15
+            },
+            {
+              "frame": 7,
+              "phase": 6,
+              "master_clock": 6070784,
+              "snes_frame": 17
+            },
+            {
+              "frame": 8,
+              "phase": 7,
+              "master_clock": 6785528,
+              "snes_frame": 19
+            },
+            {
+              "frame": 9,
+              "phase": 8,
+              "master_clock": 7500292,
+              "snes_frame": 21
+            },
+            {
+              "frame": 10,
+              "phase": 9,
+              "master_clock": 8215022,
+              "snes_frame": 23
+            },
+            {
+              "frame": 11,
+              "phase": 10,
+              "master_clock": 8929722,
+              "snes_frame": 25
+            },
+            {
+              "frame": 12,
+              "phase": 11,
+              "master_clock": 9644452,
+              "snes_frame": 27
+            },
+            {
+              "frame": 13,
+              "phase": 12,
+              "master_clock": 10359204,
+              "snes_frame": 29
+            },
+            {
+              "frame": 14,
+              "phase": 13,
+              "master_clock": 11073940,
+              "snes_frame": 31
+            },
+            {
+              "frame": 15,
+              "phase": 14,
+              "master_clock": 11788678,
+              "snes_frame": 33
+            },
+            {
+              "frame": 16,
+              "phase": 15,
+              "master_clock": 12503388,
+              "snes_frame": 35
+            },
+            {
+              "frame": 17,
+              "phase": 16,
+              "master_clock": 13218138,
+              "snes_frame": 37
+            },
+            {
+              "frame": 18,
+              "phase": 17,
+              "master_clock": 13932860,
+              "snes_frame": 39
+            },
+            {
+              "frame": 19,
+              "phase": 18,
+              "master_clock": 14647616,
+              "snes_frame": 41
+            },
+            {
+              "frame": 20,
+              "phase": 19,
+              "master_clock": 15362306,
+              "snes_frame": 43
+            },
+            {
+              "frame": 21,
+              "phase": 20,
+              "master_clock": 16077058,
+              "snes_frame": 45
+            },
+            {
+              "frame": 22,
+              "phase": 21,
+              "master_clock": 16791782,
+              "snes_frame": 47
+            },
+            {
+              "frame": 23,
+              "phase": 22,
+              "master_clock": 17506528,
+              "snes_frame": 49
+            },
+            {
+              "frame": 24,
+              "phase": 23,
+              "master_clock": 18221246,
+              "snes_frame": 51
+            },
+            {
+              "frame": 25,
+              "phase": 24,
+              "master_clock": 18935964,
+              "snes_frame": 53
+            },
+            {
+              "frame": 26,
+              "phase": 25,
+              "master_clock": 19650720,
+              "snes_frame": 55
+            },
+            {
+              "frame": 27,
+              "phase": 26,
+              "master_clock": 20365472,
+              "snes_frame": 57
+            },
+            {
+              "frame": 28,
+              "phase": 27,
+              "master_clock": 21080158,
+              "snes_frame": 59
+            },
+            {
+              "frame": 29,
+              "phase": 28,
+              "master_clock": 21794904,
+              "snes_frame": 61
+            },
+            {
+              "frame": 30,
+              "phase": 29,
+              "master_clock": 22509642,
+              "snes_frame": 63
+            },
+            {
+              "frame": 31,
+              "phase": 30,
+              "master_clock": 23224362,
+              "snes_frame": 65
+            },
+            {
+              "frame": 32,
+              "phase": 31,
+              "master_clock": 23939114,
+              "snes_frame": 67
+            },
+            {
+              "frame": 33,
+              "phase": 32,
+              "master_clock": 24653828,
+              "snes_frame": 69
+            },
+            {
+              "frame": 34,
+              "phase": 33,
+              "master_clock": 25368554,
+              "snes_frame": 71
+            },
+            {
+              "frame": 35,
+              "phase": 34,
+              "master_clock": 26083300,
+              "snes_frame": 73
+            },
+            {
+              "frame": 36,
+              "phase": 35,
+              "master_clock": 26798012,
+              "snes_frame": 75
+            },
+            {
+              "frame": 37,
+              "phase": 36,
+              "master_clock": 27512784,
+              "snes_frame": 77
+            },
+            {
+              "frame": 38,
+              "phase": 37,
+              "master_clock": 28227484,
+              "snes_frame": 79
+            },
+            {
+              "frame": 39,
+              "phase": 38,
+              "master_clock": 28942216,
+              "snes_frame": 81
+            },
+            {
+              "frame": 40,
+              "phase": 39,
+              "master_clock": 29656946,
+              "snes_frame": 83
+            },
+            {
+              "frame": 41,
+              "phase": 40,
+              "master_clock": 30371696,
+              "snes_frame": 85
+            },
+            {
+              "frame": 42,
+              "phase": 41,
+              "master_clock": 31086434,
+              "snes_frame": 87
+            },
+            {
+              "frame": 43,
+              "phase": 42,
+              "master_clock": 31801154,
+              "snes_frame": 89
+            },
+            {
+              "frame": 44,
+              "phase": 43,
+              "master_clock": 32515916,
+              "snes_frame": 91
+            },
+            {
+              "frame": 45,
+              "phase": 44,
+              "master_clock": 33230636,
+              "snes_frame": 93
+            },
+            {
+              "frame": 46,
+              "phase": 45,
+              "master_clock": 33945352,
+              "snes_frame": 95
+            },
+            {
+              "frame": 47,
+              "phase": 46,
+              "master_clock": 34660076,
+              "snes_frame": 97
+            },
+            {
+              "frame": 48,
+              "phase": 47,
+              "master_clock": 35374830,
+              "snes_frame": 99
+            },
+            {
+              "frame": 49,
+              "phase": 48,
+              "master_clock": 36089534,
+              "snes_frame": 101
+            },
+            {
+              "frame": 50,
+              "phase": 49,
+              "master_clock": 36804276,
+              "snes_frame": 103
+            },
+            {
+              "frame": 51,
+              "phase": 50,
+              "master_clock": 37519034,
+              "snes_frame": 105
+            },
+            {
+              "frame": 52,
+              "phase": 51,
+              "master_clock": 38233744,
+              "snes_frame": 107
+            },
+            {
+              "frame": 53,
+              "phase": 52,
+              "master_clock": 38948458,
+              "snes_frame": 109
+            },
+            {
+              "frame": 54,
+              "phase": 53,
+              "master_clock": 39663226,
+              "snes_frame": 111
+            },
+            {
+              "frame": 55,
+              "phase": 54,
+              "master_clock": 40377952,
+              "snes_frame": 113
+            },
+            {
+              "frame": 56,
+              "phase": 55,
+              "master_clock": 41092656,
+              "snes_frame": 115
+            },
+            {
+              "frame": 57,
+              "phase": 56,
+              "master_clock": 41807400,
+              "snes_frame": 117
+            },
+            {
+              "frame": 58,
+              "phase": 57,
+              "master_clock": 42522118,
+              "snes_frame": 119
+            },
+            {
+              "frame": 59,
+              "phase": 58,
+              "master_clock": 43236884,
+              "snes_frame": 121
+            },
+            {
+              "frame": 60,
+              "phase": 59,
+              "master_clock": 43951584,
+              "snes_frame": 123
+            },
+            {
+              "frame": 61,
+              "phase": 60,
+              "master_clock": 44666322,
+              "snes_frame": 125
+            },
+            {
+              "frame": 62,
+              "phase": 61,
+              "master_clock": 45381080,
+              "snes_frame": 127
+            },
+            {
+              "frame": 63,
+              "phase": 62,
+              "master_clock": 46095820,
+              "snes_frame": 129
+            },
+            {
+              "frame": 64,
+              "phase": 63,
+              "master_clock": 46810552,
+              "snes_frame": 131
+            },
+            {
+              "frame": 65,
+              "phase": 0,
+              "master_clock": 47525266,
+              "snes_frame": 133
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

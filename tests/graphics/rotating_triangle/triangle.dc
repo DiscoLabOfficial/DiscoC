@@ -26,13 +26,117 @@ word floor_div(word value, word positive_divisor) {
     return quotient;
 }
 
+// Rotation of the current pose.
+internal word rotation_cos;
+internal word rotation_sin;
+// Per-edge half-plane state, see main(): sign of the horizontal coefficient,
+// divisor, floor quotient/remainder of b(y) and their per-row steps.
+internal word edge_a[4];
+internal word edge_d[4];
+internal word edge_q[4];
+internal word edge_r[4];
+internal word edge_qs[4];
+internal word edge_rs[4];
+// Accepted span of scanline 40+i, written by edge_pass(). Masking the index
+// with 127 changes nothing for i < 112 yet proves every access in-bank.
+internal word span_left[128];
+internal word span_right[128];
+internal word total_pixels;
+internal word total_white;
+
+// The edge pass has no plot context, multiply or hardware loop, so the
+// allocator may use R2 and R4 as well; the fill pass keeps only the checker
+// walk live while it plots. Each pass is one explicit CACHE window entered
+// once per frame, so each must fit 512 bytes: the edge loop stays rolled.
+@cache internal void edge_pass() {
+    word pixels = 0;
+    for (word row = 0; row < 112; row++) {
+        word left = -56;
+        word right = 55;
+        for (word edge = 0; edge < 3; edge++) {
+            word e = edge & 3;
+            word a = edge_a[e];
+            word q = edge_q[e];
+            if (a > 0) {
+                if (q < right) { right = q; }
+            } else if (a < 0) {
+                word limit = -q;
+                if (limit > left) { left = limit; }
+            } else if (q < 0) {
+                left = 1; right = 0;
+            }
+            // Advance even empty rows so the next row has the same exact
+            // floor quotient as recomputing b/d from scratch, using at most
+            // one remainder carry.
+            q += edge_qs[e];
+            word d = edge_d[e];
+            if (d != 0) {
+                word r = edge_r[e] + edge_rs[e];
+                if (r >= d) { r -= d; q++; }
+                edge_r[e] = r;
+            }
+            edge_q[e] = q;
+        }
+        span_left[row & 127] = left;
+        span_right[row & 127] = right;
+        if (left <= right) { pixels += right - left + 1; }
+    }
+    total_pixels = pixels;
+}
+
+@cache internal void fill_pass() {
+    word cosine = rotation_cos;
+    word sine = rotation_sin;
+    total_white = 0;
+    plot {
+        options;
+        // R2 itself carries the scanline, and the white count lives in static
+        // RAM between spans: only u, v, cos, sin and the span's checker sum
+        // stay live across the pixel walk, so none of them spills.
+        cursor.y = 40;
+        while (true) {
+            word y = cursor.y;
+            word row = (y - 40) & 127;
+            word left = span_left[row];
+            word right = span_right[row];
+            if (left <= right) {
+                // Inverse rotation about (128,96). Keep six fractional bits;
+                // all intermediates fit a signed word. Walk the accepted span
+                // instead of testing all three edges again for every pixel.
+                word dy = y - 96;
+                word u = left * cosine + dy * sine;
+                word v = -left * sine + dy * cosine;
+                word span_width = right - left + 1;
+                cursor.x = 128 + left;
+                // Sum of the checker bit (512 per white pixel): at most 112
+                // pixels per span, so the unsigned sum cannot wrap.
+                unsigned word checker = 0;
+                for (word i = 0; i < span_width; i++) {
+                    // Bit 9 of Q6 is an eight-pixel checker cell. Sampling
+                    // local u/v rotates the pattern with the geometry.
+                    unsigned word bit = (unsigned word)((u ^ v) & 512);
+                    checker += bit;
+                    color 1 + (word)(bit >> 9);
+                    pixel; // PLOT alone advances the hardware X cursor.
+                    u += cosine;
+                    v -= sine;
+                }
+                total_white += (word)(checker >> 9);
+            }
+            if (y == 151) { break; }
+            cursor.y = y + 1;
+        }
+        flush; // Drain the pixel caches before the CPU's VBlank DMA.
+    }
+}
+
 word main() {
     use bitmap main_screen;
     word phase = *(volatile word*)0xF002 & 63;
     word sine = sine_q6(phase);
     word cosine = sine_q6(phase + 16);
-    word pixels = 0;
-    word white = 0;
+    rotation_cos = cosine;
+    rotation_sin = sine;
 
     // Clear only the 14x14 tile area that can contain any rotated pose.
     // The previous invocation flushed its pixel caches before STOP.
@@ -47,11 +151,6 @@ word main() {
     word horizontal[3] = { -sine, cosine + cosine + sine, -cosine - cosine + sine };
     word vertical[3] = { cosine, sine + sine - cosine, -sine - sine - cosine };
     word boundary[3] = { 2048, 3072, 3072 };
-    word divisor[3];
-    word edge_quotient[3];
-    word edge_remainder[3];
-    word quotient_step[3];
-    word remainder_step[3];
     // b(y) = boundary - (y-96)*vertical. Split its initial value and
     // one-row delta into Euclidean q/r once per edge, not every scanline.
     // With d>0, 0<=r<d and 0<=s<d: each row needs at most one carry.
@@ -60,79 +159,32 @@ word main() {
         word a = horizontal[edge];
         word d = a;
         if (d < 0) { d = -d; }
-        divisor[edge] = d;
+        edge_a[edge] = a;
+        edge_d[edge] = d;
         word initial = boundary[edge] + 56 * vertical[edge];
         word delta = -vertical[edge];
         if (d != 0) {
             word q = floor_div(initial, d);
             word k = floor_div(delta, d);
-            edge_quotient[edge] = q;
-            edge_remainder[edge] = initial - q * d;
-            quotient_step[edge] = k;
-            remainder_step[edge] = delta - k * d;
+            edge_q[edge] = q;
+            edge_r[edge] = initial - q * d;
+            edge_qs[edge] = k;
+            edge_rs[edge] = delta - k * d;
         } else {
             // A horizontal half-plane has no quotient; retain b itself.
             // This also avoids ever entering division with a zero divisor.
-            edge_quotient[edge] = initial;
-            edge_remainder[edge] = 0;
-            quotient_step[edge] = delta;
-            remainder_step[edge] = 0;
+            edge_q[edge] = initial;
+            edge_r[edge] = 0;
+            edge_qs[edge] = delta;
+            edge_rs[edge] = 0;
         }
     }
-    plot {
-        options;
-        for (word y = 40; y < 152; y++) {
-            word dy = y - 96;
-            word left = -56;
-            word right = 55;
-            for (word edge = 0; edge < 3; edge++) {
-                word a = horizontal[edge];
-                word q = edge_quotient[edge];
-                if (a > 0) {
-                    if (q < right) { right = q; }
-                } else if (a < 0) {
-                    word limit = -q;
-                    if (limit > left) { left = limit; }
-                } else if (q < 0) {
-                    left = 1; right = 0;
-                }
-                // Advance even empty rows so the next row has the same
-                // exact floor quotient as recomputing b/d from scratch.
-                q += quotient_step[edge];
-                word d = divisor[edge];
-                if (d != 0) {
-                    word r = edge_remainder[edge] + remainder_step[edge];
-                    if (r >= d) { r -= d; q++; }
-                    edge_remainder[edge] = r;
-                }
-                edge_quotient[edge] = q;
-            }
-            if (left <= right) {
-                // Inverse rotation about (128,96). Keep six fractional bits;
-                // all intermediates fit a signed word. Walk the accepted span
-                // instead of testing all three edges again for every pixel.
-                word u = left * cosine + dy * sine;
-                word v = -left * sine + dy * cosine;
-                word span_width = right - left + 1;
-                pixels += span_width;
-                at (128 + left, y);
-                @cache
-                for (word i = 0; i < span_width; i++) {
-                    // Bit 9 of Q6 is an eight-pixel checker cell. Sampling
-                    // local u/v rotates the pattern with the geometry.
-                    word white_pixel = ((u ^ v) & 512) >> 9;
-                    color 1 + white_pixel;
-                    white += white_pixel;
-                    pixel; // PLOT alone advances the hardware X cursor.
-                    u += cosine;
-                    v -= sine;
-                }
-            }
-        }
-        flush; // Drain the pixel caches before the CPU's VBlank DMA.
-    }
+    edge_pass();
+    fill_pass();
 
     // Mailbox and diagnostics sit outside framebuffer, payload and stack.
+    word pixels = total_pixels;
+    word white = total_white;
     *(volatile word*)0xF000 = pixels;
     *(volatile word*)0xF004 = white;
     *(volatile word*)0xF006 = pixels - white;

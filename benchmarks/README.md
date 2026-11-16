@@ -1,11 +1,13 @@
 # GSU benchmarks
 
-Fresh **O0/O1/O2/Os** results for the frozen merged source candidate are in the
-[v0.2.0 evidence](../docs/releases/v0.2.0/optimization-results.md), with
-[validation and reproduction](../docs/releases/v0.2.0/validation.md), raw
-JSON/CSV and independently checked RAM demos. Those reports identify their
-full source SHA; they do not publish a v0.2.0 release or replace the historical
-v0.1.0 reference below.
+Fresh **O0/O1/O2/Os functional results** for the unpublished 0.3.0 preparation
+are in the [benchmark record](../docs/releases/v0.3.0/optimization-results.md),
+with [validation and reproduction](../docs/releases/v0.3.0/validation.md) and
+raw JSON/CSV. They identify the working-tree build inputs and tool binaries;
+they do not claim emulated cycles, FPS or validation of a final release SHA.
+The [v0.2.0 candidate evidence](../docs/releases/v0.2.0/optimization-results.md)
+remains a historical report with its own source SHA and emulator checks.
+Neither record replaces the historical v0.1.0 reference below.
 
 This suite measures generated code size and executed GSU opcodes before further
 optimization. The reference is the published **v0.1.0 toolchain**, running the

@@ -7,7 +7,8 @@ Keep compiler gains separate from changes to the workload algorithm:
    the black count at the end, and uses a guarded span-count loop. It retains
    the original per-row edge divisions.
 3. `../../tests/graphics/rotating_triangle/triangle.dc` is the current example:
-   exact incremental edge quotient/remainder updates replace per-row divisions.
+   exact incremental edge quotient/remainder updates replace per-row divisions,
+   and the frame runs as a cached edge pass followed by a cached fill pass.
 
 All variants use the same host, 64 phases, Q6 geometry, checker colors,
 framebuffer/mailbox layout, runtime origin, stack and independent image oracle.

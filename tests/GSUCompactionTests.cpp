@@ -987,7 +987,8 @@ void frameProofBoundary() {
     const auto reserved = compile("u16 main(){volatile byte padding[2];padding[0]=1;"
         "u16 a=*((volatile u16*)0x100);u16 b=*((volatile u16*)0x102);u16 c=*((volatile u16*)0x104);"
         "u16 d=*((volatile u16*)0x106);u16 e=*((volatile u16*)0x108);u16 f=*((volatile u16*)0x10a);"
-        "u16* p=(u16*)0x400+(word)(d&3);*p=123;return a+b+c+d+e+f;}",
+        "u16 g=*((volatile u16*)0x10c);"
+        "u16* p=(u16*)0x400+(word)(d&3);*p=123;return a+b+c+d+e+f+g;}",
         OptimizationLevel::O2, 0x008000, 65520);
     const auto& function = reserved.ir.functions.at(0);
     require(function.total_local_alloc_size == 65520, "Reserved frame disappeared during SSA promotion");
@@ -1016,6 +1017,134 @@ void frameProofBoundary() {
     for (const auto address : {0x700100u, 0x700102u, 0x700104u, 0x700106u})
         require(machine.accesses(address, false) == 1, "Frame-proof fallback repeated a volatile load");
 }
+
+// LOOP never writes CBR, so a nested hardware pixel scope must not fence an
+// outer automatic CACHE. One window must cover the whole nest: an anchor on
+// another 16-byte line would flush the window every outer pass. Entry and
+// backedge delay-slot CACHEs of one window share its CBR and never rebase.
+void cachedHardwareLoopNests() {
+    const std::string dynamic_rows = "word main(){word left=40;word right=40;word count=0;"
+        "plot{for(word y=10;y<=40;y++){color 1+((y-10)>>3);at(left,y);word width=right-left+1;"
+        "for(word i=0;i<width;i++)pixel;count+=width;left--;right++;}flush;}return count;}";
+    const std::string constant_rows = "word main(){plot{at(4,3);color 2;"
+        "for(word y=0;y<12;y++){for(word x=0;x<32;x++){pixel;}cursor.y++;}flush;return cursor.y;}}";
+    for (const auto& fixture : {std::make_pair(dynamic_rows, 961u), std::make_pair(constant_rows, 15u)})
+    for (const auto bank : {0x008000u, 0x70c000u})
+    for (unsigned alignment = 0; alignment < 16; alignment += 5)
+    for (const auto level : {OptimizationLevel::O2, OptimizationLevel::Size}) {
+        const auto origin = bank + alignment;
+        const auto optimized = compile(fixture.first, level, origin);
+        const auto baseline = compile(fixture.first, OptimizationLevel::O1, origin);
+        require(level != OptimizationLevel::O2 || count(optimized.ir, IROpcode::HardwareLoop) != 0,
+            "Cached-nest fixture lost its hardware scope");
+        DiscoGSU::Machine a(linked(optimized.object), origin), b(linked(baseline.object), origin);
+        a.run(); b.run();
+        require(a.reg(0) == fixture.second && a.reg(0) == b.reg(0) && a.reg(6) == 0 && a.reg(10) == b.reg(10) &&
+            a.reg(12) == b.reg(12) && a.reg(13) == b.reg(13), "Cached hardware nest changed result, ABI or fault state");
+        // Frames differ between O1 and O2; bytes below the model's initial
+        // SP ($70:2000) are dead stack residue, and a RAM origin holds code.
+        // That origin stays clear of the model's framebuffer (SCBR $18, $70:6000).
+        for (std::uint32_t p = 0x700000; p < 0x720000; ++p)
+            if (!(p >= 0x701000 && p < 0x702000) && !(p >= 0x70c000 && p < 0x70d000) && a.byte(p) != b.byte(p))
+                throw std::runtime_error("Cached hardware nest changed RAM at " + std::to_string(p));
+        const auto assembly = AssemblyGenerator(optimized.object).generate();
+        if (level == OptimizationLevel::O2 && a.cacheRequests() == 0)
+            throw std::runtime_error("Outer loop around a hardware pixel scope has no automatic CACHE:\n" + assembly);
+        if (a.cacheRebases() > 1)
+            throw std::runtime_error("Hardware-loop nest rebased its cache window " +
+                std::to_string(a.cacheRebases()) + " times:\n" + assembly);
+    }
+}
+
+// A division kernel's own CACHE must not keep an enclosing automatic window
+// from covering the whole loop: once the loop is cached, its uncached fetches
+// (prologue, epilogue) no longer grow with the trip count. Size may keep the
+// kernel's own window; neither level rebases CBR on every iteration.
+void cachedDivisionLoops() {
+    const auto source = [](unsigned trips) {
+        return "word main(){u16 v=*(volatile u16*)0x100;u16 d=*(volatile u16*)0x102;"
+            "for(word i=0;i<" + std::to_string(trips) + ";i++){v=(v*13+17)^(v>>3);"
+            "u16 q=v/d;u16 r=v%d;v=(q+(r<<4))^(v<<1);}*(volatile u16*)0x120=v;return (word)v;}";
+    };
+    for (const auto bank : {0x008000u, 0x70c000u})
+    for (unsigned alignment = 0; alignment < 16; alignment += 5)
+    for (const auto level : {OptimizationLevel::O2, OptimizationLevel::Size}) {
+        const auto origin = bank + alignment;
+        unsigned long uncached[2] = {};
+        // A constant-trip LOOP may be entered through its setup CACHE and its
+        // trampoline's delay-slot CACHE; on different 16-byte lines that is
+        // one extra rebase per entry, never one per iteration.
+        unsigned rebases[2] = {};
+        for (const unsigned trips : {12u, 24u}) {
+            const auto optimized = compile(source(trips), level, origin);
+            const auto baseline = compile(source(trips), OptimizationLevel::O1, origin);
+            for (const std::uint16_t divisor : {7, 1, 0}) {
+                DiscoGSU::Machine a(linked(optimized.object), origin), b(linked(baseline.object), origin);
+                for (auto* machine : {&a, &b}) {
+                    machine->seed(0x700100, 0x34, false); machine->seed(0x700101, 0x12, false);
+                    machine->seed(0x700102, static_cast<std::uint8_t>(divisor), false);
+                    machine->seed(0x700103, 0, false); machine->run();
+                }
+                // A zero divisor faults inside the loop; O1/O2 frames differ
+                // there, so only the fault code and the unwritten witness match.
+                require(a.reg(6) == b.reg(6) && a.word(0x700120) == b.word(0x700120) &&
+                    (a.reg(6) || (a.reg(0) == b.reg(0) && a.reg(10) == b.reg(10) &&
+                    a.reg(12) == b.reg(12) && a.reg(13) == b.reg(13))),
+                    "Cached division loop changed result, fault or ABI state");
+                if (divisor == 7) {
+                    require(a.reg(6) == 0 && a.cacheRequests() != 0, "Division loop lost its CACHE");
+                    uncached[trips == 24u] = a.uncachedFetches();
+                    rebases[trips == 24u] = a.cacheRebases();
+                }
+            }
+        }
+        if (rebases[0] != rebases[1] || rebases[1] > 2)
+            throw std::runtime_error("Division loop rebased its window per iteration: " +
+                std::to_string(rebases[0]) + " rebases at 12 trips, " + std::to_string(rebases[1]) + " at 24");
+        if (level == OptimizationLevel::O2 && uncached[0] != uncached[1])
+            throw std::runtime_error("Division loop body still fetched outside its cache window: " +
+                std::to_string(uncached[0]) + " uncached bytes at 12 trips, " + std::to_string(uncached[1]) + " at 24");
+    }
+}
+
+// A spilled bound that stays invariant inside an innermost software loop is
+// loaded into a free register once per loop entry, as hardware-loop regions
+// already do: frame reads must not grow with the pixels drawn. Under Os the
+// four rotating values keep the bound's static use count lowest, so it spills.
+void regionalSoftwareLoops() {
+    std::string updates;
+    for (unsigned k = 1; k <= 4; ++k) {
+        const auto v = "v" + std::to_string(k), u = "v" + std::to_string(k % 4 + 1);
+        updates += v + "+=" + u + "^row;" + v + "^=" + v + ">>1;" + v + "-=" + u + "&7;";
+    }
+    const std::string source = "word main(){word v1=*(volatile word*)0x102;word v2=*(volatile word*)0x104;"
+        "word v3=*(volatile word*)0x106;word v4=*(volatile word*)0x108;word w=*(volatile word*)0x100;word s=0;"
+        "plot{for(word row=0;row<4;row++){cursor.x=v1&63;cursor.y=row;@cache for(word i=0;i<w;i++)pixel;" +
+        updates + "s+=v1^v2^v3^v4;}flush;}return s;}";
+    for (const auto origin : {0x008000u, 0x70c003u}) for (const auto level : {OptimizationLevel::O2, OptimizationLevel::Size}) {
+        const auto optimized = compile(source, level, origin), baseline = compile(source, OptimizationLevel::O1, origin);
+        std::uint64_t frame_reads[2] = {};
+        for (const std::uint16_t width : {0, 1, 6, 40}) {
+            DiscoGSU::Machine a(linked(optimized.object), origin), b(linked(baseline.object), origin);
+            for (auto* machine : {&a, &b}) {
+                machine->configureStackWindow(0x701000, 0x702002);
+                machine->seed(0x700100, static_cast<std::uint8_t>(width), false);
+                for (unsigned n = 0; n < 8; ++n) machine->seed(0x700102 + n, static_cast<std::uint8_t>(37 * n + 5), false);
+                machine->run();
+            }
+            require(a.reg(0) == b.reg(0) && a.reg(6) == 0 && a.reg(10) == b.reg(10) && a.reg(12) == b.reg(12) &&
+                a.reg(13) == b.reg(13) && a.graphicsState("--plots") == 4u * width,
+                "Regional software-loop value changed the result, pixels or ABI state");
+            if (width == 6) frame_reads[0] = a.metrics().stack_loads;
+            if (width == 40) frame_reads[1] = a.metrics().stack_loads;
+        }
+        if (frame_reads[0] != frame_reads[1])
+            throw std::runtime_error(std::string(level == OptimizationLevel::O2 ? "O2" : "Os") +
+                " inner software loop re-read an invariant from its frame per pixel: " + std::to_string(frame_reads[0]) +
+                " frame reads at width 6, " + std::to_string(frame_reads[1]) + " at width 40\n" +
+                AssemblyGenerator(optimized.object).generate());
+    }
+}
 }
 int main() {
     try {
@@ -1028,6 +1157,7 @@ int main() {
         physicalComparisons();
         allocatedFrameArithmetic();
         cursorAndTransientValues(); cacheWindowsAndCheckedAddresses(); frameProofBoundary();
+        cachedHardwareLoopNests(); cachedDivisionLoops(); regionalSoftwareLoops();
         const std::string table = "word main(){word a[17]={0,6,12,19,24,30,36,41,45,49,53,56,59,61,63,64,64};"
             "word i=(word)*((volatile u8*)0x100)&3; word total=0; for(word n=0;n<17;n++) total+=a[n]; return total+(i-i);}";
         // All entries, including signed materialization, are observed dynamically.
@@ -1053,6 +1183,24 @@ int main() {
         const auto explicit_cache = compile("@cache " + span, OptimizationLevel::O2, 0x706007);
         DiscoGSU::Machine manual(linked(explicit_cache.object), 0x706007); manual.run();
         require(manual.reg(0) == 132 && manual.cacheRequests() == 1, "Automatic CACHE interfered with an explicit cache window");
+        // A call-free loop whose trip count is only known at run time also
+        // gets an O2 automatic CACHE (assumed trips), including where its
+        // preheader falls into the header. Results match O1 and Os for empty,
+        // single-trip and long runs; Os may omit the fall-through byte.
+        const std::string dynamic = "word main(){word n=*(volatile byte*)0x100; word s=7; word i=0;"
+            " while(i<n){ s=s*5+i; if(s>900) s=s-899; i++; } return s;}";
+        for (const auto origin : {0x008000u, 0x706007u}) {
+            const auto o2 = compile(dynamic, OptimizationLevel::O2, origin), os = compile(dynamic, OptimizationLevel::Size, origin);
+            const auto base = compile(dynamic, OptimizationLevel::O1, origin);
+            for (const unsigned seed : {0u, 1u, 2u, 9u, 40u}) {
+                DiscoGSU::Machine a(linked(o2.object), origin), b(linked(base.object), origin), c(linked(os.object), origin);
+                for (auto* machine : {&a, &b, &c}) { machine->seed(0x700100, static_cast<std::uint8_t>(seed), false); machine->run(); }
+                require(a.reg(0) == b.reg(0) && c.reg(0) == b.reg(0) && !a.reg(6) && !c.reg(6) && a.reg(10) == b.reg(10),
+                    "Automatic CACHE changed a run-time trip loop");
+                if (a.cacheRequests() == 0) throw std::runtime_error("Run-time trip loop has no O2 automatic CACHE:\n" +
+                    AssemblyGenerator(o2.object).generate());
+            }
+        }
         std::string large = "word main(){for(word i=0;i<8;i++){";
         for (unsigned n = 0; n < 160; ++n) large += "*((volatile byte*)0x200)=(byte)3;";
         large += "}return 7;}";

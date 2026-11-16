@@ -1,4 +1,5 @@
 #include "ObjectFile.hpp"
+#include "ABI.hpp"
 #include "TestTempDirectory.hpp"
 
 #include <filesystem>
@@ -133,7 +134,7 @@ int main() {
         std::ifstream valid_input(valid_path, std::ios::binary);
         const std::vector<std::uint8_t> valid_bytes(
             std::istreambuf_iterator<char>(valid_input), {});
-        if (valid_bytes.size() < 12 || valid_bytes[5] != ObjectFile::CurrentFormatVersion ||
+        if (valid_bytes.size() < 12 || valid_bytes[5] != ObjectFile::BaselineFormatVersion ||
             valid_bytes[8] != 0x00 || valid_bytes[9] != 0x80 ||
             valid_bytes[10] != 0x00 || valid_bytes[11] != 0x00) {
             throw std::runtime_error("object header is not serialized as little-endian bytes");
@@ -152,6 +153,125 @@ int main() {
             loaded_from_memory.data_section != valid.data_section) {
             throw std::runtime_error("valid object did not load from memory");
         }
+
+        // The static-RAM proof marker is the only version-8 feature. It is
+        // written as v8 so a linker that cannot enforce it refuses the object.
+        ObjectFile proved;
+        proved.code_section = {0x00, 0x01};
+        proved.ram_section = {0x00, 0x00};
+        proved.symbol_table.push_back({"main", SymbolSection::CODE, 0});
+        proved.symbol_table.push_back({GSUAbi::StaticRamProofSymbol, SymbolSection::RAM, 0});
+        const auto proved_path = directory / "static-proof.o";
+        proved.write(proved_path.string());
+        std::ifstream proved_input(proved_path, std::ios::binary);
+        auto proved_bytes = std::vector<std::uint8_t>(std::istreambuf_iterator<char>(proved_input), {});
+        proved_input.close();
+        if (proved_bytes.size() < 6 || proved_bytes[5] != ObjectFile::StaticRamProofFormatVersion ||
+            !ObjectFile::readBytes(proved_bytes).hasStaticRamProof())
+            throw std::runtime_error("static-RAM proof marker did not round-trip as format version 8");
+        proved_bytes[5] = ObjectFile::BaselineFormatVersion;
+        expectMemoryFailure(proved_bytes);
+        auto misplaced = proved;
+        misplaced.symbol_table.back().offset = 2;
+        expectWriteFailure(misplaced, directory / "misplaced-proof.o");
+        misplaced = proved;
+        misplaced.symbol_table.back().section = SymbolSection::CODE;
+        expectWriteFailure(misplaced, directory / "code-proof.o");
+        misplaced = proved;
+        misplaced.config.target = TargetKind::SPC700;
+        expectWriteFailure(misplaced, directory / "spc-proof.o");
+        misplaced = proved;
+        misplaced.code_section = {0xf0, 0x00, 0x00};
+        misplaced.relocation_table.push_back({GSUAbi::StaticRamProofSymbol, SymbolSection::CODE, 0, RelocationType::ADDR16_RAM});
+        expectWriteFailure(misplaced, directory / "addressed-proof.o");
+
+        // The static stack bound is the version-9 feature: older readers
+        // must refuse it, and only one canonical 1..65535 marker is valid.
+        const auto stack_marker = [](const std::string& digits) { return GSUAbi::StaticStackBoundPrefix + digits; };
+        auto bounded = proved;
+        bounded.symbol_table.push_back({stack_marker("1140"), SymbolSection::RAM, 0});
+        const auto bounded_path = directory / "stack-bound.o";
+        bounded.write(bounded_path.string());
+        std::ifstream bounded_input(bounded_path, std::ios::binary);
+        auto bounded_bytes = std::vector<std::uint8_t>(std::istreambuf_iterator<char>(bounded_input), {});
+        bounded_input.close();
+        if (bounded_bytes.size() < 6 || bounded_bytes[5] != ObjectFile::StaticStackFormatVersion ||
+            ObjectFile::readBytes(bounded_bytes).staticStackBound() != 1140 ||
+            !ObjectFile::readBytes(bounded_bytes).hasStaticRamProof())
+            throw std::runtime_error("static stack bound did not round-trip as format version 9");
+        if (proved.staticStackBound() != 0) throw std::runtime_error("unmarked object reports a static stack bound");
+        bounded_bytes[5] = ObjectFile::StaticRamProofFormatVersion;
+        expectMemoryFailure(bounded_bytes);
+        for (const auto* digits : {"0", "01140", "65536", "999999", "12a", "-4"}) {
+            auto invalid = proved;
+            invalid.symbol_table.push_back({stack_marker(digits), SymbolSection::RAM, 0});
+            expectWriteFailure(invalid, directory / "invalid-stack-bound.o");
+        }
+        auto stack_invalid = bounded;
+        stack_invalid.symbol_table.back().offset = 2;
+        expectWriteFailure(stack_invalid, directory / "misplaced-stack-bound.o");
+        stack_invalid = bounded;
+        stack_invalid.symbol_table.back().section = SymbolSection::CODE;
+        expectWriteFailure(stack_invalid, directory / "code-stack-bound.o");
+        stack_invalid = bounded;
+        stack_invalid.config.target = TargetKind::SPC700;
+        stack_invalid.symbol_table.erase(stack_invalid.symbol_table.begin() + 1); // keep only the stack marker
+        expectWriteFailure(stack_invalid, directory / "spc-stack-bound.o");
+        stack_invalid = bounded;
+        stack_invalid.symbol_table.push_back({stack_marker("2"), SymbolSection::RAM, 0});
+        expectWriteFailure(stack_invalid, directory / "twice-stack-bound.o");
+        stack_invalid = bounded;
+        stack_invalid.code_section = {0xf0, 0x00, 0x00};
+        stack_invalid.relocation_table.push_back({stack_marker("1140"), SymbolSection::CODE, 0, RelocationType::ADDR16_RAM});
+        expectWriteFailure(stack_invalid, directory / "addressed-stack-bound.o");
+
+        // Short RAM (section, SHORT_RAM symbols, LMS/SMS word-index
+        // relocations) is the version-10 feature; older readers refuse it.
+        ObjectFile shorted;
+        shorted.code_section = {0x3d, 0xa5, 0x00, 0x3e, 0xa0, 0x00, 0x00};
+        shorted.short_ram_section = {0x00, 0x00, 0x34, 0x12};
+        shorted.symbol_table.push_back({"main", SymbolSection::CODE, 0});
+        shorted.symbol_table.push_back({"\x01" "slot", SymbolSection::SHORT_RAM, 2});
+        shorted.relocation_table.push_back({"\x01" "slot", SymbolSection::CODE, 1, RelocationType::ADDR8_SHORT_RAM});
+        shorted.relocation_table.push_back({"\x01" "slot", SymbolSection::CODE, 4, RelocationType::ADDR8_SHORT_RAM});
+        const auto shorted_path = directory / "short-ram.o";
+        shorted.write(shorted_path.string());
+        std::ifstream shorted_input(shorted_path, std::ios::binary);
+        auto shorted_bytes = std::vector<std::uint8_t>(std::istreambuf_iterator<char>(shorted_input), {});
+        shorted_input.close();
+        const auto reread = ObjectFile::readBytes(shorted_bytes);
+        if (shorted_bytes.size() < 6 || shorted_bytes[5] != ObjectFile::ShortRamFormatVersion ||
+            reread.short_ram_section != shorted.short_ram_section || reread.symbol_table.at(1).section != SymbolSection::SHORT_RAM ||
+            reread.relocation_table.at(1).type != RelocationType::ADDR8_SHORT_RAM || !reread.usesShortRam())
+            throw std::runtime_error("short RAM did not round-trip as format version 10");
+        if (proved.usesShortRam() || bounded.usesShortRam()) throw std::runtime_error("object without short RAM reports it");
+        for (const auto older : {ObjectFile::StaticStackFormatVersion, ObjectFile::BaselineFormatVersion}) {
+            auto downgraded = shorted_bytes;
+            downgraded[5] = older;
+            expectMemoryFailure(downgraded);
+        }
+        auto short_invalid = shorted;
+        short_invalid.short_ram_section.assign(GSUAbi::ShortRamCapacity + 2u, 0);
+        expectWriteFailure(short_invalid, directory / "oversized-short-ram.o");
+        short_invalid = shorted;
+        short_invalid.config.target = TargetKind::SPC700;
+        expectWriteFailure(short_invalid, directory / "spc-short-ram.o");
+        short_invalid = shorted;
+        short_invalid.symbol_table.back().offset = 6;
+        expectWriteFailure(short_invalid, directory / "outside-short-ram.o");
+        // The word index must patch the operand of ALT1/ALT2 + IBT opcode.
+        for (const std::uint32_t patch : {0u, 2u, 3u, 5u}) {
+            short_invalid = shorted;
+            short_invalid.relocation_table.back().patch_offset = patch;
+            expectWriteFailure(short_invalid, directory / "misplaced-short-relocation.o");
+        }
+        short_invalid = shorted;
+        short_invalid.code_section[3] = 0x3f;
+        expectWriteFailure(short_invalid, directory / "alt3-short-relocation.o");
+        short_invalid = shorted;
+        short_invalid.relocation_table.back().section_to_patch = SymbolSection::DATA;
+        short_invalid.data_section = short_invalid.code_section;
+        expectWriteFailure(short_invalid, directory / "data-short-relocation.o");
 
         // This fixture is assembled byte by byte instead of being produced by
         // ObjectFile::write, so a host-endian reader cannot hide behind a
@@ -283,7 +403,7 @@ int main() {
         writeBytes(directory / "bitmap-target.o", wrong_target);
         expectReadFailure(directory / "bitmap-target.o");
 
-        for (const auto version : {0u, 1u, 2u, 8u, 255u}) {
+        for (const auto version : {0u, 1u, 2u, ObjectFile::CurrentFormatVersion + 1u, 255u}) {
             auto malformed = valid_bytes; malformed[5] = static_cast<std::uint8_t>(version);
             expectMemoryFailure(malformed);
         }

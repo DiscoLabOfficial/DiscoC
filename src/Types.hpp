@@ -127,6 +127,22 @@ inline Type pointeeType(Type type) {
     return type;
 }
 
+// Whether loading a pointer value of this type can fault once null is known
+// to be a storable value (the O2/Os pointer-value check): a near RAM pointer
+// whose pointee is `width` bytes wide needs no alignment guard when the
+// pointee is byte-aligned and no span guard when it cannot wrap the bank.
+// Must stay in step with IRCodeGenerator::emitAddressCheck(NonNull).
+inline bool pointerValueCheckIsTrivial(const Type& pointer, int width) {
+    if (pointer.pointer_level <= 0 || isFarPointer(pointer) || pointer.space != AddressSpace::RAM) return false;
+    if (width <= 1) return true;
+    return width == 2 && storageAlignment(pointeeType(pointer)) == 1;
+}
+
+inline int pointerValueCheckWidth(const Type& pointer) {
+    const auto element = pointeeType(pointer);
+    return element.sizeInBytes > 0 ? element.sizeInBytes : 1;
+}
+
 inline Type pointerTo(Type type, AddressSpace space, bool far = false) {
     normalizePointerLayers(type);
     ++type.pointer_level;

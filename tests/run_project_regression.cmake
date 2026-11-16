@@ -72,6 +72,56 @@ if(CASE STREQUAL "project_build")
         message(FATAL_ERROR "Indexed project object names are missing")
     endif()
     run_command("${GSU_RUNNER}" "${project_dir}/names output/new.bin" 0x8000 --word 0x100 149)
+    # Short RAM: two O2 units split the 510-byte window, 254 bytes each, so
+    # each object equals a manual compile claiming exactly that share. hot()
+    # keeps twelve values across internal calls, spilling into its static
+    # frame; main calls the other unit and keeps a stack frame.
+    file(MAKE_DIRECTORY "${project_dir}/short")
+    file(WRITE "${project_dir}/short/math.dci" "module math;\nword add(word left, word right);\n")
+    file(WRITE "${project_dir}/short/math.dc" "import \"math.dci\";\nword add(word left, word right) { return left + right; }\n")
+    file(WRITE "${project_dir}/short/main.dc" [=[
+import "math.dci";
+internal word keep;
+internal word mix(word a, word b) { return (a ^ b) + a + 1; }
+internal word hot(word x, word y) {
+    word p = x + 1; word q = y + 2; word r = x ^ y; word u = x - y; word v = x + y;
+    word a1 = p * 3; word a2 = q ^ 5; word a3 = r + 7; word a4 = u + v; word a5 = p ^ q; word a6 = v - 9; word a7 = r | u;
+    word s = mix(p, q) + mix(r, u);
+    return s + p + q + r + u + v + a1 + a2 + a3 + a4 + a5 + a6 + a7;
+}
+void main() { word* output = (word*)0x100; word x = *(volatile word*)0x102; keep = 1; *output = add(hot(x, 103), keep) + hot(103, x); }
+]=])
+    file(WRITE "${project_dir}/short/discoc.toml" "[project]\nsources=['main.dc', 'math.dc']\n[compiler]\noptimization_level=2\n[target.gsu]\nexecution_memory='ram'\norigin=0x70_0900\nram_origin=0x0400\nstack_pointer=0x2000\nshort_ram=true\n[runtime]\ninitialize=true\n[output]\nassembly='final.s'\n")
+    run_from("${TEST_DIR}" "${DISCC}" build --config "${project_dir}/short/discoc.toml")
+    file(READ "${project_dir}/short/build/final.s" short_assembly)
+    if(NOT short_assembly MATCHES "\n    lms r[0-9]+, \\(\\$0[0-9A-F][0-9A-F]\\)" OR NOT short_assembly MATCHES "\n    sms \\(\\$0")
+        message(FATAL_ERROR "Short RAM project did not address its spill slots with LMS/SMS")
+    endif()
+    foreach(unit IN ITEMS main math)
+        run_command("${DISCC}" "${project_dir}/short/${unit}.dc" -O2 --static-stack-proof --short-ram 254
+            --origin 0x700900 --execution-memory ram --memory-mapping lorom -o "${TEST_DIR}/manual/short-${unit}.o")
+    endforeach()
+    equal_bytes("${project_dir}/short/build/0-main.o" "${TEST_DIR}/manual/short-main.o")
+    equal_bytes("${project_dir}/short/build/1-math.o" "${TEST_DIR}/manual/short-math.o")
+    # Independent result with 16-bit wraparound: hot(46, 103) + 1 + hot(103, 46).
+    function(short_hot x y result)
+        math(EXPR p "${x} + 1")
+        math(EXPR q "${y} + 2")
+        math(EXPR r "${x} ^ ${y}")
+        math(EXPR u "(${x} - ${y}) & 0xFFFF")
+        math(EXPR v "${x} + ${y}")
+        math(EXPR mix1 "(${p} ^ ${q}) + ${p} + 1")
+        math(EXPR mix2 "(${r} ^ ${u}) + ${r} + 1")
+        math(EXPR value "(${mix1} + ${mix2} + ${p} + ${q} + ${r} + ${u} + ${v} + ${p} * 3 + (${q} ^ 5) + ${r} + 7 +
+            ${u} + ${v} + (${p} ^ ${q}) + ${v} - 9 + (${r} | ${u})) & 0xFFFF")
+        set(${result} ${value} PARENT_SCOPE)
+    endfunction()
+    set(x 46)
+    short_hot(${x} 103 first)
+    short_hot(103 ${x} second)
+    math(EXPR expected "(${first} + 1 + ${second}) & 0xFFFF")
+    run_command("${GSU_RUNNER}" "${project_dir}/short/build/new.bin" 0x700900 --initial-sp 0x7770 --initial-ram-bank 1
+        --ram-byte 0x700102 ${x} --ram-byte 0x700103 0 --word 0x100 ${expected} --rambr 0 0)
 
 elseif(CASE STREQUAL "project_configuration")
     foreach(order IN ITEMS before after)

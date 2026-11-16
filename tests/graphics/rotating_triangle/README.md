@@ -39,7 +39,7 @@ cmake -DDISCO_TOOLS_DIR=build/release/bin -DOUTPUT_DIR=build/my-rotation -P test
 
 The script also accepts `-DWLA_65816=/path/to/wla-65816` and
 `-DWLALINK=/path/to/wlalink`. Quote complete `-D...=...` arguments containing
-spaces. CMake 3.15 or newer is required; external tools are not bundled.
+spaces. CMake 3.20 or newer is required; external tools are not bundled.
 Compiler assembly and final linked assembly are both reassembled and compared
 byte-for-byte with the direct payload before either ROM is built.
 
@@ -55,7 +55,7 @@ To build only the fixed-origin GSU payload:
 ```sh
 cmake -E make_directory build/plot-rotating-triangle
 discc --target gsu --execution-memory ram tests/graphics/rotating_triangle/triangle.dc -o build/plot-rotating-triangle/triangle.o
-discld build/plot-rotating-triangle/triangle.o --origin 0x706000 --init-runtime --ram-bank 0 --stack-pointer 0xFFFE --emit-asm build/plot-rotating-triangle/triangle.s -o build/plot-rotating-triangle/triangle.bin
+discld build/plot-rotating-triangle/triangle.o --origin 0x706000 --init-runtime --ram-bank 0 --ram-origin 0xE000 --stack-pointer 0xFFFE --emit-asm build/plot-rotating-triangle/triangle.s -o build/plot-rotating-triangle/triangle.bin
 ```
 
 The `.bin` is not a SNES ROM and is not position-independent. Copy it to
@@ -86,11 +86,21 @@ use COLOR; there are no ROM palette reads or GETC instructions. A local RAM
 sine table avoids ROM-buffer access while the SNES CPU owns the ROM bus.
 `flush;` drains the GSU pixel caches before returning and STOP.
 
-`@cache` marks the inner clearing and pixel loops. O2/Os can lower the guarded,
-positive span count to the GSU's counted `LOOP`; zero or negative counts never
-enter its do-while body. R12/R13 are preserved, and PLOT supplies the physical
-X increment. O2 also caches the bounded division kernel; Os avoids that
-speed-oriented cache padding. A callee may rebase CACHE: it is not a
+The frame runs as two passes, each one explicit `@cache` function entered once
+per pose: `edge_pass()` advances the three edges over all 112 rows and stores
+each row's accepted span, then `fill_pass()` walks the spans and plots. The
+edge pass has no plot context, multiply or hardware loop, which leaves the
+allocator R2/R4 too, and its edge loop stays rolled so the pass fits the
+512-byte window. The fill pass keeps the scanline in R2 (`cursor.y`) and the
+white total in static RAM between spans, so only u, v, cos, sin and the span's
+checker sum stay live while it plots. Span arrays are indexed with `& 127`, a
+no-op for rows 0..111 that proves every access in-bank. Their static RAM sits at
+`$70:E000` (`--ram-origin 0xE000`), clear of the framebuffer, payload and
+mailbox. `@cache` also marks the inner clearing loop. O2/Os can lower the
+guarded, positive span count to the GSU's counted `LOOP`; zero or negative
+counts never enter its do-while body. R12/R13 are preserved, and PLOT supplies
+the physical X increment. O2 also caches the bounded division kernel; Os avoids
+that speed-oriented cache padding. A callee may rebase CACHE: it is not a
 callee-preserved ABI resource. Code outside a 512-byte cache window still
 executes from RAM, so an attribute does not promise that an entire function
 fits. The host records CBR after STOP, and the Mesen checks require an aligned
@@ -102,6 +112,8 @@ The cache window and RAM fallback match
 | --- | --- |
 | GSU framebuffer | `$70:0000-$70:2FFF`, 256x192, 2bpp, SCBR `$00` |
 | GSU payload | `$70:6000`, startup R10 `$FFFE`, RAMBR `$00` |
+| Span/edge static RAM | `$70:E000` upward, below the mailbox |
+| Checked descending stack | Initial R10 `$FFFE`; linked code/static RAM determine its floor |
 | Phase supplied by host | word at `$70:F002`, masked to 0..63 |
 | Pixel / white / black counts | words at `$70:F000`, `$70:F004`, `$70:F006` |
 | Completed phase | word at `$70:F008` |
@@ -128,6 +140,12 @@ host and independent references too.
 
 ## Automated verification
 
+The [v0.3.0 validation record](../../../docs/releases/v0.3.0/validation.md)
+lists checks performed for the release candidate and remaining emulator limits.
+The host initializes its status mailbox before setup can span a refresh;
+end-of-frame checks therefore never interpret uninitialized work RAM as a
+host failure. All publication, pixel and deliberate-failure checks remain active.
+
 The native `graphics_rotation` regression needs no external assembler/emulator:
 
 ```sh
@@ -138,9 +156,9 @@ Ten input vectors cover representative poses and phase masking, executed through
 direct, compiler-assembly and final-assembly payloads. Checks include counts,
 bitplane landmarks, clearing poisoned RAM, untouched memory outside the bitmap,
 startup with incorrect RAMBR/stack state, one RPIX, no GETC, and byte-exact
-reassembly. Both explicit CACHE requests must remain in final assembly, and
-execution checks their exact count and final CBR, accounting for hardware
-LOOP and optional divider caching. The normal GSU execution budget is unchanged.
+reassembly. The CACHE topology must stay one clear window in `main`, one window
+per pass and the optional divider window; execution checks the exact CACHE
+count and final CBR (the fill pass), accounting for hardware LOOP. The normal GSU execution budget is unchanged.
 Hand-encoded model self-tests independently cover selector reset, cache-base
 alignment, preserving/rebasing cached lines, RAM fallback and payload bounds.
 These model checks do not claim cycle-accurate cache timing.
@@ -162,8 +180,9 @@ visible red backdrop.
 RAM/VRAM/mailbox checks run synchronously on the host's publication write,
 before the next GSU render reuses RAM. Screenshots and display checks wait for
 the completed scanout and Mesen's screen-buffer update; they do not insert a
-delay into the ROM. The bounded capture queue also supports one new pose per
-refresh, independently checked using an accelerated-GSU scheduling stress.
+delay into the ROM. The bounded capture queue is designed to handle one new
+pose per refresh; a successful end-to-end run still requires all 64 poses and
+phase wrap to pass the screen oracle.
 
 ## Measuring animation FPS
 
@@ -231,18 +250,38 @@ bytes. Use `OPTIMIZATION=s` and a separate output directory to compare Os.
 The [frozen staged sources](../../../benchmarks/rotation/README.md) and
 `TRIANGLE_SOURCE` override reproduce the separation with the same host/oracle.
 
-The newer compiler-only [loop-state measurements](../../../docs/optimization.md#phase-2-loop-state-refinements-and-demo-measurements)
-leave this source unchanged: O2 reduces 2,806 to 2,733 payload bytes and mean
-GSU cycles from 1,149,680.375 to 945,534.515625. The separate publication probe
+### Source rewrite snapshot (2026-11-15)
+
+Same compiler (working tree at commit `60e83ce` plus its uncommitted changes)
+and host. Mean GO-to-STOP GSU master clocks over all 64 poses, measured with
+the Luna emulator's Super FX trace; Mesen's verifier failed on this
+Linux machine for the previous source too (unexpected host status), so the 64
+presented images were instead compared with Luna and are bit-identical between
+the two sources. The native `graphics_rotation` oracle passes at O0/O1/O2/Os.
+
+| Configuration | Payload bytes | Mean GSU clocks, 64 poses |
+| --- | ---: | ---: |
+| Previous source, O2 | 2,182 | 593,788.72 |
+| Two-pass source, O2 | 2,328 | 343,322.58 (-42.2%) |
+| Previous source, Os | 2,076 | 768,277.78 |
+| Two-pass source, Os | 2,154 | 418,652.92 (-45.5%) |
+
+The earlier compiler-only [loop-state measurements](../../../docs/optimization.md#phase-2-loop-state-refinements-and-demo-measurements)
+keep their renderer source unchanged: O2 reduces 2,806 to 2,733 payload bytes
+and mean GSU cycles from 1,149,680.375 to 945,534.515625. The separate publication probe
 changes from about 15.02 to 20.03 completed poses/s. These frozen working-tree
 measurements are not validation of a final release revision.
 
 The verifier also checks all 49,152 visible pixels in an owned screen-buffer
 snapshot before capture. [Screenshot decoding is asynchronous](https://github.com/nesdev-org/MesenCE/blob/master/Core/Shared/Video/VideoDecoder.cpp): a two-refresh
 delay occasionally saved the preceding pose even for byte-identical ROMs.
-Capture now waits three refreshes and the complete visible reference, with
-bounded failure if it never appears. This does not stall the SNES host or
-change GSU/FPS sample windows; the final verifier exits one refresh later.
+The verifier queues up to eight publications and starts comparing eligible
+poses on the next refresh. It matches the complete visible reference against
+the queue, trying the newest pose first, rather than assuming a fixed capture
+delay. Superseded poses can be captured on later laps; completion requires all
+64 poses and a return to phase zero. More than six unmatched refreshes or a
+queue overflow fails verification. This does not stall the SNES host or change
+GSU/FPS sample windows.
 The raw-buffer contract is this fixed NTSC profile (256x239, seven top-border
 rows); saved screenshots remain 256x224. Unsupported dimensions fail visibly.
 

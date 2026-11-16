@@ -59,6 +59,10 @@ endfunction()
 
 function(build_gsu_payload source)
     set(link_options --origin 0x706000 --init-runtime --ram-bank 0 --stack-pointer 0xFFFE)
+    # A payload with static RAM must place it clear of its framebuffer.
+    if(DEFINED GSU_RAM_ORIGIN)
+        list(APPEND link_options --ram-origin ${GSU_RAM_ORIGIN})
+    endif()
     set(compile_options --target gsu --execution-memory ram)
     set(optimization_options "")
     if(DEFINED OPTIMIZATION)
