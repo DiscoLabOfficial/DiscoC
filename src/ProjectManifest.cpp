@@ -1,4 +1,5 @@
 #include "ProjectManifest.hpp"
+#include "ABI.hpp"
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
@@ -37,6 +38,7 @@ bool optionTakesValue(const std::string& flag, Consumer consumer) {
         flag == "--memory-mapping" || flag == "--execution-memory" || flag == "--ram-bank" ||
         flag == "--rom-bank" || flag == "--ram-origin" || flag == "--stack-pointer" ||
         flag == "--entry" || flag == "--output-dir" ||
+        (flag == "--short-ram" && consumer == Consumer::Compiler) ||
         (flag == "--emit-asm" && consumer == Consumer::Linker) ||
         ((flag == "--import-path" || flag == "-I") && consumer == Consumer::Compiler);
 }
@@ -87,7 +89,8 @@ void Manifest::validate() const {
             if (key == "project.name" && (text.size() > 64 || std::any_of(text.begin(), text.end(), [](char c) {
                 return !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_');
             }))) error(*this, key, "Name must contain 1..64 ASCII letters, digits, '_' or '-'.");
-        } else if (key == "compiler.optimize" || key == "runtime.initialize" || key == "runtime.host_initialized_globals" || key == "target.gsu.initialize_runtime") {
+        } else if (key == "compiler.optimize" || key == "runtime.initialize" || key == "runtime.host_initialized_globals" ||
+                   key == "target.gsu.initialize_runtime" || key == "target.gsu.short_ram") {
             (void)boolean(key);
         } else if (key == "compiler.optimization_level") {
             if (value.kind == Value::Kind::String) {
@@ -145,6 +148,16 @@ std::vector<std::string> configurationArguments(const std::vector<std::string>& 
         result.push_back(manifest.boolean("compiler.optimize") ? "-O1" : "-O0");
     if (consumer == Consumer::Compiler) if (const auto* level = manifest.find("compiler.optimization_level"))
         result.push_back(level->kind == Value::Kind::String ? "-Os" : "-O" + std::to_string(manifest.number("compiler.optimization_level", 0)));
+    // The runtime enters `main` at the manifest's initial SP; the linker
+    // re-checks every assumption this lets the compiler make.
+    if (consumer == Consumer::Compiler && target == TargetKind::GSU && initialize &&
+        manifest.string("runtime.entry", {"main"}) == "main") {
+        result.push_back("--static-stack-proof");
+        // The project owns $0002-$01FF of its data bank; the linker rejects a
+        // bitmap, stack, payload or static RAM placed there.
+        if (manifest.boolean("target.gsu.short_ram"))
+            result.insert(result.end(), {"--short-ram", std::to_string(GSUAbi::ShortRamCapacity)});
+    }
     if (consumer == Consumer::Compiler && !explicit_import_paths)
         if (const auto* paths = manifest.find("compiler.import_paths"))
             for (const auto& directory : paths->strings)

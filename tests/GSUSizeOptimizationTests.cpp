@@ -16,6 +16,44 @@
 
 // Private, invocation-only evidence stays out of ObjectFile and public APIs.
 struct IRCodeGeneratorTestAccess {
+    // Os is size-first, with one bounded exchange: at most max(2, smallest/64)
+    // bytes above the smallest candidate for a >=25% lower inclusive estimate.
+    static void sizeExchange() {
+        const auto require = [](bool ok, const char* message) { if (!ok) throw std::runtime_error(message); };
+        using C = IRCodeGenerator::SizeChoice;
+        const auto prefer = [](C proposed, C existing, std::size_t smallest) {
+            return IRCodeGenerator::sizeFirstPreferred(proposed, existing, smallest);
+        };
+        require(prefer({100, 100, 9}, {101, 100, 1}, 100) && !prefer({101, 100, 1}, {100, 100, 9}, 100),
+            "Os stopped preferring fewer bytes without a clear inclusive speed win");
+        require(prefer({100, 100, 1}, {100, 100, 2}, 100), "Equal-byte Os candidates lost the local speed tie-break");
+        require(prefer({102, 75, 9}, {100, 100, 1}, 100), "A >=25% faster candidate within the byte budget was rejected");
+        require(!prefer({102, 76, 9}, {100, 100, 1}, 100), "A <25% inclusive improvement bought extra bytes");
+        require(!prefer({103, 10, 9}, {100, 100, 1}, 100), "A candidate beyond the byte budget was accepted");
+        require(!prefer({100, 100, 1}, {102, 70, 9}, 100), "A smaller but clearly slower candidate replaced a budgeted fast one");
+        require(!prefer({104, 50, 9}, {102, 75, 9}, 100), "Repeated exchanges accumulated growth beyond the smallest candidate");
+        require(prefer({1600, 100, 9}, {1576, 200, 1}, 1576) && !prefer({1601, 100, 9}, {1576, 200, 1}, 1576),
+            "The byte budget did not scale as max(2, smallest/64)");
+        require(!prefer({102, 10, 9}, {100, 100, 1}, 0) && !prefer({102, 0, 9}, {100, 100, 1}, 100),
+            "Strict comparison or missing inclusive evidence still exchanged bytes for speed");
+
+        // A call inside a loop charges the callee once per weighted iteration;
+        // a single straight-line call charges it exactly once.
+        const auto scores = [](const std::string& source) {
+            Lexer lexer(source); const auto tokens = lexer.scanTokens(); Parser parser(tokens);
+            auto ast = parser.parseProgram(); DataSegmentManager data; Analyzer analyzer(data); analyzer.analyze(ast);
+            IRLowerer lowerer; auto module = lowerer.lower(ast);
+            CompilerConfig config; config.optimization = OptimizationLevel::Size;
+            IRCodeGenerator backend(analyzer.getAllLocalSymbols(), analyzer.getFunctionSymbols(), data, config);
+            const auto emitted = backend.generateOptimized(module, OptimizationLevel::Size);
+            return std::make_pair(emitted.speed_score, emitted.inclusive_score);
+        };
+        const std::string callee = "word q(word v){word r=0;for(word k=0;k<v;k++)r+=k;return r;}";
+        const auto once = scores(callee + "word main(){return q(*(volatile word*)0x100);}");
+        const auto looped = scores(callee + "word main(){word s=0;for(word i=0;i<4;i++)s+=q(*(volatile word*)0x100);return s;}");
+        require(once.second == once.first && once.second != 0, "A single straight-line call was not charged exactly once");
+        require(looped.second > looped.first, "A call inside a loop was not charged by its loop weight");
+    }
     static void verify() {
         const auto require = [](bool ok, const char* message) { if (!ok) throw std::runtime_error(message); };
         const std::string source = "word main(){return 7;}";
@@ -474,11 +512,12 @@ void noSpillCandidates() {
     // multiply temporary. The smaller size-policy countdown spills. Strict
     // Os must keep the earlier larger eligible object, not the last
     // candidate's mutable emitter state or the smallest bytes.
-    // Three carried words plus the software counter exceed the widened pool.
-    // The hardware counter still leaves a register for every carried word.
+    // Four carried words plus the software counter exceed the widened pool,
+    // which includes body-local R11. The hardware counter still leaves a
+    // register for every carried word.
     const std::string loop = "word main(){word a=*(volatile word*)0x100;word b=*(volatile word*)0x102;"
-        "word c=*(volatile word*)0x104;"
-        "for(word i=0;i<32;i++){a+=b*3;b+=c*3;c+=a*3;}return a^b^c;}";
+        "word c=*(volatile word*)0x104;word d=*(volatile word*)0x106;"
+        "for(word i=0;i<32;i++){a+=b*3;b+=c*3;c+=d*3;d+=a*3;}return a^b^c^d;}";
     const auto ordinary = compile(loop,OptimizationLevel::Size), strict = compile(loop,OptimizationLevel::Size,true);
     require(strict.code_section.size()>ordinary.code_section.size(),
         "Eligible-candidate fixture no longer skips a smaller ineligible Os object");
@@ -507,27 +546,105 @@ void noSpillCandidates() {
     };
     for (const auto* object : {&ordinary,&strict}) for (const unsigned initial : {0u,1u,32768u,65535u}) {
         DiscoGSU::Machine machine(linked(*object),0x8000);
-        std::uint16_t values[] = {static_cast<std::uint16_t>(initial),5,7};
-        for (unsigned n=0;n<3;++n) {
+        std::uint16_t values[] = {static_cast<std::uint16_t>(initial),5,7,11};
+        for (unsigned n=0;n<4;++n) {
             machine.seed(0x700100+n*2,static_cast<std::uint8_t>(values[n]),false);
             machine.seed(0x700101+n*2,static_cast<std::uint8_t>(values[n] >> 8),false);
         }
         for (unsigned n=0;n<32;++n) {
             values[0]=static_cast<std::uint16_t>(values[0]+values[1]*3);
             values[1]=static_cast<std::uint16_t>(values[1]+values[2]*3);
-            values[2]=static_cast<std::uint16_t>(values[2]+values[0]*3);
+            values[2]=static_cast<std::uint16_t>(values[2]+values[3]*3);
+            values[3]=static_cast<std::uint16_t>(values[3]+values[0]*3);
         }
         machine.run();
         // main deliberately STOPs with its own frame installed; unlike an
         // ordinary callee it does not pop the saved frame/link words.
-        if (machine.reg(0)!=(values[0]^values[1]^values[2]) || machine.reg(6)!=0 || machine.reg(10)!=0x1ffc || machine.reg(9)!=0x1ffc ||
+        if (machine.reg(0)!=(values[0]^values[1]^values[2]^values[3]) || machine.reg(6)!=0 || machine.reg(10)!=0x1ffc || machine.reg(9)!=0x1ffc ||
                 machine.reg(11)!=0x5555 || machine.reg(12)!=0xbeef || machine.reg(13)!=0xcafe) {
             throw std::runtime_error("Spill-candidate execution/ABI mismatch: bytes=" + std::to_string(object->code_section.size()) +
                 " input=" + std::to_string(initial) + " R0=" + std::to_string(machine.reg(0)) +
-                " expected=" + std::to_string(values[0]^values[1]^values[2]) + " R6=" + std::to_string(machine.reg(6)) +
+                " expected=" + std::to_string(values[0]^values[1]^values[2]^values[3]) + " R6=" + std::to_string(machine.reg(6)) +
                 " R9=" + std::to_string(machine.reg(9)) +
                 " R10=" + std::to_string(machine.reg(10)) + " R11=" + std::to_string(machine.reg(11)) +
                 " R12=" + std::to_string(machine.reg(12)) + " R13=" + std::to_string(machine.reg(13)));
+        }
+    }
+}
+
+// Links one object like discld at $00:8000: DATA follows CODE at an even
+// address; near banks resolve to ROM $00 and RAM $70; stack floor is zero.
+std::vector<std::uint8_t> runnable(const ObjectFile& object) {
+    auto bytes = object.code_section;
+    if (!object.data_section.empty() && (bytes.size() & 1u)) bytes.push_back(1);
+    const auto data_base = static_cast<std::uint32_t>(0x8000 + bytes.size());
+    bytes.insert(bytes.end(), object.data_section.begin(), object.data_section.end());
+    require(object.ram_section.empty() && bytes.size() <= 0x4000, "Os cache fixture needs a static RAM layout");
+    for (const auto& relocation : object.relocation_table) {
+        std::uint32_t address = 0; bool found = false;
+        const std::string prefix = "__disco_stack_limit_";
+        if (relocation.target_symbol_name.compare(0, prefix.size(), prefix) == 0) {
+            address = static_cast<std::uint32_t>(std::stoul(relocation.target_symbol_name.substr(prefix.size()))); found = true;
+        }
+        if (relocation.target_symbol_name == "__disco_near_rom_bank") { address = 0; found = true; }
+        if (relocation.target_symbol_name == "__disco_near_ram_bank") { address = 0x70; found = true; }
+        for (const auto& symbol : object.symbol_table) if (symbol.name == relocation.target_symbol_name) {
+            if (symbol.section == SymbolSection::CODE) { address = 0x8000 + symbol.offset; found = true; }
+            if (symbol.section == SymbolSection::DATA) { address = data_base + symbol.offset; found = true; }
+        }
+        require(found, "Missing Os cache fixture relocation");
+        bytes.at(relocation.patch_offset + 1) = static_cast<std::uint8_t>(address);
+        if (relocation.type != RelocationType::ADDR24_BANK)
+            bytes.at(relocation.patch_offset + 2) = static_cast<std::uint8_t>(address >> 8);
+    }
+    return bytes;
+}
+
+// Os may keep an automatic CACHE window within its existing exchange budget
+// (max(2, smallest/64) bytes) only when a cache-aware estimate is >=25% lower.
+// Constant-trip hot loops qualify, whether CACHE costs a byte or is absorbed
+// by DATA alignment padding; a loop of unknown trip count never buys bytes.
+void cacheAwareSizeChoice() {
+    const std::string rom_table = "rom const byte t[8] = {1, 2, 3, 4, 5, 6, 7, 8};"
+        " word main() { word k = *(volatile word*)0x100; word s = 0;"
+        " for (word i = 0; i < 128; i++) s += t[(i + k) & 7]; return s; }";
+    const std::string ram_table = "word main() { byte* p = (byte*)0x400; word k = *(volatile word*)0x100; word s = 0;"
+        " for (word i = 0; i < 128; i++) s += p[(i + k) & 7]; return s; }";
+    // With DATA present, CODE parity decides alignment padding: measured at
+    // the time of writing, the cached choice costs 0 bytes in rom_table and
+    // absorbed_pad, +1 in ram_table and +2 in added_pad (the budget's edge).
+    const std::string pad_prefix = "rom const byte pad[3] = {9, 9, 9};"
+        " word main() { byte* p = (byte*)0x400; word k = *(volatile word*)0x100; word s = 0;"
+        " for (word i = 0; i < 128; i++) s += p[(i + k) & 7]; return s + pad[k & 1]";
+    const std::string absorbed_pad = pad_prefix + "; }", added_pad = pad_prefix + " + 1; }";
+    const std::string dynamic = "word main() { byte* p = (byte*)0x400; word n = *(volatile word*)0x100; word s = 0;"
+        " for (word i = 0; i < n; i++) s += p[i & 7]; return s; }";
+    // Three proved trips are selectable but far from the 64 per loop level
+    // the structural estimate assumes: the credit must not buy a byte there.
+    const std::string few_trips = "word main() { byte* p = (byte*)0x400; word k = *(volatile word*)0x100; word s = 0;"
+        " for (word i = 0; i < 3; i++) { s += p[(i + k) & 7]; s ^= (s >> 3) + k; s += p[(i ^ k) & 7] << 1;"
+        " *(volatile word*)0x200 = s; } return s; }";
+    const auto run = [](const ObjectFile& object, std::uint16_t seed, unsigned& caches, unsigned& rebases) {
+        DiscoGSU::Machine machine(runnable(object), 0x8000);
+        machine.seed(0x700100, static_cast<std::uint8_t>(seed), false);
+        machine.seed(0x700101, static_cast<std::uint8_t>(seed >> 8), false);
+        for (unsigned n = 0; n < 8; ++n) machine.seed(0x700400 + n, static_cast<std::uint8_t>(3 * n + 1), false);
+        machine.run();
+        require(machine.reg(6) == 0, "Os cache fixture faulted");
+        caches = machine.cacheRequests(); rebases = machine.cacheRebases();
+        return machine.reg(0);
+    };
+    for (const auto& source : {rom_table, ram_table, absorbed_pad, added_pad, dynamic, few_trips}) {
+        const auto baseline = compile(source, OptimizationLevel::O1), small = compile(source, OptimizationLevel::Size);
+        for (const std::uint16_t seed : {0, 3, 200}) {
+            unsigned caches = 0, rebases = 0, ignored = 0;
+            const auto expected = run(baseline, seed, ignored, ignored);
+            require(run(small, seed, caches, rebases) == expected, "Os cache choice changed a result");
+            require(rebases <= 1, "Os cache choice rebased its window repeatedly");
+            if (source == dynamic) require(caches == 0, "Os bought CACHE bytes for a loop of unknown trip count");
+            else if (source == few_trips) require(caches == 0, "Os bought CACHE bytes for a three-trip loop");
+            else if (caches == 0) throw std::runtime_error("Os rejected a budgeted constant-trip CACHE window:\n" +
+                AssemblyGenerator(small).generate());
         }
     }
 }
@@ -589,8 +706,8 @@ void nearRomRegisterScratch() {
 
 int main() {
     try {
-        IRCodeGeneratorTestAccess::verify();
-        divmod(); phiStress(); sharedTails(); moduleBranchRelaxation(); boundedFusion(); sizePolicy(); reusableDivisionContexts(); noSpillCandidates(); nearRomRegisterScratch();
+        IRCodeGeneratorTestAccess::verify(); IRCodeGeneratorTestAccess::sizeExchange();
+        divmod(); phiStress(); sharedTails(); moduleBranchRelaxation(); boundedFusion(); sizePolicy(); reusableDivisionContexts(); noSpillCandidates(); nearRomRegisterScratch(); cacheAwareSizeChoice();
         std::cout << "O2/Os divmod, exact-tail sharing, PHI interference and deterministic codegen checks passed\n";
     } catch (const CompilerError& e) { std::cerr << e.getMessage() << '\n'; return 1; }
       catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }

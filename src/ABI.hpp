@@ -18,6 +18,25 @@ constexpr const char* NearRomBankSymbol = "__disco_near_rom_bank";
 // Private DATA in a payload copied to the selected near RAM execution bank.
 // Linkers must reject these RAM relocations for ROM or mismatched placement.
 constexpr const char* ImmutablePoolPrefix = "\x01" "__disco_pool_";
+// Private RAM marker at offset 0: this object's code omits null/wrap checks
+// for its own static RAM objects. The linker rejects such an object whose
+// static RAM segment starts at address zero. Objects carrying it are written
+// as format version 8, which older linkers refuse instead of ignoring.
+constexpr const char* StaticRamProofSymbol = "\x01" "__disco_static_ram_nonnull";
+// Private RAM marker at offset 0, suffixed by a decimal byte count N: this
+// object omits the stack guards of `main` and of the internal functions only
+// it reaches, because none can fail when `main` starts at the runtime's
+// initial SP with N bytes above the stack floor. The linker must prove that
+// (runtime initialization, `main` as entry and otherwise unreferenced, floor +
+// N <= SP) or reject the object. Carried only by format version 9 objects.
+constexpr const char* StaticStackBoundPrefix = "\x01" "__disco_static_stack_";
+// Short RAM: the near RAM bank's $0000-$01FF, the only range LMS/SMS reach
+// (ALT1/ALT2 + IBT opcode, operand = word address / 2). The linker places
+// every object's short RAM section from $0002 so that address zero stays a
+// null pointer; the window then holds 510 bytes.
+constexpr std::uint16_t ShortRamBase = 0x0002;
+constexpr std::uint16_t ShortRamEnd = 0x0200;
+constexpr std::uint16_t ShortRamCapacity = ShortRamEnd - ShortRamBase;
 constexpr std::uint8_t FramePointerRegister = 9;
 constexpr std::uint8_t StackPointerRegister = 10;
 constexpr std::uint8_t LinkRegister = 11;
@@ -31,10 +50,19 @@ constexpr std::size_t ParameterSlotSize = 2;
 // PUSH stores before decrementing SP. FP therefore points to the empty slot
 // below saved R9 (FP+2) and saved R11 (FP+4).
 constexpr int FirstParameterOffset = 6;
+// Module-private O2/Os convention, never visible to other objects: an
+// internal function with 1..4 one-word parameters (no address taken)
+// receives them in these registers instead of a stack argument area. None is
+// touched by LINK, the prologue (R0/R3/R9-R11) or its stack/alignment guards.
+// The caller writes them, so they belong to the callee's clobber set.
+constexpr std::size_t RegisterArgumentCount = 4;
+constexpr std::uint8_t RegisterArguments[RegisterArgumentCount] = {5, 7, 8, 4};
 
-// R9 and R11 are saved by every non-entry function. Allocated value registers
-// are caller-saved and must be protected around calls when their values remain
-// live. R0, R1, R3, R4, and R6 are volatile backend registers.
+// R9 and R11 are preserved by every non-entry function: a frameless one never
+// touches R9 unless it is module-private and its in-module callers save R9
+// per its call-clobber mask. Allocated value registers are caller-saved and
+// must be protected around calls when their values remain live. R0, R1, R3,
+// R4, and R6 are volatile backend registers.
 constexpr std::uint8_t FirstAllocatedValueRegister = 5;
 
 } // namespace GSUAbi

@@ -207,6 +207,23 @@ void precedence() {
     const auto size_arguments = configurationArguments({"discc", "-O2"}, Consumer::Compiler, &size_manifest);
     require(hasFlag(size_arguments, "-Os", Consumer::Compiler) && size_arguments.back() == "-O2", "CLI did not override manifest Os");
     reject("[compiler]\noptimize = true\noptimization_level = 2", "not both");
+    // Short RAM claims the whole window, but only under the runtime-entry
+    // stack proof that gives the compiler static frames.
+    const auto window = Manifest::parse("[target.gsu]\nshort_ram = true\n[runtime]\ninitialize = true", "short.toml");
+    const auto claimed = configurationArguments({"discc"}, Consumer::Compiler, &window);
+    const auto short_flag = std::find(claimed.begin(), claimed.end(), std::string("--short-ram"));
+    require(hasFlag(claimed, "--static-stack-proof", Consumer::Compiler) && short_flag != claimed.end() &&
+            short_flag + 1 != claimed.end() && *(short_flag + 1) == "510", "Manifest short RAM did not claim the window");
+    require(!hasFlag(configurationArguments({"discld"}, Consumer::Linker, &window), "--short-ram", Consumer::Linker),
+            "Short RAM must not leak to the linker");
+    const auto no_runtime = Manifest::parse("[target.gsu]\nshort_ram = true", "short-no-runtime.toml");
+    require(!hasFlag(configurationArguments({"discc"}, Consumer::Compiler, &no_runtime), "--short-ram", Consumer::Compiler),
+            "Short RAM was requested without static frames");
+    const auto other_entry = Manifest::parse("[target.gsu]\nshort_ram = true\n[runtime]\ninitialize = true\nentry = 'start'",
+                                             "short-entry.toml");
+    require(!hasFlag(configurationArguments({"discc"}, Consumer::Compiler, &other_entry), "--short-ram", Consumer::Compiler),
+            "Short RAM was requested for a non-main runtime entry");
+    reject("[target.gsu]\nshort_ram = 510", "boolean");
 }
 } // namespace
 int main() {

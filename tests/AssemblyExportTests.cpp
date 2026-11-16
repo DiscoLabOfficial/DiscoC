@@ -45,6 +45,24 @@ int main() {
             rebuilt.relocation_table[1].type != RelocationType::ADDR24_OFFSET ||
             rebuilt.relocation_table[2].target_symbol_name.front() != '\x01')
             throw std::runtime_error("Assembly export lost far/private relocation semantics");
+        // Short RAM: LMS/SMS with linker-written word indexes and the SHORTRAM
+        // image survive export and reassembly, private and public names alike.
+        ObjectFile shorted;
+        shorted.code_section = {0x3d, 0xa5, 0x00, 0x3e, 0xa7, 0x00, 0x3d, 0xa1, 0x7f, 0x00, 0x01};
+        shorted.short_ram_section = {0x00, 0x00, 0x34, 0x12};
+        shorted.symbol_table = {{"main", SymbolSection::CODE, 0},
+            {std::string(1, '\x01') + "slot", SymbolSection::SHORT_RAM, 0}, {"window", SymbolSection::SHORT_RAM, 2}};
+        shorted.relocation_table = {{std::string(1, '\x01') + "slot", SymbolSection::CODE, 1, RelocationType::ADDR8_SHORT_RAM},
+            {"window", SymbolSection::CODE, 4, RelocationType::ADDR8_SHORT_RAM}};
+        check(shorted);
+        const auto text = AssemblyGenerator(shorted).generate();
+        const auto short_rebuilt = Assembler().assemble(text);
+        if (text.find("sms (short(window)), r7") == std::string::npos || text.find("lms r1, ($0FE)") == std::string::npos ||
+            short_rebuilt.short_ram_section != shorted.short_ram_section || short_rebuilt.relocation_table.size() != 2 ||
+            short_rebuilt.relocation_table[0].type != RelocationType::ADDR8_SHORT_RAM ||
+            short_rebuilt.relocation_table[0].patch_offset != 1 || short_rebuilt.relocation_table[1].patch_offset != 4 ||
+            short_rebuilt.relocation_table[0].target_symbol_name.front() != '\x01')
+            throw std::runtime_error("Assembly export lost short RAM accesses or their image");
         for (const auto& bytes : {std::vector<std::uint8_t>{0xf0}, {0xa0}, {0x05, 0x7f}}) {
             ObjectFile malformed;
             malformed.code_section = bytes;

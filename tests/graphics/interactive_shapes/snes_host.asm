@@ -72,7 +72,9 @@
 .DEFINE GSU_ECHO_PITCH $70F012
 .DEFINE GSU_ECHO_SIZE $70F014
 .DEFINE GSU_ECHO_MODE $70F016
-.DEFINE GSU_LOAD_ADDRESS $708000
+.DEFINE GSU_LOAD_ADDRESS $708400
+; $0000-$03FF is the GSU's short RAM window, below the OBJ framebuffer.
+.DEFINE FRAMEBUFFER_ADDRESS $700400
 .DEFINE FRAMEBUFFER_SIZE $8000
 
 .BANK 0 SLOT 0
@@ -128,7 +130,7 @@ ClearWorkRam:
   bne ClearWorkRam
   ldx #0
 ClearFramebuffer:
-  sta.l $700000,x
+  sta.l FRAMEBUFFER_ADDRESS,x
   inx
   inx
   cpx #FRAMEBUFFER_SIZE
@@ -180,7 +182,8 @@ InputSnapshot:
   sta.l GSU_MODE
   sep #$20
   .ACCU 8
-  stz $3038
+  lda #1
+  sta $3038            ; SCBR: OBJ framebuffer at $70:0400
   lda #$70
   sta $3034
   lda #$80
@@ -190,8 +193,8 @@ InputSnapshot:
   lda #$2D
   sta $303A            ; OBJ/4bpp, CPU ROM access, GSU RAM ownership
   stz $301E
-  lda #$80
-  sta $301F            ; enter the runtime bootstrap at $70:8000
+  lda #$84
+  sta $301F            ; enter the runtime bootstrap at $70:8400
   ldy #$0040
 WaitRound:
   ldx #$FFFF

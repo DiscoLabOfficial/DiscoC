@@ -22,19 +22,23 @@ foreach(field IN ITEMS CODE_START_ADDRESS BITMAP_SCBR BITMAP_SCMR)
     set(${field} "${CMAKE_MATCH_1}")
     math(EXPR ${field}_value "0x${${field}}")
 endforeach()
-if(NOT CODE_START_ADDRESS_value EQUAL 0x706000 OR
-   NOT BITMAP_SCBR_value EQUAL 0 OR NOT BITMAP_SCMR_value EQUAL 33)
-    message(FATAL_ERROR "Host requires $70:6000, bitmap 256x192, 4bpp, base zero")
+# $0002-$01FF holds the scene's short RAM (LMS/SMS frame slots), so the
+# framebuffer starts at $0400 (SCBR 1) and the code right after it.
+if(NOT CODE_START_ADDRESS_value EQUAL 0x706400 OR
+   NOT BITMAP_SCBR_value EQUAL 1 OR NOT BITMAP_SCMR_value EQUAL 33)
+    message(FATAL_ERROR "Host requires $70:6400, bitmap 256x192, 4bpp, base $0400")
 endif()
 file(WRITE "${OUTPUT_DIR}/scene-config.inc"
-    ".DEFINE GSU_LOAD_ADDRESS $${CODE_START_ADDRESS}\n.DEFINE GSU_START_PC $6000\n"
-    ".DEFINE BITMAP_SCBR $${BITMAP_SCBR}\n.DEFINE BITMAP_SCMR $${BITMAP_SCMR}\n")
+    ".DEFINE GSU_LOAD_ADDRESS $${CODE_START_ADDRESS}\n.DEFINE GSU_START_PC $6400\n"
+    ".DEFINE BITMAP_SCBR $${BITMAP_SCBR}\n.DEFINE BITMAP_SCMR $${BITMAP_SCMR}\n"
+    ".DEFINE FRAMEBUFFER_BASE $0400\n.DEFINE FRAMEBUFFER_END $6400\n.DEFINE FRAMEBUFFER_ADDRESS $700400\n")
 string(REGEX MATCH "(ibt|iwt) r6, #\\$0+ [^\n]+\n    stop ; CODE\\+\\$([0-9A-F]+)" stop_match "${assembly}")
 if(NOT stop_match)
     message(FATAL_ERROR "Missing normal main STOP for timing/ABI validation")
 endif()
 math(EXPR stop_address "${CODE_START_ADDRESS_value} + 0x${CMAKE_MATCH_2}" OUTPUT_FORMAT HEXADECIMAL)
-file(WRITE "${OUTPUT_DIR}/scene-test-config.lua" "return {stop=${stop_address},bytes=${payload_size}}\n")
+file(WRITE "${OUTPUT_DIR}/scene-test-config.lua"
+    "return {stop=${stop_address},bytes=${payload_size},origin=${CODE_START_ADDRESS_value},framebuffer=0x400}\n")
 configure_file("${CMAKE_CURRENT_LIST_DIR}/geometry-checks.lua" "${OUTPUT_DIR}/geometry-checks.lua" COPYONLY)
 build_snes_host("${CMAKE_CURRENT_LIST_DIR}" gem-chess)
 build_snes_host("${CMAKE_CURRENT_LIST_DIR}" gem-chess-negative -D FORCE_BAD_RESULT=1)

@@ -14,14 +14,16 @@ enum class RelocationType : uint8_t {
     ADDR16_IWT,     // A 16-bit address for a general IWT instruction
     ADDR24_BANK,    // The 8-bit bank byte of a 24-bit far address
     ADDR24_OFFSET,  // The 16-bit offset of a 24-bit far address
-    ADDR16_RAM     // RAM static-storage offset, independent of the program bank
+    ADDR16_RAM,    // RAM static-storage offset, independent of the program bank
+    ADDR8_SHORT_RAM // LMS/SMS operand: (even near RAM address < $0200) / 2
 };
 
 // Which section the symbol or relocation belongs to.
 enum class SymbolSection : uint8_t {
     CODE,
     DATA,
-    RAM
+    RAM,
+    SHORT_RAM // Static RAM linked inside the LMS/SMS window (GSUAbi::ShortRamBase..End)
 };
 
 // Represents a symbol defined in this object file.
@@ -42,7 +44,22 @@ struct RelocationEntry {
 // Represents the entire contents of a .o file.
 class ObjectFile {
 public:
-    static constexpr std::uint8_t CurrentFormatVersion = 7;
+    // Newest readable version. Objects are written as BaselineFormatVersion
+    // unless they carry a proof marker: version 8 for
+    // GSUAbi::StaticRamProofSymbol, version 9 for a GSUAbi::StaticStackBoundPrefix
+    // marker, version 10 for a short RAM section, SHORT_RAM symbols or
+    // ADDR8_SHORT_RAM relocations. A linker that cannot enforce a marker or
+    // place short RAM must refuse the object rather than ignore it.
+    static constexpr std::uint8_t CurrentFormatVersion = 10;
+    static constexpr std::uint8_t ShortRamFormatVersion = 10;
+    static constexpr std::uint8_t StaticStackFormatVersion = 9;
+    static constexpr std::uint8_t StaticRamProofFormatVersion = 8;
+    static constexpr std::uint8_t BaselineFormatVersion = 7;
+    bool hasStaticRamProof() const;
+    // Bytes the static stack-bound marker requires above the stack floor at
+    // `main`'s entry, or 0 when the object carries no such marker.
+    std::uint32_t staticStackBound() const;
+    bool usesShortRam() const;
     static constexpr std::uint32_t MaxSectionBytes = 64u * 1024u * 1024u;
     static constexpr std::uint32_t MaxObjectBytes = 128u * 1024u * 1024u;
     static constexpr std::uint32_t MaxStringBytes = 4096u;
@@ -55,6 +72,9 @@ public:
     std::vector<uint8_t> code_section;
     std::vector<uint8_t> data_section;
     std::vector<uint8_t> ram_section; // Initial image of separately allocated static RAM, not payload DATA.
+    // Initial image of static RAM the linker places in the short RAM window;
+    // at most GSUAbi::ShortRamCapacity bytes, word-aligned like RAM.
+    std::vector<uint8_t> short_ram_section;
     std::vector<SymbolEntry> symbol_table;
     std::vector<RelocationEntry> relocation_table;
     CompilerConfig config;

@@ -2,6 +2,10 @@
 local frames, lastFrame, verified = 0, 0, 0
 local visited = {}
 local pending = {}
+local wrapped, unmatched = false, 0
+-- Recent publications awaiting their screen check, and how many refreshes the
+-- screen may fail to show any of them before that is a presentation failure.
+local MaxPending, MaxUnmatchedRefreshes = 8, 6
 local quarter = { 0, 6, 12, 19, 24, 30, 36, 41, 45, 49, 53, 56, 59, 61, 63, 64, 64 }
 local folder = emu.getRomInfo().path:match("^(.*[/\\])") or ""
 local function sine(phase)
@@ -23,7 +27,9 @@ local function fail(message) finish(1, "FAIL rotating triangle: " .. message) en
 -- is deliberately not required to survive until an end-of-frame callback.
 emu.addMemoryCallback(function(_, status)
     if status >= 2 then fail("host status=" .. status) return end
-    if status ~= 1 or lastFrame >= 65 then return end
+    -- Keep checking every publication until every phase has also been seen
+    -- on screen; a fast renderer may need more than one lap for that.
+    if status ~= 1 then return end
     local frame = emu.read16(0x12, emu.memType.snesWorkRam)
     local phase = emu.read16(0xC, emu.memType.snesWorkRam)
     if frame ~= lastFrame + 1 or phase ~= (frame - 1) % 64 then
@@ -92,16 +98,36 @@ emu.addMemoryCallback(function(_, status)
     end
 
     -- Mesen's endFrame hook runs before SendFrame updates its screenshot/pixel
-    -- buffer. After this VBlank's DMA, allow a full scanout and that API's
-    -- one-frame lag plus asynchronous decoding. The next UpdateFrame fences
-    -- the previous decode; three refreshes prevent a stale screenshot buffer.
-    -- The decoder can still expose the preceding pose, so the
-    -- capture callback also checks the full visible reference before saving.
-    -- Two publications may await capture at one pose/refresh;
-    -- their RAM/VRAM checks above have already completed synchronously.
-    pending[#pending + 1] = {phase=phase, frame=frame, visibleAfter=frames + 3}
-    if #pending > 2 then fail("more than one publication per refresh") return end
+    -- buffer, and decoding is asynchronous, so the buffer lags the PPU by one
+    -- or more refreshes. A renderer faster than that lag publishes several
+    -- poses before the first one becomes observable, and a pose shown for
+    -- only one refresh can be superseded before any fixed delay elapses.
+    -- Queue every publication; the capture callback matches the screen against
+    -- the queued poses rather than assuming the oldest one is displayed.
+    -- Their RAM/VRAM checks above have already completed synchronously.
+    pending[#pending + 1] = {phase=phase, frame=frame, visibleAfter=frames + 1}
+    if #pending > MaxPending then fail("screen check fell behind publications") return end
 end, emu.callbackType.write, 0x7e0000, 0x7e0000, emu.cpuType.snes, emu.memType.snesMemory)
+
+-- Returns nil when every visible pixel matches `phase`, otherwise a description
+-- of the first mismatch.
+local function screenMismatch(screen, width, backdrop, phase)
+    local s, c = sine(phase), sine(phase + 16)
+    for y = 0, 191 do
+        for x = 0, 255 do
+            local u, v = (x - 128) * c + (y - 96) * s, -(x - 128) * s + (y - 96) * c
+            local expected = backdrop
+            if v <= 2048 and 2 * u <= v + 3072 and -2 * u <= v + 3072 then
+                expected = (((u ~ v) & 512) == 0) and 0 or 0xFFFFFF
+            end
+            local actual = screen[(y + 7) * width + x + 1] & 0xFFFFFF
+            if actual ~= expected then
+                return string.format("pixel=(%d,%d) expected=$%06X actual=$%06X", x, y, expected, actual)
+            end
+        end
+    end
+    return nil
+end
 
 emu.addEventCallback(function()
     frames = frames + 1
@@ -109,8 +135,9 @@ emu.addEventCallback(function()
     local status = emu.read(0, emu.memType.snesWorkRam)
     if status >= 2 then fail("host status=" .. status) return end
     if not pending[1] or pending[1].visibleAfter > frames then return end
-    local displayed = pending[1]
-    local phase, frame = displayed.phase, displayed.frame
+    local newest = 1
+    while pending[newest + 1] and pending[newest + 1].visibleAfter <= frames do newest = newest + 1 end
+    local phase, frame = pending[newest].phase, pending[newest].frame
     -- Compare against a visible backdrop pixel, not the black overscan border:
     -- black is a valid foreground checker color, so (0,0) is not a reference.
     if emu.read16(0, emu.memType.snesCgRam) ~= 0x0842 or
@@ -126,8 +153,7 @@ emu.addEventCallback(function()
     -- Screenshot publication is asynchronous relative to endFrame. A fixed
     -- delay alone occasionally saved phase N-1 under phase N's filename even
     -- for byte-identical ROMs. Do not weaken the synchronous RAM/VRAM oracle:
-    -- wait separately for all visible pixels to match this queued pose.
-    local s, c = sine(phase), sine(phase + 16)
+    -- save a pose only when all visible pixels match that exact queued pose.
     local screen = emu.getScreenBuffer()
     local screenSize = emu.getScreenSize()
     -- This fixed NTSC host/API exposes seven top-border rows in the raw
@@ -136,31 +162,24 @@ emu.addEventCallback(function()
         fail("unsupported screen buffer dimensions for the NTSC pixel oracle") return
     end
     local backdrop = emu.getPixel(0, 96) & 0xFFFFFF
-    local visible = true
-    local mismatch
-    for y = 0, 191 do
-        if not visible then break end
-        for x = 0, 255 do
-            local u, v = (x - 128) * c + (y - 96) * s, -(x - 128) * s + (y - 96) * c
-            local expected = backdrop
-            if v <= 2048 and 2 * u <= v + 3072 and -2 * u <= v + 3072 then
-                expected = (((u ~ v) & 512) == 0) and 0 or 0xFFFFFF
-            end
-            local actual = screen[(y + 7) * screenSize.width + x + 1] & 0xFFFFFF
-            if actual ~= expected then
-                visible = false
-                mismatch = string.format("pixel=(%d,%d) expected=$%06X actual=$%06X", x, y, expected, actual)
-                break
-            end
-        end
+    -- Newest first: the lagging buffer may still show an older queued pose,
+    -- but once a pose is presented no earlier one can be shown again.
+    local shown, mismatch
+    for index = newest, 1, -1 do
+        local difference = screenMismatch(screen, screenSize.width, backdrop, pending[index].phase)
+        if not difference then shown = index break end
+        if index == newest then mismatch = difference end
     end
-    if not visible then
-        if frames > displayed.visibleAfter + 3 then
+    if not shown then
+        unmatched = unmatched + 1
+        if unmatched > MaxUnmatchedRefreshes then
             fail(string.format("phase=%d never presented its complete visible reference: %s", phase, mismatch))
         end
         return
     end
-    table.remove(pending, 1)
+    unmatched = 0
+    phase, frame = pending[shown].phase, pending[shown].frame
+    for _ = 1, shown do table.remove(pending, 1) end
     if not visited[phase] then
         local file = io.open(folder .. string.format("rotating-frame-%02d.png", phase), "wb")
         if not file then fail("cannot write screenshot") return end
@@ -168,7 +187,10 @@ emu.addEventCallback(function()
         visited[phase] = true
         verified = verified + 1
     end
-    if verified == 64 and phase == 0 and frame > 64 then
+    if phase == 0 and frame > 64 then wrapped = true end
+    -- Every phase must still be presented on screen at least once, plus the
+    -- wrap back to phase 0; superseded poses are retried on later laps.
+    if verified == 64 and wrapped then
         finish(0, string.format("PASS rotating triangle: 64 poses plus phase wrap, 49152 pixels per pose, black/white checks, clean frames, VBlank DMA, CACHE and STOP; %d SNES frames", frames))
     end
 end, emu.eventType.endFrame)

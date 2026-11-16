@@ -9,6 +9,9 @@ if(MEASURE_GSU_TIMING AND NOT DEFINED OPTIMIZATION)
     set(OPTIMIZATION 0)
 endif()
 set(DEMO_OUTPUT_SUBDIR "build/plot-rotating-triangle")
+# The renderer's span and edge globals live at $70:E000, above the payload and
+# below the $70:F000 mailbox; the default $0400 is inside the framebuffer.
+set(GSU_RAM_ORIGIN 0xE000)
 include("${CMAKE_CURRENT_LIST_DIR}/../snes_demo_helpers.cmake")
 
 message(STATUS "Compiling the rotating checkerboard and comparing both assembly paths")

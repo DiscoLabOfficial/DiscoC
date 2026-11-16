@@ -167,8 +167,10 @@ Loop-weighted, bounded two-color recoloring and spill-slot preferences preserve
 the exact interference graph. Explicit hardware scopes
 save/restore R12/R13, including nested loops and loop-using callees.
 Types, IDs, predecessor coverage, dominance and hardware scope stacks are
-verified after transformations. O0/O1 policies and object/call ABI remain
-unchanged. `--emit-ir -O2` and `--check -O2` expose/verify this optimized IR.
+verified after transformations. O0/O1 policies and the externally visible call
+ABI remain unchanged. Proof markers and short RAM can require newer object
+versions, as described below. `--emit-ir -O2` and `--check -O2` expose/verify
+this optimized IR.
 An internal `live.split` representation-identical scalar Cast separates a
 loop snapshot from cold uses. The verifier validates its type/dominance, and
 cleanup preserves its marker. Each SSA part is still assigned one location;
@@ -199,10 +201,13 @@ in-range terminal faults and function-local epilogues, using existing branch
 relaxation and retaining per-path loop/plot cleanup and R0/R4 return values.
 
 After the complete local/spill frame is known, `GSUAddressProof` owns bounded
-scalar-range and near-RAM address facts keyed by IR IDs. It can prove member
-and masked/PHI-index accesses inside the validated ABI frame or known absolute
-RAM spans; unknown/far/ROM accesses remain checked. It changes selection, not
-IR or alias semantics. `GSUStackCheckCredit` separately reuses established
+scalar-range and near-address facts keyed by IR IDs. It can prove member
+and masked/PHI-index accesses inside the validated ABI frame, known absolute
+RAM spans or static RAM objects. It also proves bounded reads within ROM
+objects defined by the same object file, retaining near-ROM bank selection and
+its link-time placement checks. Unknown addresses, far accesses and ROM accesses
+outside that proof remain checked. It changes selection, not IR or alias
+semantics. `GSUStackCheckCredit` separately reuses established
 lower bounds at guarded pushes without moving failures ahead of effects.
 CFG/helper entries and calls fence the credit. See the
 [proof contract](optimization.md#what-o2-adds) for limits and exclusions.
@@ -250,8 +255,8 @@ the complete payload byte for byte.
 ## Object and link stages
 
 Each compilation unit can produce a relocatable `.o` file. The object stores
-code, ROM data, a separate RAM initialization image, public/private symbols,
-and relocation records. All multi-byte object
+code, ROM data, separate ordinary/short RAM initialization images, public/private
+symbols, and relocation records. All multi-byte object
 fields use explicit little-endian encoding. `discld` verifies that all input
 objects use the same target configuration, concatenates code and data sections,
 resolves symbols, applies relocations, and writes the final payload. Local
@@ -259,12 +264,15 @@ branches that exceed the short displacement range are relaxed by the assembler
 or canonical IR backend into object-relative absolute jumps.
 
 The linker lays out CODE then ROM DATA in the payload. Object versions 4
-through 7 record DATA alignment. Version 5 introduced static RAM; version 6
-adds its explicit alignment; version 7 adds optional bitmap host metadata.
-RAM is allocated separately from `--ram-origin`
-in the near RAM bank; optional startup zeroes/initializes it. Padding is included in each symbol/relocation base.
-Internal names are object-scoped across CODE, DATA, and RAM; external lookup
-cannot resolve them from another object.
+through 10 record DATA alignment. Version 5 introduced static RAM; version 6
+adds its explicit alignment; version 7 adds optional bitmap host metadata and
+remains the default writer format. Versions 8/9 carry placement/stack proof
+markers; version 10 adds short RAM images, symbols and relocations. The reader
+accepts versions 3–10. Ordinary RAM is allocated separately from `--ram-origin`
+in the near RAM bank; short RAM is placed from `$0002` in that bank. Optional
+startup zeroes/initializes both regions. Padding is included in each
+symbol/relocation base. Internal names are object-scoped across CODE, DATA, RAM
+and short RAM; external lookup cannot resolve them from another object.
 Selected bitmap profiles must agree across objects. The linker validates their
 framebuffer reservations against RAM payloads, static data and initial stack
 placement, and includes known framebuffer boundaries in stack-floor checks.
@@ -330,6 +338,66 @@ owned by the stack frame, `R12`/`R13` are reserved for hardware loops, `R14`
 is the ROM address register, and `R15` is the program counter. Calls within a
 plot context additionally save and restore R1/R2; far return registers remain
 intact during cleanup.
+
+At O2/Os the global allocator may also give a scalar value the body-local use
+of `R11` between the prologue save and the epilogue restore, except in
+functions with software division (shared divmod kernels `LINK` without saving
+allocated homes). A value in `R11` that is live across a call is saved like any
+caller-saved home. `R12`/`R13` are never allocated: they must survive to every
+`STOP`, including shared fault islands. The externally visible ABI is unchanged.
+
+Also at O2/Os, an `internal` function whose address is never taken and whose
+one to four parameters are one-word scalars or near pointers, read only by
+loads at the start of an entry block that nothing branches back to, receives
+them in `R5`, `R7`, `R8` and `R4` (in parameter order) instead of a stack
+argument area. Every caller is in the same module, so both sides change
+together. The callee copies them to their allocated homes before its first
+instruction; the caller fills them after its live-register saves (computed
+arguments are parked on the stack first, register homes move in one parallel
+copy, frame-resident values load directly, literals last). These registers
+are part of the callee's clobber set, and its checked prologue omits the
+parameter-area SP ceiling guard, which can no longer fail. Exported,
+address-taken, larger or far-pointer signatures keep the stack convention.
+
+Under `--static-stack-proof` (runtime-initialized `main`), in a unit that
+already owns static RAM, a function that can never be active twice (its
+address is never taken, it is on no call cycle, and no path from it calls
+outside the unit) keeps its locals, spills and division pairs in a compiled,
+static frame instead of on the stack. The layout is unchanged (same slots and
+alignment padding, even size); only the base becomes a link-time RAM address
+(`IWT R3/R0, #frame+slot` instead of `FP + displacement`). Frames are placed
+as a compiled stack: each starts above every static frame that can be active
+with it on any call path, so siblings share RAM. The frames are part of the
+unit's zero-initialized static RAM image and use the static-RAM nonnull
+marker. Stack-passed parameters are unchanged.
+
+At O2/Os a function other than `main` with no stack-passed parameters and no
+FP-relative frame (none at all, or a static one) is frameless: it saves only
+`R11`, never touches `R9`, and returns without `SP := FP` (every return is
+balanced: callers clean up arguments and the IR verifier closes each
+hardware-loop save first). `main` keeps its frame because its `STOP` state
+includes `SP` and the `FP + 4` reload of `R11`. A frameless function that is
+also `internal` and static-frame eligible may allocate `R9` as a last-resort
+value register. All of its callers are in the module and see `R9` in its
+call-clobber mask, which propagates only through such functions: any other
+caller (one with a frame, such as `main`, or exported) pushes `R9` around a
+call whose callee may write it, so `R9` stays callee-preserved at the ABI.
+
+With `--short-ram <bytes>` (GSU-only, requires `--static-stack-proof`, an even
+claim of 0–510 bytes; manifest `short_ram = true` under `[target.gsu]`),
+the word slots of static frames that every emitter addresses directly, the
+non-far spill homes and divmod components, live in the short RAM window
+`$0002-$01FF` (see [object format](object-format.md)). They are accessed with
+`LMS Rn, (slot)` / `SMS (slot), Rn` (3 bytes, any register, R3 untouched)
+instead of `IWT R3, #slot` plus `LDW`/`STW` with its `TO`/`FROM` (4-5 bytes);
+spilled register arguments and regional loop values load straight into their
+registers. Like `LDW`/`STW`, `LMS`/`SMS` set the latch `SBK` stores back to.
+Far-pointer spills (stepped by `INC R3`) and arrays stay in ordinary static
+RAM. Each function's short slots form a second compiled stack; functions are
+admitted in emission order while their summed sizes fit the claimed bytes.
+A manifest build divides the 510-byte window evenly among its implementation
+units. The project must leave `$0000-$01FF` of its data bank to the compiler:
+the bitmap framebuffer therefore starts at `$0400` or above.
 
 Far data accesses select ROMBR/RAMBR temporarily and restore the link-configured
 near bank immediately after access, before spill/stack traffic. Checks enforce

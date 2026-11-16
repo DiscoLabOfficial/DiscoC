@@ -14,4 +14,6 @@ public:
     static void run(IRModule& module, const std::map<std::string, Analyzer::LocalSymbolTable>& locals,
                     OptimizationLevel policy = OptimizationLevel::O2,
                     IRCompactionPolicy compaction = IRCompactionPolicy::Enabled);
+    // Drops non-exported functions that no remaining call or address names.
+    static void removeDeadInternalFunctions(IRModule& module);
 };

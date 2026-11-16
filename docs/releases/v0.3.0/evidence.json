@@ -1,0 +1,1846 @@
+{
+  "schema": 1,
+  "version": "0.3.0",
+  "date": "2026-11-16",
+  "status": "unpublished-working-tree-preparation",
+  "source": {
+    "base_commit": "60e83ceb9b1a9788d3d22a604504abf6b5f11110",
+    "final_commit": null,
+    "source_clean": false,
+    "input_manifest": {
+      "path": "docs/releases/v0.3.0/source-inputs.sha256",
+      "sha256": "406b590c386ea0a7b1e70b59b508e403d4ee97a0b155755656b581030edfea70"
+    },
+    "input_file_count": 614,
+    "manifest_scope": "Tracked files under the listed build/test roots, excluding Markdown and images, plus untracked src/GSUStaticStackProof.hpp; exact on-disk bytes.",
+    "manifest_roots": [
+      "CMakeLists.txt",
+      "CMakePresets.json",
+      "Makefile",
+      "build.sh",
+      "build.ps1",
+      "build.cmd",
+      "cmake",
+      "src",
+      "tests",
+      "benchmarks",
+      "examples",
+      "lib"
+    ],
+    "no_git_stage_commit_tag_or_push_performed": true
+  },
+  "environment": {
+    "os": "Linux",
+    "kernel": "7.2.15+deb14-amd64",
+    "architecture": "x86_64",
+    "compiler": "c++ (Debian 16.2.0-4) 16.2.0",
+    "cmake": "cmake version 4.3.4",
+    "ninja": "1.13.2",
+    "cxx_standard": 23,
+    "prerelease_suffix": ""
+  },
+  "tools": [
+    {
+      "path": "build/release-v0.3.0-preparation/bin/discc",
+      "sha256": "84694b8e01a062721a9cf314ea386452a4411bbb1e732053b639fd83f685f7ac"
+    },
+    {
+      "path": "build/release-v0.3.0-preparation/bin/discas",
+      "sha256": "affd780de1ad62c72cb8180b63cab2dd67c7861c6e28d08833d90cacf5e56466"
+    },
+    {
+      "path": "build/release-v0.3.0-preparation/bin/discld",
+      "sha256": "ff44db95c73df961a73e557bce35955273a02a8f3d4d81d91423deea171e708b"
+    },
+    {
+      "path": "build/release-v0.3.0-preparation/bin/disco_gsu_benchmarks",
+      "sha256": "5a626ff27ef2d0ce42995ab7f32661aaa3c3a366c6b3544cb5a47f497ad08bf1"
+    },
+    {
+      "path": "mesen/Mesen",
+      "sha256": "64bc63dc04ae9dfe78fc6089155d5321b68fd4e5198b3c973a80532a8e285334"
+    },
+    {
+      "path": "mesen/MesenCore.so",
+      "sha256": "f45cd3fd53d48176f66a1d2ff9713394e4428fae98bee53df69bed5a442e7e79"
+    },
+    {
+      "path": "/usr/bin/c++",
+      "sha256": "e40e37d9e53a27eac43728d30cb97de84145d0d27a693958b797f3725768dec7"
+    },
+    {
+      "path": "/usr/bin/cmake",
+      "sha256": "af6b86083190fa07acc40b3329c6a7c0489c97f84b420fef795c795828368527"
+    },
+    {
+      "path": "/usr/bin/ninja",
+      "sha256": "5b4ca0a4aa1a83db4dccdf3e375c0b4b44cd907cd17546d51fda59ecffec3e16"
+    },
+    {
+      "path": "/usr/local/bin/wla-65816",
+      "sha256": "27ebbd7d39bf4312daf39fe34cab0f2339776daec7a2ead5669d637171982258"
+    },
+    {
+      "path": "/usr/local/bin/wlalink",
+      "sha256": "7a0f494da834c352b359aa5e70249c5be120d06994e7d938f97ffb975cbe3a10"
+    }
+  ],
+  "release_build": {
+    "directory": "build/release-v0.3.0-preparation",
+    "fresh": true,
+    "configuration": "Release",
+    "build_steps": 102,
+    "compiler_warning_occurrences": 0,
+    "log": {
+      "path": "build/release-v0.3.0-preparation/build.log",
+      "sha256": "27af30ecd0469e8b85bb0bfaed785e2a2ad1d977ea512daae0a9890294677431"
+    }
+  },
+  "tests": {
+    "release": {
+      "tests": 387,
+      "passed": 387,
+      "failures": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "seconds": 48.18,
+      "options": "--parallel 4 --output-on-failure",
+      "log": {
+        "path": "build/release-v0.3.0-preparation/ctest.log",
+        "sha256": "ff1de716201ca4ba55dbb2aa2b31cfa433cd251f46a5031af54833605ea6be0d"
+      },
+      "junit": {
+        "path": "build/release-v0.3.0-preparation/ctest.xml",
+        "sha256": "4c4f2e571fb24a10ef7baa1039f6b350eb9d9dc4851ce11e66bd44580fa14af4"
+      }
+    },
+    "asan_ubsan_focused": {
+      "tests": 14,
+      "passed": 14,
+      "failures": 0,
+      "disabled": 0,
+      "skipped": 0,
+      "seconds": 28.25,
+      "options": "ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1; --parallel 4 --output-on-failure",
+      "log": {
+        "path": "build/linux-asan/v0.3.0-focused.log",
+        "sha256": "693e67ba936fd4a19ee160bd4a0041117ed7253716ac39ccf3c594f9f11fa07c"
+      },
+      "junit": {
+        "path": "build/linux-asan/v0.3.0-focused.xml",
+        "sha256": "60f3a22b4bf009e1c847919ca1d0a64e3eb23d6b1d692a77fd5775c71d99f414"
+      },
+      "test_names": [
+        "require_no_spills_cli",
+        "object_file_hardening",
+        "linker_hardening",
+        "ir_global_optimizer",
+        "gsu_machine_scheduler",
+        "gsu_size_optimization_unit",
+        "project_manifest",
+        "assembly_export",
+        "project_build",
+        "project_configuration",
+        "project_diagnostics",
+        "gsu_global_optimization",
+        "gsu_checked_proofs_execution",
+        "gsu_size_policy_execution"
+      ]
+    },
+    "asan_ubsan_incomplete_full": {
+      "schema": 1,
+      "configuration": "Debug",
+      "build_type": "Debug",
+      "sanitizers": [
+        "address",
+        "undefined"
+      ],
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=0",
+        "UBSAN_OPTIONS": "halt_on_error=1"
+      },
+      "status": "incomplete",
+      "reason": "Full sanitizer run interrupted after successful separate Release full coverage; remaining focused sanitizer checks are recorded separately.",
+      "exit_code": 130,
+      "planned_tests": 387,
+      "completed_tests": 21,
+      "passed": 21,
+      "failures": 0,
+      "tests": [
+        {
+          "name": "gem_chess_raster_private_Os",
+          "status": "passed",
+          "seconds": 72.93
+        },
+        {
+          "name": "os_graphics_rotation",
+          "status": "passed",
+          "seconds": 48.38
+        },
+        {
+          "name": "gsu_seven_backend_unit",
+          "status": "passed",
+          "seconds": 81.93
+        },
+        {
+          "name": "gem_chess_paint_Os",
+          "status": "passed",
+          "seconds": 237.26
+        },
+        {
+          "name": "os_language_fixed_point",
+          "status": "passed",
+          "seconds": 84.87
+        },
+        {
+          "name": "os_graphics_interactive",
+          "status": "passed",
+          "seconds": 293.23
+        },
+        {
+          "name": "gsu_size_optimization_execution",
+          "status": "passed",
+          "seconds": 68.45
+        },
+        {
+          "name": "o2_graphics_interactive",
+          "status": "passed",
+          "seconds": 33.35
+        },
+        {
+          "name": "gem_chess_raster_Os",
+          "status": "passed",
+          "seconds": 50.81
+        },
+        {
+          "name": "gsu_checked_proofs",
+          "status": "passed",
+          "seconds": 65.16
+        },
+        {
+          "name": "graphics_rotation",
+          "status": "passed",
+          "seconds": 39.32
+        },
+        {
+          "name": "gsu_differential_Os_case_11",
+          "status": "passed",
+          "seconds": 35.89
+        },
+        {
+          "name": "gsu_differential_Os_case_12",
+          "status": "passed",
+          "seconds": 35.62
+        },
+        {
+          "name": "gsu_differential_Os_case_10",
+          "status": "passed",
+          "seconds": 34.23
+        },
+        {
+          "name": "gsu_differential_Os_case_5",
+          "status": "passed",
+          "seconds": 34.31
+        },
+        {
+          "name": "gsu_differential_Os_case_13",
+          "status": "passed",
+          "seconds": 34.41
+        },
+        {
+          "name": "gsu_differential_Os_case_7",
+          "status": "passed",
+          "seconds": 34.52
+        },
+        {
+          "name": "gsu_differential_Os_case_4",
+          "status": "passed",
+          "seconds": 34.41
+        },
+        {
+          "name": "gsu_differential_Os_case_14",
+          "status": "passed",
+          "seconds": 34.63
+        },
+        {
+          "name": "gsu_differential_Os_case_6",
+          "status": "passed",
+          "seconds": 34.12
+        },
+        {
+          "name": "gsu_differential_Os_case_9",
+          "status": "passed",
+          "seconds": 34.7
+        }
+      ],
+      "unfinished_count": 366,
+      "unfinished_tests": [
+        {
+          "name": "build_target_parity",
+          "status": "not_started"
+        },
+        {
+          "name": "build_target_parity_regressions",
+          "status": "not_started"
+        },
+        {
+          "name": "require_no_spills_cli",
+          "status": "not_started"
+        },
+        {
+          "name": "object_file_hardening",
+          "status": "not_started"
+        },
+        {
+          "name": "linker_hardening",
+          "status": "not_started"
+        },
+        {
+          "name": "ir_verifier",
+          "status": "not_started"
+        },
+        {
+          "name": "ir_local_optimizer",
+          "status": "not_started"
+        },
+        {
+          "name": "ir_global_optimizer",
+          "status": "not_started"
+        },
+        {
+          "name": "ir_value_optimizer",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_cost_model",
+          "status": "not_started"
+        },
+        {
+          "name": "ir_conditional_optimizer",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_machine_scheduler",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_size_optimization_unit",
+          "status": "not_started"
+        },
+        {
+          "name": "ir_storage_optimizer_unit",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_compaction_unit",
+          "status": "interrupted_while_running"
+        },
+        {
+          "name": "linear_scan_allocator",
+          "status": "not_started"
+        },
+        {
+          "name": "target_foundation",
+          "status": "not_started"
+        },
+        {
+          "name": "language_contract",
+          "status": "not_started"
+        },
+        {
+          "name": "project_manifest",
+          "status": "not_started"
+        },
+        {
+          "name": "module_loader",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_execution_model",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_oracle",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_0",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_1",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_2",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_3",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_4",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_5",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_6",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_7",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_8",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_9",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_10",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_11",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_12",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_13",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_14",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_15",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_16",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_17",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_18",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_19",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_20",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_21",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_22",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_23",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_24",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_25",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_26",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_27",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_28",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_29",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_30",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O0_case_31",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_0",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_1",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_2",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_3",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_4",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_5",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_6",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_7",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_8",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_9",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_10",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_11",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_12",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_13",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_14",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_15",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_16",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_17",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_18",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_19",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_20",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_21",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_22",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_23",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_24",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_25",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_26",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_27",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_28",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_29",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_30",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O1_case_31",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_0",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_1",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_2",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_3",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_4",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_5",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_6",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_7",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_8",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_9",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_10",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_11",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_12",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_13",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_14",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_15",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_16",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_17",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_18",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_19",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_20",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_21",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_22",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_23",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_24",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_25",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_26",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_27",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_28",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_29",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_30",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_O2_case_31",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_0",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_1",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_2",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_3",
+          "status": "interrupted_while_running"
+        },
+        {
+          "name": "gsu_differential_Os_case_8",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_15",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_16",
+          "status": "interrupted_while_running"
+        },
+        {
+          "name": "gsu_differential_Os_case_17",
+          "status": "interrupted_while_running"
+        },
+        {
+          "name": "gsu_differential_Os_case_18",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_19",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_20",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_21",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_22",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_23",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_24",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_25",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_26",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_27",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_28",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_29",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_30",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_Os_case_31",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_differential_reporting",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_memory_map",
+          "status": "not_started"
+        },
+        {
+          "name": "assembly_export",
+          "status": "not_started"
+        },
+        {
+          "name": "ir_and_cfg",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_local_optimization",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_selection_optimization",
+          "status": "not_started"
+        },
+        {
+          "name": "shadowing",
+          "status": "not_started"
+        },
+        {
+          "name": "diagnostics",
+          "status": "not_started"
+        },
+        {
+          "name": "language_diagnostics",
+          "status": "not_started"
+        },
+        {
+          "name": "multifile",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_call_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_register_moves",
+          "status": "not_started"
+        },
+        {
+          "name": "switch_abi",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_contributor_correctness",
+          "status": "not_started"
+        },
+        {
+          "name": "backend_equivalence",
+          "status": "not_started"
+        },
+        {
+          "name": "data_relocation",
+          "status": "not_started"
+        },
+        {
+          "name": "branch_relaxation",
+          "status": "not_started"
+        },
+        {
+          "name": "pointer_width",
+          "status": "not_started"
+        },
+        {
+          "name": "comparison_semantics",
+          "status": "not_started"
+        },
+        {
+          "name": "optimizer_preservation",
+          "status": "not_started"
+        },
+        {
+          "name": "ir_branch_relaxation",
+          "status": "not_started"
+        },
+        {
+          "name": "ir_switch_relaxation",
+          "status": "not_started"
+        },
+        {
+          "name": "feature_examples",
+          "status": "not_started"
+        },
+        {
+          "name": "spc700_target",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_mapping",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_execution_memory",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_runtime_loading",
+          "status": "not_started"
+        },
+        {
+          "name": "pointer_far_abi",
+          "status": "not_started"
+        },
+        {
+          "name": "pointer_nested",
+          "status": "not_started"
+        },
+        {
+          "name": "pointer_arithmetic",
+          "status": "not_started"
+        },
+        {
+          "name": "pointer_rom",
+          "status": "not_started"
+        },
+        {
+          "name": "pointer_guards",
+          "status": "not_started"
+        },
+        {
+          "name": "pointer_diagnostics",
+          "status": "not_started"
+        },
+        {
+          "name": "pointer_multifile",
+          "status": "not_started"
+        },
+        {
+          "name": "pointer_alignment",
+          "status": "not_started"
+        },
+        {
+          "name": "language_qualifiers",
+          "status": "not_started"
+        },
+        {
+          "name": "language_numeric",
+          "status": "not_started"
+        },
+        {
+          "name": "language_operators",
+          "status": "not_started"
+        },
+        {
+          "name": "language_aggregates",
+          "status": "not_started"
+        },
+        {
+          "name": "language_globals",
+          "status": "not_started"
+        },
+        {
+          "name": "language_linkage",
+          "status": "not_started"
+        },
+        {
+          "name": "language_plot",
+          "status": "not_started"
+        },
+        {
+          "name": "graphics_state",
+          "status": "not_started"
+        },
+        {
+          "name": "graphics_colors",
+          "status": "not_started"
+        },
+        {
+          "name": "graphics_bitmaps",
+          "status": "not_started"
+        },
+        {
+          "name": "graphics_triangle",
+          "status": "not_started"
+        },
+        {
+          "name": "graphics_scaling",
+          "status": "not_started"
+        },
+        {
+          "name": "graphics_interactive",
+          "status": "not_started"
+        },
+        {
+          "name": "graphics_diagnostics",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_types",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_conversions",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_constants",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_layout",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_arrays",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_pointers",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_control-flow",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_plot",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_attributes",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_strings",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_qualifiers",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_far",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_volatile",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_structs",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_globals",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_imports",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_bitmap",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_updates",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_modules",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_configuration",
+          "status": "not_started"
+        },
+        {
+          "name": "language_extensions_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "language_control_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "language_arrays_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "language_modules_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "language_warnings",
+          "status": "not_started"
+        },
+        {
+          "name": "language_cli_configuration",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_aliases",
+          "status": "not_started"
+        },
+        {
+          "name": "language_conformance_cfg",
+          "status": "not_started"
+        },
+        {
+          "name": "language_fixed_point",
+          "status": "not_started"
+        },
+        {
+          "name": "language_memory_library",
+          "status": "not_started"
+        },
+        {
+          "name": "language_target_libraries",
+          "status": "not_started"
+        },
+        {
+          "name": "project_build",
+          "status": "not_started"
+        },
+        {
+          "name": "project_configuration",
+          "status": "not_started"
+        },
+        {
+          "name": "project_diagnostics",
+          "status": "not_started"
+        },
+        {
+          "name": "project_targets",
+          "status": "not_started"
+        },
+        {
+          "name": "module_imports",
+          "status": "not_started"
+        },
+        {
+          "name": "module_import_paths",
+          "status": "not_started"
+        },
+        {
+          "name": "module_import_diagnostics",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_optimization",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_global_optimization",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_sccp",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_checked_proofs_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_size_policy_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_value_optimization_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "gsu_sbk",
+          "status": "not_started"
+        },
+        {
+          "name": "gem_chess_raster_O2",
+          "status": "not_started"
+        },
+        {
+          "name": "gem_chess_raster_private_O2",
+          "status": "not_started"
+        },
+        {
+          "name": "gem_chess_paint_O2",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_gsu_call_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_gsu_call_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "os_gsu_call_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_switch_abi",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_switch_abi",
+          "status": "not_started"
+        },
+        {
+          "name": "os_switch_abi",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_gsu_contributor_correctness",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_gsu_contributor_correctness",
+          "status": "not_started"
+        },
+        {
+          "name": "os_gsu_contributor_correctness",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_comparison_semantics",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_comparison_semantics",
+          "status": "not_started"
+        },
+        {
+          "name": "os_comparison_semantics",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_ir_branch_relaxation",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_ir_branch_relaxation",
+          "status": "not_started"
+        },
+        {
+          "name": "os_ir_branch_relaxation",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_ir_switch_relaxation",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_ir_switch_relaxation",
+          "status": "not_started"
+        },
+        {
+          "name": "os_ir_switch_relaxation",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_pointer_far_abi",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_pointer_far_abi",
+          "status": "not_started"
+        },
+        {
+          "name": "os_pointer_far_abi",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_pointer_nested",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_pointer_nested",
+          "status": "not_started"
+        },
+        {
+          "name": "os_pointer_nested",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_pointer_arithmetic",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_pointer_arithmetic",
+          "status": "not_started"
+        },
+        {
+          "name": "os_pointer_arithmetic",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_pointer_rom",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_pointer_rom",
+          "status": "not_started"
+        },
+        {
+          "name": "os_pointer_rom",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_pointer_guards",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_pointer_guards",
+          "status": "not_started"
+        },
+        {
+          "name": "os_pointer_guards",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_pointer_multifile",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_pointer_multifile",
+          "status": "not_started"
+        },
+        {
+          "name": "os_pointer_multifile",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_pointer_alignment",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_pointer_alignment",
+          "status": "not_started"
+        },
+        {
+          "name": "os_pointer_alignment",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_qualifiers",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_qualifiers",
+          "status": "not_started"
+        },
+        {
+          "name": "os_language_qualifiers",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_numeric",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_numeric",
+          "status": "not_started"
+        },
+        {
+          "name": "os_language_numeric",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_operators",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_operators",
+          "status": "not_started"
+        },
+        {
+          "name": "os_language_operators",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_globals",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_globals",
+          "status": "not_started"
+        },
+        {
+          "name": "os_language_globals",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_linkage",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_linkage",
+          "status": "not_started"
+        },
+        {
+          "name": "os_language_linkage",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_extensions_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_extensions_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "os_language_extensions_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_control_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_control_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "os_language_control_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_arrays_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_arrays_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "os_language_arrays_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_modules_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_modules_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "os_language_modules_execution",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_fixed_point",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_fixed_point",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_language_memory_library",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_language_memory_library",
+          "status": "not_started"
+        },
+        {
+          "name": "os_language_memory_library",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_graphics_state",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_graphics_state",
+          "status": "not_started"
+        },
+        {
+          "name": "os_graphics_state",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_graphics_colors",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_graphics_colors",
+          "status": "not_started"
+        },
+        {
+          "name": "os_graphics_colors",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_graphics_bitmaps",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_graphics_bitmaps",
+          "status": "not_started"
+        },
+        {
+          "name": "os_graphics_bitmaps",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_graphics_triangle",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_graphics_triangle",
+          "status": "not_started"
+        },
+        {
+          "name": "os_graphics_triangle",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_graphics_rotation",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_graphics_rotation",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_graphics_scaling",
+          "status": "not_started"
+        },
+        {
+          "name": "o2_graphics_scaling",
+          "status": "not_started"
+        },
+        {
+          "name": "os_graphics_scaling",
+          "status": "not_started"
+        },
+        {
+          "name": "optimized_graphics_interactive",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_counters",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_value_optimizations",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_Os_triangle_fill",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_triangle_fill",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O1_triangle_fill",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O2_triangle_fill",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_Os_horizontal_span",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_horizontal_span",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O1_horizontal_span",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O2_horizontal_span",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_Os_rom_palette_plot",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_rom_palette_plot",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O1_rom_palette_plot",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O2_rom_palette_plot",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_Os_ram_palette_plot",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_ram_palette_plot",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O1_ram_palette_plot",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O2_ram_palette_plot",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_Os_memcpy",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_memcpy",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O1_memcpy",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O2_memcpy",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_Os_function_call",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_function_call",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O1_function_call",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O2_function_call",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_Os_switch_dense",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_switch_dense",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O1_switch_dense",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O2_switch_dense",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_Os_switch_sparse",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_switch_sparse",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O1_switch_sparse",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O2_switch_sparse",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_Os_arithmetic",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_arithmetic",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O1_arithmetic",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_O2_arithmetic",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_report_contract",
+          "status": "not_started"
+        },
+        {
+          "name": "benchmark_profile_contract",
+          "status": "not_started"
+        }
+      ],
+      "log_path": "/home/disco/Projetos/DiscoC/build/linux-asan/v0.3.0-ctest-partial.log",
+      "log_sha256": "f6e1683fcb46c770d860cc82cf8268792bbaca7f086e6b34af00599fd8010f8d",
+      "junit_path": null,
+      "junit_note": "CTest was interrupted before it produced final JUnit/output-log; original LastTest.log temporary output was preserved.",
+      "initial_attempt": {
+        "status": "incomplete",
+        "exit_code": 130,
+        "completed_tests": 1,
+        "passed": 0,
+        "failures": 1,
+        "failed_test": "gem_chess_paint_Os",
+        "failed_seconds": 106.29,
+        "reason": "LeakSanitizer fatal: does not work under ptrace; environment failure, not a detected source leak. Retried with leak detection disabled.",
+        "log_path": "/home/disco/Projetos/DiscoC/build/linux-asan/v0.3.0-ctest-first-interrupted.log",
+        "log_sha256": "11321c1de882cf58cc1c708cd90bc91c28aaf35acc412ae0727df502a0ea82b3",
+        "junit_path": null
+      },
+      "coverage_limitations": [
+        "LeakSanitizer disabled because the execution environment uses ptrace.",
+        "Full sanitizer suite incomplete; 387/387 is the separate Release result.",
+        "gsu_compaction_unit did not complete under sanitizers and was not repeated."
+      ]
+    }
+  },
+  "sanitizer_limit": {
+    "initial_attempt": "Interrupted after LeakSanitizer reported a fatal ptrace incompatibility; not a leak finding.",
+    "initial_exit_code": 130,
+    "initial_log": {
+      "path": "build/linux-asan/v0.3.0-ctest-first-interrupted.log",
+      "sha256": "11321c1de882cf58cc1c708cd90bc91c28aaf35acc412ae0727df502a0ea82b3"
+    },
+    "retry": "ASan/UBSan enabled; leak detection disabled. This run does not certify LeakSanitizer coverage.",
+    "build": "Existing incremental Debug ASan/UBSan directory, reconfigured to 0.3.0; not a fresh Debug build.",
+    "full_suite": "The leak-disabled full retry was stopped after its recorded completed tests; focused relevant regressions were then completed separately. No full sanitizer-suite pass is claimed."
+  },
+  "functional_benchmarks": {
+    "cases_passed": 36,
+    "reports": [
+      {
+        "optimization": "O0",
+        "cases_passed": 9,
+        "json": {
+          "path": "docs/releases/v0.3.0/raw/opcodes-O0.json",
+          "sha256": "5e15d458fc7bd96920a9cd45c1866965bddeffe973f2bc230192cd90de01a78e"
+        },
+        "csv": {
+          "path": "docs/releases/v0.3.0/raw/opcodes-O0.csv",
+          "sha256": "ea0df8080e64317bd5d5a1bdce5506495c90257c91cf208f769591a94d20e101"
+        }
+      },
+      {
+        "optimization": "O1",
+        "cases_passed": 9,
+        "json": {
+          "path": "docs/releases/v0.3.0/raw/opcodes-O1.json",
+          "sha256": "bfdb8251543688e995c6f8292d6a68f9c91190f2a35c10907dcc129ca961a201"
+        },
+        "csv": {
+          "path": "docs/releases/v0.3.0/raw/opcodes-O1.csv",
+          "sha256": "69b9975b364629a5675a6e8ed5b639f16a60a2470b1b009bd9f1deea186601f1"
+        }
+      },
+      {
+        "optimization": "O2",
+        "cases_passed": 9,
+        "json": {
+          "path": "docs/releases/v0.3.0/raw/opcodes-O2.json",
+          "sha256": "de2ae9fef061ba5ba92403271b32c46d6528d80f40407cc7be5ff6f4aa70e7c6"
+        },
+        "csv": {
+          "path": "docs/releases/v0.3.0/raw/opcodes-O2.csv",
+          "sha256": "239ec6b781d2f3d48a35d53323395dec3f3b7c8c2bd1eddc6068a942e42112d1"
+        }
+      },
+      {
+        "optimization": "Os",
+        "cases_passed": 9,
+        "json": {
+          "path": "docs/releases/v0.3.0/raw/opcodes-Os.json",
+          "sha256": "8986d89a3c4ab21744ae7e98c18bb9bb1ffeb50d80d476b432c0b04271135e0a"
+        },
+        "csv": {
+          "path": "docs/releases/v0.3.0/raw/opcodes-Os.csv",
+          "sha256": "9c1d65c737d13281d88d64d6a75a6bdc178faf8ae72930e18d99e6ee77fa600d"
+        }
+      }
+    ],
+    "combined_csv": {
+      "path": "docs/releases/v0.3.0/benchmark-results.csv",
+      "sha256": "72dd3040b62a117738ab99c7219f3ddb29159db9367d981d99cfefac61125ab3"
+    },
+    "measurement": "functional opcodes and bytes; no emulator timing matrix"
+  },
+  "demos": {
+    "path": "docs/releases/v0.3.0/demo-results.json",
+    "sha256": "9d36afa8cd9043f5d33314906e182589d7abfd2a2f336783fff3c8aabbde32e7"
+  },
+  "limits": [
+    "No final clean commit/tag validation or binary package.",
+    "No new hosted CI, Windows, macOS or DOS build/runtime result.",
+    "No physical-hardware validation or exhaustive fuzzing.",
+    "No fresh nine-workload emulator cycle comparison."
+  ]
+}

@@ -119,7 +119,7 @@ ClearWorkRam:
   bne ClearWorkRam
   ldx #0
 ClearFramebuffer:
-  sta.l $700000,x
+  sta.l FRAMEBUFFER_ADDRESS,x
   inx
   inx
   cpx #FRAMEBUFFER_SIZE

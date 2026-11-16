@@ -14,6 +14,7 @@
 #include "ASTPrinter.hpp"
 #include "IRCodeGenerator.hpp"
 #include "IRGlobalOptimizer.hpp"
+#include "ABI.hpp"
 
 namespace {
 void usage() {
@@ -26,6 +27,10 @@ void usage() {
         "  --check                   Analyze and verify IR without emitting code\n"
         "  --require-no-spills       Reject GSU compiler-generated spill homes, including in --check/--emit-ir\n"
         "                            Source units only, not prebuilt objects; local/ABI storage is allowed\n"
+        "  --static-stack-proof      O2/Os: main is entered only by the runtime; omit stack guards the linker\n"
+        "                            proves unfailing (implied by a manifest with runtime initialization)\n"
+        "  --short-ram <bytes>       With --static-stack-proof: claim up to <bytes> (even, <= 510) of the\n"
+        "                            RAM window $0002-$01FF for static-frame word slots, addressed by LMS/SMS\n"
         "  -O | -O1                  Optimize GSU code (default -O0 baseline)\n"
         "  -O0                       Retain baseline GSU code generation\n"
         "  -O2                       CFG/SSA, global registers, loops and bounded inlining\n"
@@ -35,6 +40,18 @@ void usage() {
         "  --execution-memory <rom|ram>  Select default execution region\n"
         "  --origin <24-bit-address>     Explicit fixed link origin\n"
         "  -Wall | -Werror | -Wno-<category> | -W<category>\n";
+}
+std::uint16_t shortRamArgument(const std::string& value) {
+    std::size_t consumed = 0;
+    unsigned long long number = 0;
+    try {
+        if (value.empty() || value.front() == '-' || value.front() == '+') throw std::invalid_argument(value);
+        number = std::stoull(value, &consumed, 0);
+    } catch (const std::logic_error&) { consumed = 0; }
+    if (consumed == 0 || consumed != value.size() || number > GSUAbi::ShortRamCapacity || (number & 1u))
+        throw std::runtime_error("--short-ram expects an even byte count of at most " +
+            std::to_string(GSUAbi::ShortRamCapacity) + ".");
+    return static_cast<std::uint16_t>(number);
 }
 std::uint32_t addressArgument(const std::string& value) {
     std::size_t consumed = 0;
@@ -91,6 +108,8 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
             else if (argument == "--emit-asm") emit_asm = true;
             else if (argument == "--check") check = true;
             else if (argument == "--require-no-spills") config.require_no_spills = true;
+            else if (argument == "--static-stack-proof") config.static_stack_proof = true;
+            else if (argument == "--short-ram") config.short_ram_bytes = shortRamArgument(next());
             else if (argument == "-O" || argument == "-O1") config.optimization = OptimizationLevel::O1;
             else if (argument == "-O0") config.optimization = OptimizationLevel::Baseline;
             else if (argument == "-O2") config.optimization = OptimizationLevel::O2;
@@ -114,6 +133,10 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
         if (input.empty()) throw std::runtime_error("No input file specified.");
         if (config.require_no_spills && emit_ast)
             throw std::runtime_error("--require-no-spills is unsupported with --emit-ast; use --check or --emit-ir for allocation validation.");
+        if (config.short_ram_bytes && config.target != TargetKind::GSU)
+            throw std::runtime_error("--short-ram is GSU-only.");
+        if (config.short_ram_bytes && !config.static_stack_proof)
+            throw std::runtime_error("--short-ram places static-frame slots and requires --static-stack-proof.");
         if (config.require_no_spills && config.target != TargetKind::GSU)
             throw std::runtime_error("Target 'spc700' does not support --require-no-spills: no code-generation backend is available.");
         applyPlacement(config, placement);

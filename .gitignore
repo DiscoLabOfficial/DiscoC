@@ -33,6 +33,8 @@
 
 # Folders
 build/
+mesen/
+Luna_Emulator/
 
 # CMake Files
 cmake-build-*/

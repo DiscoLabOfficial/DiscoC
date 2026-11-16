@@ -28,7 +28,7 @@ emu.addMemoryCallback(guard(function()
         emu.read16(0xF004,emu.memType.gsuWorkRam)==5 and
         emu.read16(0xF006,emu.memType.gsuWorkRam)==12,"pose changed")
     active={first=value(s,"cycleCount"),mode=emu.read16(0xF008,emu.memType.gsuWorkRam)}
-end),emu.callbackType.exec,0x708000,0x708000,emu.cpuType.gsu,emu.memType.gsuMemory)
+end),emu.callbackType.exec,config.origin,config.origin,emu.cpuType.gsu,emu.memType.gsuMemory)
 emu.addMemoryCallback(guard(function(address,opcode)
     assert(active and opcode==0,"unexpected STOP")
     local s=state()

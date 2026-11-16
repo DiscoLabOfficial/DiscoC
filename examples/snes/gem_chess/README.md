@@ -42,10 +42,9 @@ The default is **O2, 256×192 bitmap, 4bpp, NTSC, CLSR=1 (~21.477 MHz), normal
 multiply timing**. The PPU presents this full scene through BG1, not the two
 small OBJ panels used by the separate interactive-shapes demo. There is no
 emulator overclocking. `-DOPTIMIZATION=s` requests the size-oriented pipeline;
-the checked linker must still accept its code/stack placement. Local Mesen
-runtime verification covers the current O2 source as recorded below. Os passes
-current compile/link/assembly-equivalence checks, but full-scene Os Mesen runtime
-has not been run.
+the checked linker must still accept its code/stack placement. Dated emulator
+runs are recorded below; the [v0.3.0 validation record](../../../docs/releases/v0.3.0/validation.md)
+tracks checks performed for this release candidate and their limitations.
 
 Tool paths and output directories can be explicit; quote paths with spaces:
 
@@ -77,30 +76,60 @@ nonplanar: per-band diagonal masks select its convex hull and its triangles
 are culled independently. Two visible triangles share a fill only when their
 screen projection is convex. Planar faces use the same independent-triangle
 culling because integer perspective can fold their projection at grazing angles.
-Extra convexity determinants are computed only when both triangles are visible;
-hidden triangles need no temporary coordinate copy. Vertex coordinate offsets
-and edge differences are reused within each face.
+A piece's bands are culled in one batch before any is painted; shading is
+computed only for visible faces, and hidden triangles need no coordinate copy.
+Vertex coordinate offsets and edge differences are reused within each face.
 Crowns and the king's cross use separate convex
 parts. This is a renderer for this bounded scene, not a general intersecting-
 mesh/Z-buffer engine.
 
 World-space facet direction and slope select a five-tone material ramp.
-In-viewport clockwise convex faces seed only their vertex rows. A per-side edge
-collector writes interior boundary rows directly and groups horizontal runs,
-preserving the midpoint recurrence and its tie rule. Clipped faces and
-horizontal/point degeneracies retain the generic extrema collector and interval
-initialization. Wireframe retains the checked midpoint line renderer. Cached horizontal
-spans use `pixel;` and its hardware R1 increment; the final `flush;` commits
-pending pixel-cache data before STOP. Every render explicitly resets POR and
-clears the entire framebuffer, so camera changes cannot leave old pieces.
+In-viewport clockwise convex faces seed only their vertex rows. One edge
+collector serves both sides: left minima and negated right maxima share an
+interleaved span table, so every merge is a minimum. It writes interior boundary
+rows directly and groups horizontal runs, preserving the midpoint recurrence and
+its tie rule. Clipped faces and horizontal/point degeneracies retain the
+generic extrema collector and interval initialization. Wireframe retains the
+checked midpoint line renderer. Horizontal spans use `pixel;` and its hardware
+R1 increment; the final `flush;` commits pending pixel-cache data before STOP.
+Every render explicitly resets POR and clears the entire framebuffer, so camera
+changes cannot leave old pieces.
+
+The source is shaped around how DiscoC compiles for the GSU:
+
+- **Cache residency.** Code fetched from RAM costs about five clocks per byte;
+  code inside the 512-byte instruction cache costs one. The edge collector is
+  the only CACHE window used while faces are drawn. It is explicitly cached, so
+  it gets no automatic loop CACHE, and its callers contain no call-free loop
+  that would be auto-cached: the rasterizer's bounds/seeding is written without
+  a loop for that reason. CBR therefore stays put from edge to edge. Vertex
+  projection and band culling run as batches (`project_batch`, `cull_piece`),
+  each one window whose cold fill is repaid across six or nine vertices or a
+  whole piece's bands.
+- **Proven addresses.** Variable indices are narrowed with `(unsigned byte)` or
+  a mask that is a no-op for the scene's values. The backend then proves the
+  access in-bank and emits a raw scaled ADD instead of a checked offset. A byte
+  index needs an array of 256 entries (the proof covers its whole range),
+  hence `pts_x`/`pts_y`/`offset_x`/`offset_z`. A pointer to the cell
+  (`word* cell = &spans[i & 511]`) serves a read-modify-write with one address.
+- **Register arguments.** Internal functions with at most four word
+  parameters receive them in registers; a fifth moves all of them to the
+  stack. `paint_quad()`/`face()` take vertex pairs packed by `vertex_pair()`,
+  and `quad_cull()` reads its diagonal from `cull_bd`.
+- **Allocator budget.** A function with a plot context, multiply or hardware
+  LOOP loses R2/R4, so edge walking (no plot) and span filling (plot) are
+  separate functions. Constant `*6` compiles to LMULT; ring offsets are
+  precomputed instead.
 
 ## Safe presentation and memory
 
 | Cartridge RAM, bank `$70` | Use |
 | --- | --- |
-| `$0000..5FFF` | 24-KiB, column-major 4bpp framebuffer |
-| `$6000` upward | Fixed-origin GSU code and runtime bootstrap |
-| Above payload, below `$EFFE` | Checked descending stack and local renderer arrays |
+| `$0002..01FF` | Short RAM: hot static-frame word slots, addressed with `LMS`/`SMS` |
+| `$0400..63FF` | 24-KiB, column-major 4bpp framebuffer (SCBR 1) |
+| `$6400..CFFF` | Available fixed-origin GSU code and runtime-bootstrap region |
+| `$D000` upward | Static renderer tables (reciprocals, spans, projected vertices) |
+| Descending from `$EFFE`, above linked code and static RAM | Checked stack and local renderer arrays |
 | `$F000` | Returned primitive count |
 | `$F002/4/6/8` | Yaw, elevation, zoom and wireframe input |
 | `$F010/12/14/16` | Normalized input echoes |
@@ -108,6 +137,8 @@ clears the entire framebuffer, so camera changes cannot leave old pieces.
 
 The host obtains SCBR/SCMR/origin from final linked metadata. It checks STOP,
 R6, R0 versus the mailbox, input echoes and stack restoration before uploading.
+The linker checks code/static-RAM overlap and derives the stack floor from both
+regions; `$D000` is the start of static storage, not free stack space.
 The ROM declares 64 KiB cartridge RAM and never accesses bank `$71`.
 
 VRAM contains two 24-KiB character buffers, at bytes `$0000` and `$6000`, plus
@@ -122,6 +153,26 @@ took several seconds in the historical measurements below; input polling is
 60 Hz, but newly rendered views are not. `gem-chess-timings.csv` reports measured
 GSU opcode-to-STOP cycles/seconds separately from host publication clocks.
 It excludes DMA/presentation from the GSU sample and is **not an FPS result**.
+
+### Source rewrite snapshot (2026-11-15)
+
+Same compiler (working tree at commit `60e83ce` plus its uncommitted
+changes), same host, NTSC CLSR=1, GSU=100%, measured by `verify.lua` in Mesen
+2.2.1 over its 18 publications (15 filled, 2 wireframe and the reset view).
+Only `main.dc` differs. All ten captured views are byte-identical to the
+previous source's captures under both policies. This is a development snapshot;
+it does not establish validation of the final v0.3.0 revision.
+
+| Configuration | Payload bytes | Filled mean GSU cycles | Wireframe mean GSU cycles | Default view |
+| --- | ---: | ---: | ---: | ---: |
+| Previous source, O2 | 15,787 | 26,447,150 | 20,452,179 | 25,972,661 |
+| Rewritten source, O2 | 13,936 | 16,228,988 (-38.6%) | 14,787,104 (-27.7%) | 15,851,110 (-39.0%) |
+| Previous source, Os | 15,398 | 29,982,665 | 23,229,360 | 29,400,068 |
+| Rewritten source, Os | 13,440 | 18,076,949 (-39.7%) | 22,347,514 (-3.8%) | 17,653,952 (-40.0%) |
+
+A default filled view drops from about 1.21 s to 0.74 s of GSU time. These are
+emulator GSU timings excluding presentation, not FPS or physical-hardware
+results.
 
 ### Historical optimization snapshot (2026-10-18)
 
@@ -207,9 +258,13 @@ ignored evidence is a local development record, not published release evidence.
 
 ## Verification
 
-### Local validation snapshot (2026-10-20)
+The [v0.3.0 validation record](../../../docs/releases/v0.3.0/validation.md)
+lists the checks performed for the release candidate. The following October
+results describe an earlier renderer and toolchain.
 
-The current renderer SHA-256 is
+### Historical local validation snapshot (2026-10-20)
+
+The renderer SHA-256 for this snapshot is
 `F7E71425B8ACEC372FB62BA646AE8B68018DA586BC39DD41A5557C87A14E7745`;
 the tested Release compiler SHA-256 is
 `1FB60984D6493FECE006530C22F0E23A1139598F45A9E13B24F03686E9C278DE`.
@@ -221,7 +276,7 @@ The Mesen executable SHA-256 is
 `8EF403D6B9AF32075416193914D7993CE8480B347FE1F20A0CFD9815374933E7`,
 using the deterministic stock NTSC/CLSR=1/normal-multiply profile below.
 
-The current O2 ROM passed positive and deliberate-failure Mesen runs, matching
+That snapshot's O2 ROM passed positive and deliberate-failure Mesen runs, matching
 all ten accepted baseline BMPs, complete 24,576-byte framebuffers and primitive
 counts. Controller, STOP/ABI, VRAM/PPU and VBlank transfer checks passed. The
 confirming runs completed in 45.984 s and 2.564 s wall time with both CLI and
@@ -230,8 +285,9 @@ durations, not rendering throughput or GSU-cycle measurements.
 
 Twelve strict-allocation output-protection checks passed. The first offending
 function, `project`, reports three IR-value spill slots; this is **not** the
-whole scene's total spill count. Full-scene Os Mesen runtime remains unrun.
-Native raster coverage and complete local suite results are described in
+whole scene's total spill count. Full-scene Os Mesen runtime was unrun for this
+October snapshot; the November comparison above records a separate Os run.
+Native raster coverage and the October local suite results are described in
 [testing](../../../docs/testing.md#gem-chess-local-validation).
 
 With Mesen available:
@@ -255,7 +311,7 @@ camera combinations, signed area limits, convex-hull diagonal masks and the
 planar/nonplanar culling regressions. These complement the real emulator runs; the
 tests do not implement a second complete renderer or claim physical-hardware
 validation. Captures, timings and verification logs are saved beside the ROM.
-Local verification uses MesenCE **2.2.1**, build
+The historical local verification used MesenCE **2.2.1**, build
 `20ba206cef5ba207c21203176d02cb9f43dda9fb`, at the stock NTSC 21 MHz profile.
 
 **The ROM contains no proprietary Nintendo code, Nintendo SDK components,

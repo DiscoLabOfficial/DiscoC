@@ -105,7 +105,7 @@ end
 emu.addMemoryCallback(guard(function()
     assert(not active and not pending,"reentered payload")
     active=assert(emu.getState()["cart.coprocessor.cycleCount"],"missing GSU clock")
-end),emu.callbackType.exec,0x706000,0x706000,emu.cpuType.gsu,emu.memType.gsuMemory)
+end),emu.callbackType.exec,config.origin,config.origin,emu.cpuType.gsu,emu.memType.gsuMemory)
 emu.addMemoryCallback(guard(function(address,opcode)
     local state=emu.getState()
     assert(active and opcode==0 and state["cart.coprocessor.r6"]==0,"unexpected STOP")
@@ -132,7 +132,7 @@ emu.addMemoryCallback(guard(function(_,status)
     assert(buffer==0 or buffer==1,"invalid VRAM buffer")
     local ram={}
     for address=0,0x5FFF do
-        local value=emu.read(address,emu.memType.gsuWorkRam);ram[address+1]=value
+        local value=emu.read(config.framebuffer+address,emu.memType.gsuWorkRam);ram[address+1]=value
         assert(emu.read(buffer*0x6000+address,emu.memType.snesVideoRam)==value,string.format("VRAM byte $%04X",address))
     end
     for address=1,32 do assert(ram[address]==0,"shared blank tile was drawn") end

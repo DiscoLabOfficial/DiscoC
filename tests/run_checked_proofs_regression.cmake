@@ -221,3 +221,74 @@ foreach(level IN ITEMS 0 1 2)
     run_command("${DISCLD}" "${TEST_DIR}/caller.o" "${TEST_DIR}/callee-${level}.o" ${link} -o "${TEST_DIR}/mixed-${level}.bin")
     run_command("${GSU_RUNNER}" "${TEST_DIR}/mixed-${level}.bin" 0x008000 --register 0 42 --register 6 0 --register 10 0x1ffc)
 endforeach()
+
+# Defined static objects: in-object accesses drop their null/alignment/wrap
+# checks at O2/Os. Those objects then demand a nonzero static RAM segment.
+file(WRITE "${TEST_DIR}/static-objects.dc"
+    "internal word table[8]; internal unsigned byte flags[5]; word main() { word seed=*(volatile word*)0x100; *(volatile word*)0x120=7; table[0]=3; table[7]=5; word i=seed&7; table[i]=table[i]+10; flags[4]=9; word total=table[0]+table[7]+table[i]+(word)flags[4]; *(volatile word*)0x122=total; return total; }")
+foreach(level IN ITEMS 0 1 2 s)
+    set(OPTIMIZATION ${level})
+    check_round_trip("static-objects-${level}" "${TEST_DIR}/static-objects.dc" ${link})
+    file(READ "${TEST_DIR}/static-objects-${level}.s" assembly)
+    if(level MATCHES "^[2s]$")
+        if(NOT assembly MATCHES "__DISCO_STATIC_RAM_NONNULL")
+            message(FATAL_ERROR "O${level} static-object proofs did not request the linker marker")
+        endif()
+        run_expected_failure_contains("static RAM starts at address 0" "${DISCLD}" "${TEST_DIR}/static-objects-${level}.o"
+            --origin 0x008000 --ram-origin 0 --host-initialized-globals -o "${TEST_DIR}/static-objects-${level}-zero.bin")
+    elseif(assembly MATCHES "__DISCO_STATIC_RAM_NONNULL")
+        message(FATAL_ERROR "O${level} emitted a static-object proof marker without global proofs")
+    endif()
+    foreach(suffix IN ITEMS "" "-asm")
+        foreach(seed IN ITEMS 0 3 7 8 15 65535)
+            math(EXPR low "${seed} & 255")
+            math(EXPR high "${seed} >> 8")
+            math(EXPR index "${seed} & 7")
+            if(index EQUAL 0)
+                set(total 40)
+            elseif(index EQUAL 7)
+                set(total 42)
+            else()
+                set(total 27)
+            endif()
+            run_command("${GSU_RUNNER}" "${TEST_DIR}/static-objects-${level}${suffix}.bin" 0x008000
+                --ram-byte 0x700100 ${low} --ram-byte 0x700101 ${high}
+                --word 0x700120 7 --word 0x700122 ${total} --register 0 ${total} --register 6 0)
+        endforeach()
+    endforeach()
+endforeach()
+
+# Proved near ROM table reads carry no marker of their own: every one still
+# selects __disco_near_rom_bank, and discld must keep rejecting a payload whose
+# tables would not lie in that bank's ROM window. Check the object and its
+# canonical assembly alike; execution must match the checked O1 reads.
+file(WRITE "${TEST_DIR}/rom-objects.dc"
+    "rom const byte palette[8] = {1, 2, 3, 4, 5, 6, 7, 100}; word main() { word s = *(volatile word*)0x100; word v = palette[s & 7]; *(volatile word*)0x120 = v; return v; }")
+foreach(level IN ITEMS 1 2 s)
+    set(OPTIMIZATION ${level})
+    check_round_trip("rom-objects-${level}" "${TEST_DIR}/rom-objects.dc" ${link})
+    file(READ "${TEST_DIR}/rom-objects-${level}.s" assembly)
+    if(NOT assembly MATCHES "#\\^__disco_near_rom_bank")
+        message(FATAL_ERROR "O${level} ROM table read no longer selects the linker-checked near ROM bank")
+    endif()
+    foreach(suffix IN ITEMS "" "-asm")
+        set(object "${TEST_DIR}/rom-objects-${level}${suffix}.o")
+        run_expected_failure_contains("Near ROM data relocation does not match" "${DISCLD}" "${object}"
+            --origin 0x706000 --init-runtime --ram-bank 0 --stack-pointer 0x2000 -o "${TEST_DIR}/rom-objects-${level}${suffix}-ram.bin")
+        run_expected_failure_contains("Near ROM data relocation does not match" "${DISCLD}" "${object}"
+            ${link} --rom-bank 1 -o "${TEST_DIR}/rom-objects-${level}${suffix}-bank.bin")
+        foreach(seed IN ITEMS 0 3 7 8 65535)
+            math(EXPR low "${seed} & 255")
+            math(EXPR high "${seed} >> 8")
+            math(EXPR index "${seed} & 7")
+            if(index EQUAL 7)
+                set(value 100)
+            else()
+                math(EXPR value "${index} + 1")
+            endif()
+            run_command("${GSU_RUNNER}" "${TEST_DIR}/rom-objects-${level}${suffix}.bin" 0x008000
+                --ram-byte 0x700100 ${low} --ram-byte 0x700101 ${high}
+                --word 0x700120 ${value} --register 0 ${value} --register 6 0)
+        endforeach()
+    endforeach()
+endforeach()

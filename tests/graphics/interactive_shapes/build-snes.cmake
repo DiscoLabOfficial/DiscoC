@@ -11,14 +11,16 @@ build_gsu_payload("${CMAKE_CURRENT_LIST_DIR}/main.dc" "${CMAKE_CURRENT_LIST_DIR}
 configure_file("${OUTPUT_DIR}/triangle.bin" "${OUTPUT_DIR}/interactive-shapes.bin" COPYONLY)
 configure_file("${OUTPUT_DIR}/triangle.s" "${OUTPUT_DIR}/interactive-shapes.s" COPYONLY)
 file(SIZE "${OUTPUT_DIR}/triangle.bin" payload_size)
-if(payload_size GREATER 24576)
-    message(FATAL_ERROR "Payload exceeds the code reservation $70:8000..DFFF")
+if(payload_size GREATER 23552)
+    message(FATAL_ERROR "Payload exceeds the code reservation $70:8400..DFFF")
 endif()
 file(READ "${OUTPUT_DIR}/triangle.s" assembly)
-if(NOT assembly MATCHES "__DISCO_BITMAP_SCBR[ \t]+\\$00" OR
+# $0002-$01FF holds the short RAM (LMS/SMS frame slots), so the OBJ
+# framebuffer starts at $0400 (SCBR 1) and the code right after it.
+if(NOT assembly MATCHES "__DISCO_BITMAP_SCBR[ \t]+\\$01" OR
    NOT assembly MATCHES "__DISCO_BITMAP_SCMR[ \t]+\\$25" OR
-   NOT assembly MATCHES "__DISCO_CODE_START_ADDRESS[ \t]+\\$708000")
-    message(FATAL_ERROR "Host requires OBJ/4bpp/base0 and code at $70:8000")
+   NOT assembly MATCHES "__DISCO_CODE_START_ADDRESS[ \t]+\\$708400")
+    message(FATAL_ERROR "Host requires OBJ/4bpp/base $0400 and code at $70:8400")
 endif()
 build_snes_host("${CMAKE_CURRENT_LIST_DIR}" interactive-shapes)
 build_snes_host("${CMAKE_CURRENT_LIST_DIR}" interactive-shapes-negative -D FORCE_BAD_RESULT=1)
@@ -31,8 +33,8 @@ if(BENCHMARK)
     if(NOT stop_match)
         message(FATAL_ERROR "Missing normal main STOP")
     endif()
-    math(EXPR stop_address "0x708000 + 0x${CMAKE_MATCH_2}" OUTPUT_FORMAT HEXADECIMAL)
-    file(WRITE "${OUTPUT_DIR}/benchmark-config.lua" "return {stop=${stop_address},bytes=${payload_size}}\n")
+    math(EXPR stop_address "0x708400 + 0x${CMAKE_MATCH_2}" OUTPUT_FORMAT HEXADECIMAL)
+    file(WRITE "${OUTPUT_DIR}/benchmark-config.lua" "return {stop=${stop_address},bytes=${payload_size},origin=0x708400}\n")
     file(REMOVE "${OUTPUT_DIR}/benchmark.json" "${OUTPUT_DIR}/benchmark-error.log")
     run_command("${MESEN}" --testrunner --timeout=120 --doNotSaveSettings
         --snes.region=Ntsc --snes.gsuClockSpeed=100 --snes.enableRandomPowerOnState=false
