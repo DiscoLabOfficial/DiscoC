@@ -54,12 +54,13 @@ inline RuntimeInitialization makeRuntimeInitialization(std::uint8_t bank, std::u
         if ((image.size() & 1u) != 0) result.bytes.insert(result.bytes.end(), {0x3d, 0x31});
         // No ROM access is needed for RAM execution.
         for (std::size_t offset = 0; offset < image.size(); offset += 2) {
+            const bool has_high_byte = image.size() - offset > 1;
             const auto low = image[offset];
-            const auto high = offset + 1 < image.size() ? image[offset + 1] : 0;
+            const auto high = has_high_byte ? image[offset + 1] : 0;
             if (low == 0 && high == 0) continue;
             literal(1, static_cast<std::uint16_t>(origin + offset));
             literal(0, static_cast<std::uint16_t>(low | (high << 8)));
-            if (offset + 1 == image.size()) result.bytes.push_back(0x3d);
+            if (!has_high_byte) result.bytes.push_back(0x3d);
             result.bytes.push_back(0x31);
         }
     };

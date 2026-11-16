@@ -346,19 +346,19 @@ void IRCodeGenerator::requireFramePointer(const Token& source) const {
     if (m_frameless) fail("IR codegen: frameless function addressed its stack frame.", source);
 }
 
-void IRCodeGenerator::emitFrameAddress(std::uint8_t reg, int offset) {
+void IRCodeGenerator::emitFrameAddress(Register reg, int offset) {
     if (!m_static_frame_owner.empty() && offset < 0) {
         const auto slot = m_static_frame_bytes + offset;
         if (slot < 0) fail("IR codegen: static frame slot is outside its frame.", Token(TokenType::UNKNOWN, m_static_frame_owner, 1, 1));
         auto owner = m_static_frame_owner;
         if (!owner.empty() && owner.front() == '\x01') owner.erase(0, 1);
         const auto patch = m_object_file.code_section.size();
-        emitWordLiteral(static_cast<Register>(reg), 0); // The linker patches an IWT, never a shortened IBT.
+        emitWordLiteral(reg, 0); // The linker patches an IWT, never a shortened IBT.
         addRelocation(std::string(1, '\x01') + "__disco_frame." + owner + "." + std::to_string(slot), patch, RelocationType::ADDR16_RAM);
         m_static_frame_slots.emplace(m_static_frame_owner, slot);
         return;
     }
-    if (reg != 3) fail("IR codegen: FP-relative frame address must use R3.", Token(TokenType::UNKNOWN, "", 0, 0));
+    if (reg != Register::R3) fail("IR codegen: FP-relative frame address must use R3.", Token(TokenType::UNKNOWN, "", 0, 0));
     requireFramePointer(Token(TokenType::UNKNOWN, "", 0, 0));
     emitRegisterLiteral(3, static_cast<std::uint16_t>(offset));
     emitByte(0xb9); emitByte(0x13); emitByte(0x53); // R3 = FP + signed frame displacement.
@@ -464,7 +464,7 @@ void IRCodeGenerator::planRegionalLoopValues() {
     // a PHI and its frame reload is the multi-instruction FP-relative form,
     // not a single short-RAM LMS. Rare-path reads never qualify.
     const auto plan = [&](const std::set<std::uint32_t>& region, std::uint32_t entry_block, bool hardware,
-                          std::uint32_t loop_id, std::uint32_t header, const std::set<std::uint32_t>& latches,
+                          std::uint32_t loop_id, IRBlockId header, const std::set<std::uint32_t>& latches,
                           RegionalLoopValues& selected) -> bool {
         std::set<std::uint32_t> every_trip, header_reads;
         unsigned available = (1u << 4) | (1u << 6);
@@ -487,7 +487,7 @@ void IRCodeGenerator::planRegionalLoopValues() {
                 for (const auto v : i.operands) {
                     ++reads[v.value];
                     if (each_trip) every_trip.insert(v.value);
-                    if (!hardware && b == header && i.opcode != IROpcode::Phi) header_reads.insert(v.value);
+                    if (!hardware && b == header.value && i.opcode != IROpcode::Phi) header_reads.insert(v.value);
                     // A scalar result does not imply scalar materialization:
                     // e.g. Cast can reload an external far pair into R0/R4.
                     // Validated IR is supported independently of the frontend.
@@ -639,7 +639,7 @@ void IRCodeGenerator::planRegionalLoopValues() {
         if (!region.count(entry) || region.size() + entry_chain.size() > 64) continue;
         region.insert(entry_chain.begin(), entry_chain.end());
         RegionalLoopValues selected;
-        if (plan(region, setup_block.id.value, true, setup.loop_id, IRBlockId::Invalid, {}, selected))
+        if (plan(region, setup_block.id.value, true, setup.loop_id, IRBlockId{}, {}, selected))
             m_regional_loop_values.emplace(setup.loop_id, std::move(selected));
         if (exhausted) { m_regional_loop_values.clear(); return; }
     }
@@ -662,7 +662,7 @@ void IRCodeGenerator::planRegionalLoopValues() {
         if (terminal.empty() || terminal.back().opcode != IROpcode::Branch || terminal.back().targets.size() != 1 ||
             terminal.back().targets[0].value != loop.header) continue;
         RegionalLoopValues selected;
-        if (!loop.latches.empty() && plan(loop.blocks, entry, false, 0, loop.header, loop.latches, selected))
+        if (!loop.latches.empty() && plan(loop.blocks, entry, false, 0, IRBlockId{loop.header}, loop.latches, selected))
             m_regional_software_loops.emplace(entry, std::move(selected));
         if (exhausted) { m_regional_loop_values.clear(); m_regional_software_loops.clear(); return; }
     }
@@ -699,7 +699,7 @@ void IRCodeGenerator::emitRegionalValues(const RegionalLoopValues& region) {
             have_address = false;
         } else {
             if (have_address && offset == previous + 2) { emitByte(0xd3); emitByte(0xd3); }
-            else emitFrameAddress(3, offset);
+            else emitFrameAddress(Register::R3, offset);
             emitByte(static_cast<std::uint8_t>(0x10 | entry.second)); emitByte(0x43);
             have_address = true;
         }

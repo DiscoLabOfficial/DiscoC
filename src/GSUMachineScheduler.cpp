@@ -1,5 +1,6 @@
 #include "GSUMachineScheduler.hpp"
 #include "GSUCodeLayout.hpp"
+#include "Opcodes.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -206,9 +207,11 @@ bool splitImmediate(const Instruction& instruction) {
         (op >= 0xf0 && op <= 0xfe && instruction.bytes.size() == 3);
 }
 struct SchedulingBoundaries {
+    // Non-owning: run() keeps these offset sets alive through every helper call.
     const std::set<std::size_t>& entries;
     const std::set<std::size_t>& relocation_offsets;
     const std::set<std::size_t>& protected_offsets;
+    const std::set<std::size_t>& symbol_offsets;
 };
 void planEntryIncrements(std::vector<Instruction>& code, const SchedulingBoundaries& boundaries,
                          const ObjectFile& object,
@@ -519,10 +522,10 @@ std::set<std::size_t> shareFaultStubs(std::vector<Instruction>& code, const std:
 // After sharing, a guard is Bcc island / NOP / continuation. The taken path
 // faults: a register-only continuation opcode may run there before STOP.
 void fillGuardSlots(std::vector<Instruction>& code, const std::set<std::size_t>& islands,
-                    const std::set<std::size_t>& symbol_offsets, const std::set<std::size_t>& relocation_offsets,
+                    const SchedulingBoundaries& boundaries,
                     GSUMachineScheduler::Statistics& stats) {
     if (islands.empty()) return;
-    const auto targets = liveTargets(code, symbol_offsets);
+    const auto targets = liveTargets(code, boundaries.symbol_offsets);
     for (std::size_t n = 0; n + 2 < code.size(); ++n) {
         auto& branch = code[n];
         if (branch.bytes.size() != 2 || branch.bytes[0] < 6 || branch.bytes[0] > 15 || branch.delay_slot ||
@@ -536,7 +539,8 @@ void fillGuardSlots(std::vector<Instruction>& code, const std::set<std::size_t>&
             entered = code[p].old == Missing || targets.count(code[p].old);
         // Current targets, not decode-time entries: this guard no longer
         // branches to its continuation.
-        if (entered || !freeRange(code, n + 1, n + 2, relocation_offsets) || !freeRange(code, x, x + 1, relocation_offsets))
+        if (entered || !freeRange(code, n + 1, n + 2, boundaries.relocation_offsets) ||
+            !freeRange(code, x, x + 1, boundaries.relocation_offsets))
             continue;
         // The branch keeps clear selectors, as the NOP did on both paths.
         code[n + 1] = code[x]; code[n + 1].delay_slot = true;
@@ -547,10 +551,10 @@ void fillGuardSlots(std::vector<Instruction>& code, const std::set<std::size_t>&
 
 // BRA L / NOP becomes BRA L+1 / copy of L's first opcode. The target keeps
 // its opcode for every other entry; only this edge executes the copy.
-void fillJumpSlots(std::vector<Instruction>& code, const std::set<std::size_t>& symbol_offsets,
-                   const std::set<std::size_t>& relocation_offsets, const LayoutFences& fences,
+void fillJumpSlots(std::vector<Instruction>& code, const SchedulingBoundaries& boundaries,
+                   const LayoutFences& fences,
                    GSUMachineScheduler::Statistics& stats) {
-    const auto targets = liveTargets(code, symbol_offsets);
+    const auto targets = liveTargets(code, boundaries.symbol_offsets);
     std::map<std::size_t, std::size_t> at_old;
     for (std::size_t n = 0; n < code.size(); ++n) if (code[n].old != Missing) at_old.emplace(code[n].old, n);
     const auto pos = positions(code);
@@ -560,13 +564,13 @@ void fillJumpSlots(std::vector<Instruction>& code, const std::set<std::size_t>& 
             !branch.plain || !oneByte(code[n + 1], 1)) continue;
         if (n && code[n - 1].bytes.size() == 1 && code[n - 1].bytes[0] >= 0x91 && code[n - 1].bytes[0] <= 0x94) continue;
         if (targets.count(code[n + 1].old) || code[n + 1].old == Missing ||
-            !freeRange(code, n + 1, n + 2, relocation_offsets)) continue;
+            !freeRange(code, n + 1, n + 2, boundaries.relocation_offsets)) continue;
         const auto found = at_old.find(branch.target);
         if (found == at_old.end()) continue;
         const auto y = nextNonEmpty(code, found->second);
         if (y + 1 >= code.size() || code[y].delay_slot || !positionIndependent(code[y]) ||
             code[y + 1].old == Missing || code[y + 1].delay_slot || code[y + 1].operand_fragment ||
-            !freeRange(code, y, y + 1, relocation_offsets)) continue; // A linked byte cannot be copied early.
+            !freeRange(code, y, y + 1, boundaries.relocation_offsets)) continue; // A linked byte cannot be copied early.
         // Distances measured on the current list; later passes only delete.
         const auto distance = static_cast<std::int64_t>(pos[y + 1]) - static_cast<std::int64_t>(pos[n] + 2);
         if (distance < -128 || distance > 127 || fences.crosses(n, y + 1)) continue;
@@ -623,15 +627,16 @@ RegisterEffect registerEffect(const std::vector<Instruction>& code, std::size_t 
 // return. A return makes only R3 and R5-R8 dead: R0/R4 carry results, the
 // private divmod kernels return R1/R2, and R9-R13 are preserved or owned by
 // the caller. Those kernels neither write R5/R7/R8 nor expose R3/R6.
-bool deadFrom(const std::vector<Instruction>& code, std::size_t n, unsigned reg) {
-    const unsigned bit = 1u << reg;
+bool deadFrom(const std::vector<Instruction>& code, std::size_t n, Register reg) {
+    const unsigned bit = 1u << static_cast<unsigned>(reg);
     for (unsigned steps = 0; steps < 32 && n < code.size(); ++steps, ++n) {
         const auto& i = code[n];
         if (i.reachable_entry || i.delay_slot) return false;
         if (i.bytes.size() == 1 && i.reachable_alt == 0 && i.bytes[0] == 0x9b) { // JMP R11
             if (n + 1 >= code.size() || code[n + 1].reachable_entry) return false;
             const auto slot = registerEffect(code, n + 1);
-            return slot.known && !(slot.reads & bit) && (reg == 3 || (reg >= 5 && reg <= 8));
+            return slot.known && !(slot.reads & bit) &&
+                (reg == Register::R3 || (reg >= Register::R5 && reg <= Register::R8_MERGE_Y));
         }
         const auto effect = registerEffect(code, n);
         if (!effect.known || (effect.reads & bit)) return false;
@@ -770,8 +775,10 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
         if (n && code[n - 1].bytes.size() == 1 && code[n - 1].bytes[0] >= 0x20 && code[n - 1].bytes[0] <= 0x2f) continue;
         // Look through one ALT prefix: it keeps B pending for its successor.
         auto consumer = n + 2;
-        if (code[consumer].bytes.size() == 1 && code[consumer].bytes[0] >= 0x3d && code[consumer].bytes[0] <= 0x3f &&
-            ++consumer >= code.size()) continue;
+        if (code[consumer].bytes.size() == 1 && code[consumer].bytes[0] >= 0x3d && code[consumer].bytes[0] <= 0x3f) {
+            ++consumer;
+            if (consumer >= code.size()) continue;
+        }
         const auto next = code[consumer].bytes[0];
         if ((next >= 0x10 && next <= 0x2f) || (next >= 0xb0 && next <= 0xbf) || (next >= 0x3d && next <= 0x3f) ||
             transfer(next) || code[consumer].bytes.size() != 1) continue;
@@ -803,7 +810,7 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
         if (!((binary && !compare) || (unary && (alt == 0 || (alt == 1 && op == 0x96))))) continue;
         if (!oneByte(code[operation + 1], static_cast<std::uint8_t>(0x20u | home)) || !oneByte(code[operation + 2], 0x10)) continue;
         if (!freeRange(code, n + 1, operation + 3, entries) || !freeRange(code, n, operation + 3, relocation_offsets) ||
-            !deadFrom(code, operation + 3, home)) continue;
+            !deadFrom(code, operation + 3, static_cast<Register>(home))) continue;
         code[n].bytes = {static_cast<std::uint8_t>(0xb0u | home)};
         for (auto k = n + 1; k <= operation; ++k) {
             code[k].plain = code[k].reachable_plain = false;
@@ -1018,7 +1025,8 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
     // New island entries must fence any later pass that consults `entries`.
     entries.insert(islands.begin(), islands.end());
     protected_offsets.insert(islands.begin(), islands.end());
-    fillGuardSlots(code, islands, symbol_offsets, relocation_offsets, stats);
+    const SchedulingBoundaries boundaries{entries, relocation_offsets, protected_offsets, symbol_offsets};
+    fillGuardSlots(code, islands, boundaries, stats);
     // Relax symbol-resolved, non-call PC literals after useful-slot/layout
     // compaction. Never infer a destination from an unrelocated numeric word.
     // Plain selectors make BRA's preserved prefix state identical to IWT's
@@ -1062,10 +1070,9 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
     // would treat a split immediate opcode as a full instruction.
     const auto without_plans = code;
     const auto without_plan_stats = stats;
-    const SchedulingBoundaries boundaries{entries, relocation_offsets, protected_offsets};
     planEntryIncrements(code, boundaries, object, jump_targets, stats);
     planImmediateSlots(code, object, jump_targets, relocation_offsets, protected_offsets, stats);
-    fillJumpSlots(code, symbol_offsets, relocation_offsets, layoutFences(code, public_offsets), stats);
+    fillJumpSlots(code, boundaries, layoutFences(code, public_offsets), stats);
     if (object.config.optimization != OptimizationLevel::Size)
         dropNestedCaches(code, object, entries, stats);
 

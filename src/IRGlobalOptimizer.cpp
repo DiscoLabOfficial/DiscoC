@@ -581,7 +581,6 @@ bool singleSiteInlinable(const IRFunction& caller, const IRInstruction& call, co
             case IROpcode::PlotCoordinateRead: case IROpcode::PlotCoordinateWrite: case IROpcode::PlotBegin:
             case IROpcode::PlotEnd: case IROpcode::Plot: case IROpcode::SetColor: case IROpcode::CMode:
             case IROpcode::Rpix: case IROpcode::MemoryInitialize:
-                return false;
             case IROpcode::Call: case IROpcode::DivMod:
                 return false;
             case IROpcode::Binary:

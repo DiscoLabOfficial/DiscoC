@@ -146,7 +146,7 @@ private:
     void planStaticFrames(const IRModule& module);
     // R3 (or R0) = address of the current frame's word at `offset` below/above
     // FP. A static frame's negative offsets resolve to link-time RAM instead.
-    void emitFrameAddress(std::uint8_t reg, int offset);
+    void emitFrameAddress(Register reg, int offset);
     void requireFramePointer(const Token& source) const;
     void planShortFrame();
     bool shortFrameSlot(int offset) const { return m_short_frame_offsets.count(offset) != 0; }

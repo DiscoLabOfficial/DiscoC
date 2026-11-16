@@ -355,7 +355,7 @@ void IRCodeGenerator::emitIntegerOperation(const IRInstruction& instruction) {
         // projection cannot assume those physical helper registers survive.
         const auto slot = m_divmod_offsets.at(instruction.result.value);
         if (shortFrameSlot(slot)) emitShortFrameAccess(false, operation == "/" ? 2 : 1, slot);
-        else { emitFrameAddress(3, slot); emitStore(Register::R3, operation == "/" ? 2 : 1, false); }
+        else { emitFrameAddress(Register::R3, slot); emitStore(Register::R3, operation == "/" ? 2 : 1, false); }
         emitMove(Register::R0, operation == "/" ? 1 : 2);
     }
     if (m_isInPlottingContext) { emitPop(2); emitPop(1); }
@@ -372,7 +372,7 @@ void IRCodeGenerator::emitDivModResult(const IRInstruction& instruction) {
     m_last_ram_word_address = IRValueId{};
     const auto slot = m_divmod_offsets.at(instruction.operands.at(0).value);
     if (shortFrameSlot(slot)) { emitShortFrameAccess(true, 0, slot); return; }
-    emitFrameAddress(3, slot);
+    emitFrameAddress(Register::R3, slot);
     emitByte(0x43);
 }
 
@@ -397,7 +397,7 @@ void IRCodeGenerator::emitSharedDivision(const IRInstruction& instruction) {
     if (instruction.opcode == IROpcode::DivMod) {
         const auto slot = m_divmod_offsets.at(instruction.result.value);
         if (shortFrameSlot(slot)) emitShortFrameAccess(false, instruction.operation == "/" ? 2 : 1, slot);
-        else { emitFrameAddress(3, slot); emitStore(Register::R3, instruction.operation == "/" ? 2 : 1, false); }
+        else { emitFrameAddress(Register::R3, slot); emitStore(Register::R3, instruction.operation == "/" ? 2 : 1, false); }
     }
     emitMove(Register::R0, instruction.operation == "/" ? 1 : 2);
     if (m_isInPlottingContext) { emitPop(2); emitPop(1); }

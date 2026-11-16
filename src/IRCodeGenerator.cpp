@@ -392,7 +392,7 @@ void IRCodeGenerator::addRelocation(const std::string& symbol, std::size_t patch
 void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
     if (instruction.operation == "temporary") {
         if (!m_static_frame_owner.empty() && instruction.immediate < 0) {
-            emitFrameAddress(0, static_cast<int>(instruction.immediate));
+            emitFrameAddress(Register::R0, static_cast<int>(instruction.immediate));
             return;
         }
         requireFramePointer(instruction.source);
@@ -445,7 +445,7 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
             if (!m_static_frame_owner.empty() && symbol->second.stackOffset < 0) {
                 // A static frame keeps the FP-relative layout and alignment
                 // padding; only its base is a link-time RAM address.
-                emitFrameAddress(0, symbol->second.stackOffset);
+                emitFrameAddress(Register::R0, symbol->second.stackOffset);
             } else {
                 requireFramePointer(instruction.source);
                 emitMove(Register::R0, 9);
@@ -987,7 +987,7 @@ void IRCodeGenerator::emitRegisterArguments(const IRInstruction& call) {
         const auto offset = m_spill_offsets.at(argument.value.value);
         m_spill_cache.clobber(argument.target);
         if (shortFrameSlot(offset)) { emitShortFrameAccess(true, argument.target, offset); continue; }
-        emitFrameAddress(3, offset);
+        emitFrameAddress(Register::R3, offset);
         emitByte(static_cast<std::uint8_t>(0x10 | argument.target)); emitByte(0x43);
     }
     for (const auto& literal : literals) emitRegisterLiteral(literal.first, literal.second);

@@ -258,7 +258,7 @@ void GSUAddressProof::refineControlFlow(
     }
 }
 
-GSUAddressProof::Fact GSUAddressProof::displaced(Fact address, Fact displacement) const {
+GSUAddressProof::Fact GSUAddressProof::displaced(Fact address, const Fact& displacement) const {
     const auto low = displacement.low, high = displacement.high;
     if (address.kind != Kind::Frame && address.kind != Kind::Absolute && address.kind != Kind::Symbol) return {};
     if (low < -65535 || high > 65535 || low > high) return {};

@@ -216,7 +216,7 @@ void IRCodeGenerator::emitWordSpillStore(IRValueId value, std::uint8_t source) {
     // for a parallel-copy cycle.
     if (shortFrameSlot(offset)) emitShortFrameAccess(false, source, offset);
     else {
-        emitFrameAddress(3, offset);
+        emitFrameAddress(Register::R3, offset);
         emitStore(Register::R3, source, false);
     }
     if (globallyOptimized()) m_last_ram_word_address.rememberFrame(offset);
@@ -247,7 +247,7 @@ void IRCodeGenerator::emitSpill(IRValueId value, bool load) {
         return;
     }
     if (!load) emitMove(Register::R6_LMULT_HI, 0);
-    emitFrameAddress(3, m_spill_offsets.at(value.value));
+    emitFrameAddress(Register::R3, m_spill_offsets.at(value.value));
     if (isFarPointer(type)) {
         if (load) { emitByte(0x14); emitByte(0x43); } // bank word -> R4
         else emitStore(Register::R3, 4, false);
