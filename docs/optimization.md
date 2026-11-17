@@ -1,6 +1,6 @@
 # GSU optimization modes
 
-Fresh functional measurements of the unpublished 0.3.0 preparation are in the
+Retained functional measurements from the 0.3.0 preparation are in the
 [benchmark results](releases/v0.3.0/optimization-results.md) and
 [validation/provenance](releases/v0.3.0/validation.md). They cover all four
 levels and identify the working-tree build inputs; they contain no cycle or FPS

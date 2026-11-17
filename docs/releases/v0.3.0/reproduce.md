@@ -96,7 +96,8 @@ it identifies tested inputs, not a complete Git tree or an exact-source archive.
 CRLF/LF conversion changes these byte hashes. Workload/model hashes inside the
 benchmark reports normalize text line endings separately.
 
-After the maintainer commits the reviewed changes, freeze a clean checkout and
+For a release rebuild, check out the `v0.3.0` tag in a clean checkout and
 repeat the gates with that exact SHA. Use [native packaging](../../../cmake/PACKAGING.md)
 to stamp a fresh build before configuring and package only after its checks.
-This preparation creates no archive, tag, release or upload.
+The commands in this document reproduce the dated preparation measurements;
+they do not publish or replace the release's package receipts.
