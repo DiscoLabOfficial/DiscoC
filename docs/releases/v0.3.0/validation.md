@@ -1,15 +1,21 @@
-# 0.3.0 preparation validation
+# v0.3.0 validation records
 
-Validation date: **2026-11-16**. Status: **unpublished working-tree preparation**.
-The project version is `0.3.0` with an empty prerelease suffix. No stage,
-commit, tag, package, push or publication was performed during this pass.
+Release date: **2026-11-17**. The project version is `0.3.0` with an empty
+prerelease suffix. The [release](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.3.0)
+provides final package/source identities, checksums and CI receipts in its
+`BUILD-INFO.json` and evidence archive.
+
+The records below describe the **2026-11-16 preparation pass**. No tag or
+package was created during that measurement pass; the later publication
+does not relabel its historical source or test results.
 
 ## Source and tool identity
 
 The base commit is `60e83ce`, but it does **not** identify the tested source:
 the preparation includes uncommitted compiler, test, demo and documentation
-changes. There is no final release SHA yet. Benchmark reports deliberately
-retain `toolchain.revision = "unknown"`.
+changes. No final release SHA had been assigned during that pass. Benchmark
+reports deliberately retain `toolchain.revision = "unknown"`; the published
+package source is recorded separately in the release build manifest.
 
 [evidence.json](evidence.json) records the full base SHA, environment, tool
 hashes, build/test receipts and measurement scope.
@@ -124,16 +130,16 @@ and [Os timings](raw/gem-chess-Os-timings.csv) retain GSU cycles separately from
 host publication clocks. Payloads or cycles that differ from the dated demo
 tables are fresh results for this preparation; historical tables are preserved.
 
-## Remaining release boundary
+## Publication and measurement boundary
 
 The [release notes](release-notes.md) describe scope and compatibility, including
 object formats 7–10 and the short RAM host contract. Documentation links and
 whitespace are checked separately. Previous 0.1/0.2 release/CI evidence remains
 historical and is not relabeled with this preparation's identities.
 
-After review and commit, freeze a clean checkout and repeat the intended
-release gates against its exact SHA before packaging. No new hosted CI,
-Windows/macOS/DOS build or DOS runtime result, physical-hardware check or
-exhaustive fuzzing result is implied. Use the existing
-[packaging procedure](../../../cmake/PACKAGING.md) for a future exact-source
-package; this preparation has not generated or distributed one.
+Published archives use a clean checkout and the existing
+[packaging procedure](../../../cmake/PACKAGING.md). Their exact SHA, platform
+checks and extracted-package smoke results are recorded in the release assets.
+The local preparation measurements above do not imply new hosted CI,
+Windows/macOS/DOS execution, physical-hardware checks or exhaustive fuzzing;
+those scopes remain separate from the final package receipts.

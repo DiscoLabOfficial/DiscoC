@@ -1,6 +1,6 @@
 # GSU benchmarks
 
-Fresh **O0/O1/O2/Os functional results** for the unpublished 0.3.0 preparation
+Retained **O0/O1/O2/Os functional results** from the 0.3.0 preparation
 are in the [benchmark record](../docs/releases/v0.3.0/optimization-results.md),
 with [validation and reproduction](../docs/releases/v0.3.0/validation.md) and
 raw JSON/CSV. They identify the working-tree build inputs and tool binaries;

@@ -42,11 +42,12 @@ for detailed workflows and contracts.
 
 ## Releases and Evidence
 
-- [v0.3.0 preparation notes](releases/v0.3.0/release-notes.md),
+- [v0.3.0 source tag](https://github.com/DiscoLabOfficial/DiscoC/tree/v0.3.0),
+  published on **2026-11-17**: [release notes](releases/v0.3.0/release-notes.md),
   [validation and source identity](releases/v0.3.0/validation.md), and
   [functional benchmark results](releases/v0.3.0/optimization-results.md).
-  This is an unpublished working-tree preparation, with no final release SHA
-  or binary packages yet.
+  The records identify their tested source inputs and the limits of native,
+  emulator and benchmark coverage.
 - [Published v0.2.0](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.2.0):
   final downloads, checksums and evidence; [release notes](releases/v0.2.0-final/release-notes.md),
   [exact-source validation and package requirements](releases/v0.2.0-final/validation.md),

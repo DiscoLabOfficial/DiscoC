@@ -1,10 +1,10 @@
-# DiscoC v0.3.0 — release preparation notes
+# DiscoC v0.3.0 — release notes
 
-Prepared on **2026-11-16**. This is the unpublished 0.3.0 source update;
-no tag, release, binary package or upload is created by this preparation.
-The [validation record](validation.md) identifies the tested working-tree
-inputs, tools, results and remaining limits. A final commit SHA is not yet
-available, and the earlier 0.2.0 evidence retains its original identity.
+Released on **2026-11-17** as [v0.3.0](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.3.0),
+with native tools, exact source, SNES demos, checksums and validation evidence.
+The release build manifest records the tag/package source and archive hashes.
+The [validation record](validation.md) preserves the dated preparation checks;
+earlier 0.2.0 evidence retains its original identity.
 
 DiscoC remains an experimental pre-1.0 toolchain implementing **Language
 Baseline 0.1**, not ISO C. The native toolchain still uses C++23; the
@@ -41,7 +41,8 @@ experimental DOS cross-build retains C++14.
   layout and rewritten renderers. The rotating checkerboard uses a two-pass
   renderer and a bounded queue for asynchronous image capture. Its SNES host
   initializes the status mailbox before multi-frame setup, preventing the
-  verifier from reading power-on RAM as a host failure. The guides now
+  verifier from reading power-on RAM as a host failure. The scaling host uses
+  the same early initialization. The guides now
   distinguish current memory/capture contracts from historical measurements.
 - **Regression coverage.** Expanded proof, scheduler, compaction, optimizer,
   object/linker, project and graphics checks cover the new behavior and
@@ -78,12 +79,13 @@ The [fresh functional benchmark record](optimization-results.md) covers all
 nine workloads at O0/O1/O2/Os. It reports bytes and executed opcodes with
 source/model/tool/payload identities; it does not infer GSU cycles or FPS.
 The [validation record](validation.md) lists the actual native, sanitizer and
-complete-ROM checks performed for this preparation.
+complete-ROM checks performed during preparation. Final package and CI receipts
+are retained with the [release downloads](https://github.com/DiscoLabOfficial/DiscoC/releases/tag/v0.3.0).
 
 Earlier before/after tables in the optimization and demo guides remain dated
 development evidence. They must not be relabeled as measurements of this
-0.3.0 preparation or its future release commit. Revalidate a clean final
-revision before attaching packages or claiming tag-specific results.
+0.3.0 preparation or the release tag. Package-specific results identify their
+own clean source revision in the release build manifest.
 
 ## Remaining limits
 
@@ -99,8 +101,9 @@ revision before attaching packages or claiming tag-specific results.
   claim is made. Current platform/emulator results and any failures are listed
   in the validation record; historical successful runs do not replace them.
 - No new Windows, macOS, DOS runtime or hosted CI result is implied by the
-  local Linux preparation. Native packages and exact-source packaging still
-  require the [documented clean-checkout workflow](../../../cmake/PACKAGING.md).
+  local Linux preparation. Published package receipts separately identify
+  their platform checks and requirements, using the
+  [documented clean-checkout workflow](../../../cmake/PACKAGING.md).
 
 The SNES demos contain no proprietary Nintendo code, commercial game assets
 or Nintendo SDK components. Existing contributor attribution is retained in
