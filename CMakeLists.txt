@@ -221,6 +221,8 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
 
     add_executable(disco_assembly_export_tests tests/AssemblyExportTests.cpp)
     target_link_libraries(disco_assembly_export_tests PRIVATE disco_assembler_core)
+    add_executable(disco_spc700_assembler_tests tests/SPC700AssemblerTests.cpp)
+    target_link_libraries(disco_spc700_assembler_tests PRIVATE disco_assembler_core)
 
     function(add_toolchain_regression name case_name)
         add_test(
@@ -319,6 +321,22 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     set_tests_properties(gsu_differential_reporting PROPERTIES LABELS "gsu;differential;unit" TIMEOUT 180)
     add_test(NAME gsu_memory_map COMMAND disco_gsu_mapping_tests)
     add_test(NAME assembly_export COMMAND disco_assembly_export_tests)
+    add_test(NAME spc700_assembler COMMAND disco_spc700_assembler_tests)
+    set_tests_properties(spc700_assembler PROPERTIES LABELS "assembler;object;spc700;unit")
+    # Optional cross-check against an independent assembler. WLA-DX is not a
+    # build dependency; without it the oracle is simply not registered.
+    find_program(DISCO_WLA_SPC700 NAMES wla-spc700)
+    find_program(DISCO_WLALINK NAMES wlalink)
+    if(DISCO_WLA_SPC700 AND DISCO_WLALINK)
+        add_test(NAME spc700_wla_oracle COMMAND ${CMAKE_COMMAND}
+            -DDISCAS=$<TARGET_FILE:discas>
+            -DCORPUS_TOOL=$<TARGET_FILE:disco_spc700_assembler_tests>
+            -DWLA_SPC700=${DISCO_WLA_SPC700}
+            -DWLALINK=${DISCO_WLALINK}
+            -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/spc700_wla_oracle
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_spc700_wla_oracle.cmake)
+        set_tests_properties(spc700_wla_oracle PROPERTIES LABELS "assembler;spc700;oracle" TIMEOUT 300)
+    endif()
     set_tests_properties(language_contract PROPERTIES LABELS "language;unit")
     set_tests_properties(ir_verifier PROPERTIES LABELS "ir;unit")
     set_tests_properties(object_file_hardening PROPERTIES LABELS "object;unit")
