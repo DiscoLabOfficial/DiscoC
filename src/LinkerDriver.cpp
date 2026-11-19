@@ -23,6 +23,19 @@
 #endif
 
 namespace {
+// Byte used to fill CODE/DATA alignment gaps. It must decode as a harmless
+// one-byte instruction on the target, because padding can be executed when
+// control falls through into an aligned function. GSU: NOP ($01).
+std::uint8_t alignmentPaddingByte(TargetKind target) {
+    switch (target) {
+        case TargetKind::GSU: return 0x01;
+        case TargetKind::SPC700: break;
+    }
+    // SPC700 objects are not executable yet; keep the historical byte until
+    // the SPC700 assembler defines its own padding.
+    return 0x01;
+}
+
 std::uint32_t parseOptionNumber(const std::string& text, std::uint32_t maximum) {
     if (text.empty() || text.size() > 10 || text.front() == '-' || text.front() == '+' ||
         std::isspace(static_cast<unsigned char>(text.front())))
@@ -312,10 +325,11 @@ int runLinker(std::vector<std::string> arguments) {
 
         std::uint64_t current_code_offset = startup_size;
         std::vector<std::uint64_t> code_bases;
+        const std::uint8_t padding = alignmentPaddingByte(config.target);
         for (const auto& obj : objects) {
             const auto code_alignment = GSUCodeLayout::alignment(obj);
             while ((config.code_start_address + current_code_offset) % code_alignment) {
-                final_code.push_back(1); ++current_code_offset;
+                final_code.push_back(padding); ++current_code_offset;
             }
             code_bases.push_back(current_code_offset);
             for (const auto& sym : obj.symbol_table)
@@ -345,7 +359,7 @@ int runLinker(std::vector<std::string> arguments) {
         for (const auto& object : objects)
             if (!object.data_section.empty()) data_alignment = std::max(data_alignment, object.data_alignment);
         while ((config.code_start_address + current_code_offset) % data_alignment) {
-            final_code.push_back(1); // Alignment padding is explicit in byte-exact assembly exports.
+            final_code.push_back(padding); // Alignment padding is explicit in byte-exact assembly exports.
             ++current_code_offset;
         }
 
@@ -577,26 +591,25 @@ int runLinker(std::vector<std::string> arguments) {
                 const auto section_base = reloc.section_to_patch == SymbolSection::CODE
                     ? current_code_base : current_data_base;
                 const auto offset_in_section = section_base + reloc.patch_offset;
-                const auto patch_size = reloc.type == RelocationType::ADDR24_BANK ||
-                    reloc.type == RelocationType::ADDR8_SHORT_RAM ? 2u : 3u;
-                if (static_cast<std::uint64_t>(offset_in_section) + patch_size > section_to_patch.size()) {
+                const auto span = relocationSpan(reloc.type);
+                if (static_cast<std::uint64_t>(offset_in_section) + span.extent() > section_to_patch.size()) {
                     throw std::runtime_error("Linker Error: relocation extends beyond its section.");
                 }
-                const auto patch_index = static_cast<std::size_t>(offset_in_section);
+                const auto operand_index = static_cast<std::size_t>(offset_in_section) + span.operand_offset;
 
                 switch (reloc.type) {
                     case RelocationType::ADDR16_JAL:
                     case RelocationType::ADDR16_IWT:
                     case RelocationType::ADDR24_OFFSET:
                     case RelocationType::ADDR16_RAM:
-                        section_to_patch[patch_index + 1] = target_addr & 0xFF;
-                        section_to_patch[patch_index + 2] = (target_addr >> 8) & 0xFF;
+                        section_to_patch[operand_index] = target_addr & 0xFF;
+                        section_to_patch[operand_index + 1] = (target_addr >> 8) & 0xFF;
                         break;
                     case RelocationType::ADDR24_BANK:
-                        section_to_patch[patch_index + 1] = (target_addr >> 16) & 0xFF;
+                        section_to_patch[operand_index] = (target_addr >> 16) & 0xFF;
                         break;
                     case RelocationType::ADDR8_SHORT_RAM:
-                        section_to_patch[patch_index + 1] = static_cast<std::uint8_t>((target_addr & 0xffffu) >> 1);
+                        section_to_patch[operand_index] = static_cast<std::uint8_t>((target_addr & 0xffffu) >> 1);
                         break;
                 }
             }

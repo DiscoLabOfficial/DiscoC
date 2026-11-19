@@ -139,8 +139,7 @@ std::string AssemblyGenerator::generate() const {
     }
     std::map<std::size_t, const RelocationEntry*> relocations;
     for (const auto& relocation : m_object.relocation_table) {
-        const std::size_t span = relocation.type == RelocationType::ADDR24_BANK ||
-            relocation.type == RelocationType::ADDR8_SHORT_RAM ? 2 : 3;
+        const std::size_t span = relocationSpan(relocation.type).extent();
         if (relocation.section_to_patch != SymbolSection::CODE || relocation.patch_offset > m_object.code_section.size() ||
             span > m_object.code_section.size() - relocation.patch_offset ||
             !relocations.emplace(relocation.patch_offset, &relocation).second) {

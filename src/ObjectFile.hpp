@@ -18,6 +18,33 @@ enum class RelocationType : uint8_t {
     ADDR8_SHORT_RAM // LMS/SMS operand: (even near RAM address < $0200) / 2
 };
 
+// Operand bytes a relocation rewrites, relative to RelocationEntry::patch_offset.
+// GSU relocation types record the opcode position and patch the operand that
+// immediately follows it. Every reader, writer, linker and exporter derives
+// relocation geometry from this one function. Callers validate `type` before
+// asking for its span.
+struct RelocationSpan {
+    std::uint32_t operand_offset; // First patched byte, relative to patch_offset.
+    std::uint32_t operand_bytes;  // Number of patched bytes.
+
+    // Bytes from patch_offset through the last patched byte.
+    constexpr std::uint32_t extent() const { return operand_offset + operand_bytes; }
+};
+
+constexpr RelocationSpan relocationSpan(RelocationType type) {
+    switch (type) {
+        case RelocationType::ADDR24_BANK:
+        case RelocationType::ADDR8_SHORT_RAM:
+            return RelocationSpan{1, 1};
+        case RelocationType::ADDR16_JAL:
+        case RelocationType::ADDR16_IWT:
+        case RelocationType::ADDR24_OFFSET:
+        case RelocationType::ADDR16_RAM:
+            break;
+    }
+    return RelocationSpan{1, 2};
+}
+
 // Which section the symbol or relocation belongs to.
 enum class SymbolSection : uint8_t {
     CODE,

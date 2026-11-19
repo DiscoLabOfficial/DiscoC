@@ -217,9 +217,9 @@ void ObjectFile::validate() const {
             valid_name(relocation.target_symbol_name);
             validate_relocation(relocation, *this);
             charge(10u + relocation.target_symbol_name.size());
-            const auto begin = static_cast<std::uint64_t>(relocation.patch_offset) + 1;
-            spans.push_back({relocation.section_to_patch, begin, begin + (relocation.type == RelocationType::ADDR24_BANK ||
-                relocation.type == RelocationType::ADDR8_SHORT_RAM ? 1u : 2u)});
+            const auto operand = relocationSpan(relocation.type);
+            const auto begin = static_cast<std::uint64_t>(relocation.patch_offset) + operand.operand_offset;
+            spans.push_back({relocation.section_to_patch, begin, begin + operand.operand_bytes});
         }
         std::sort(spans.begin(), spans.end(), [](const Span& left, const Span& right) {
             return left.section != right.section ? left.section < right.section : left.begin < right.begin;
@@ -452,8 +452,7 @@ void ObjectFile::validate_relocation(const RelocationEntry& relocation,
     }
     const auto& section = relocation.section_to_patch == SymbolSection::CODE
         ? object.code_section : object.data_section;
-    const bool byte_operand = relocation.type == RelocationType::ADDR24_BANK || relocation.type == RelocationType::ADDR8_SHORT_RAM;
-    const std::uint64_t patch_size = byte_operand ? 2u : 3u;
+    const std::uint64_t patch_size = relocationSpan(relocation.type).extent();
     if (static_cast<std::uint64_t>(relocation.patch_offset) + patch_size > section.size()) {
         throw std::runtime_error("Object file relocation extends beyond its section.");
     }
