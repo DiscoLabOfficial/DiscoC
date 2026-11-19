@@ -268,7 +268,9 @@ through 11 record DATA alignment. Version 5 introduced static RAM; version 6
 adds its explicit alignment; version 7 adds optional bitmap host metadata and
 remains the default writer format. Versions 8/9 carry placement/stack proof
 markers; version 10 adds short RAM images, symbols and relocations; version 11
-adds SPC700 relocations. The reader accepts versions 3–11. Ordinary RAM is allocated separately from `--ram-origin`
+adds SPC700 relocations. The reader accepts versions 3–11. SPC700 links use
+flat 16-bit placement with the reserved regions and runtime described in
+[SPC700 target](spc700-target.md). Ordinary RAM is allocated separately from `--ram-origin`
 in the near RAM bank; short RAM is placed from `$0002` in that bank. Optional
 startup zeroes/initializes both regions. Padding is included in each
 symbol/relocation base. Internal names are object-scoped across CODE, DATA, RAM
