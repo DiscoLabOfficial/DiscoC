@@ -157,15 +157,15 @@ void writeFixtures(const std::filesystem::path& directory) {
         end.relocation_table.push_back({"end", SymbolSection::CODE, 0, type});
         write(type == RelocationType::ADDR24_BANK ? "far-end-bank" : "far-end-offset", end);
     }
-    // The format's address-width guard also applies to hand-authored objects
-    // for targets without a production backend; do not silently clip fields.
+    // Address-width guards for the 16-bit SPC700 space: a payload must fit
+    // below $10000, and a relocation to the end of a payload that exactly
+    // fills it must not be clipped to 16 bits.
     auto wide = sizedObject(0xfffffe, 3, 0);
     wide.config.target = TargetKind::SPC700;
-    wide.symbol_table.push_back({"end", SymbolSection::CODE, 2});
-    wide.relocation_table.push_back({"end", SymbolSection::CODE, 0, RelocationType::ADDR24_OFFSET});
+    wide.symbol_table.push_back({"end", SymbolSection::CODE, 3});
+    wide.relocation_table.push_back({"end", SymbolSection::CODE, 1, RelocationType::SPC_ABS16});
     write("far-overflow", wide);
-    wide.config.code_start_address = 0xfffe;
-    wide.relocation_table.front().type = RelocationType::ADDR16_IWT;
+    wide.config.code_start_address = 0xfffd;
     write("near-overflow", wide);
 }
 

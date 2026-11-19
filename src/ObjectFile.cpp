@@ -138,6 +138,11 @@ bool ObjectFile::usesShortRam() const {
             [](const RelocationEntry& relocation) { return relocation.type == RelocationType::ADDR8_SHORT_RAM; });
 }
 
+bool ObjectFile::usesSPC700Relocations() const {
+    return std::any_of(relocation_table.begin(), relocation_table.end(),
+        [](const RelocationEntry& relocation) { return isSPC700Relocation(relocation.type); });
+}
+
 void ObjectFile::validate() const {
     GSUCodeLayout::alignment(*this);
     unsigned stack_markers = 0;
@@ -244,7 +249,8 @@ void ObjectFile::write(const std::string& path) {
 
     // Magic Header
     out.write("DISCO", 5);
-    const std::uint8_t version = usesShortRam() ? ShortRamFormatVersion : staticStackBound() ? StaticStackFormatVersion :
+    const std::uint8_t version = usesSPC700Relocations() ? SPC700RelocationFormatVersion :
+        usesShortRam() ? ShortRamFormatVersion : staticStackBound() ? StaticStackFormatVersion :
         hasStaticRamProof() ? StaticRamProofFormatVersion : BaselineFormatVersion;
     write_u8(out, version);
 
@@ -418,7 +424,8 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
         obj.relocation_table[i].section_to_patch = static_cast<SymbolSection>(section);
         obj.relocation_table[i].patch_offset = read_u32_le(in, "relocation offset");
         const uint8_t type = read_u8(in, "relocation type");
-        if (type > static_cast<uint8_t>(version >= ShortRamFormatVersion ? RelocationType::ADDR8_SHORT_RAM :
+        if (type > static_cast<uint8_t>(version >= SPC700RelocationFormatVersion ? RelocationType::SPC_IMM8_HI :
+                version >= ShortRamFormatVersion ? RelocationType::ADDR8_SHORT_RAM :
                 version >= 5 ? RelocationType::ADDR16_RAM : RelocationType::ADDR24_OFFSET)) {
             throw std::runtime_error("Object file has an invalid relocation type: " + path);
         }
@@ -436,8 +443,10 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
     if (version < StaticStackFormatVersion && obj.staticStackBound())
         throw std::runtime_error("Object file has a static stack-bound marker before format version 9: " + path);
     // Section/enum bounds above already confine short RAM to version 10.
-    if (version >= ShortRamFormatVersion && !obj.usesShortRam())
+    if (version == ShortRamFormatVersion && !obj.usesShortRam())
         throw std::runtime_error("Object file uses format version 10 without short RAM: " + path);
+    if (version >= SPC700RelocationFormatVersion && !obj.usesSPC700Relocations())
+        throw std::runtime_error("Object file uses format version 11 without SPC700 relocations: " + path);
     return obj;
 }
 
@@ -445,8 +454,12 @@ void ObjectFile::validate_relocation(const RelocationEntry& relocation,
                                      const ObjectFile& object) {
     if (static_cast<std::uint8_t>(relocation.section_to_patch) > static_cast<std::uint8_t>(SymbolSection::DATA))
         throw std::runtime_error("Object file: invalid relocation section.");
-    if (static_cast<std::uint8_t>(relocation.type) > static_cast<std::uint8_t>(RelocationType::ADDR8_SHORT_RAM))
+    if (static_cast<std::uint8_t>(relocation.type) > static_cast<std::uint8_t>(RelocationType::SPC_IMM8_HI))
         throw std::runtime_error("Object file: invalid relocation type.");
+    // Relocation kinds are tied to one instruction set; patching another
+    // target's bytes with them would silently corrupt instructions.
+    if (isSPC700Relocation(relocation.type) != (object.config.target == TargetKind::SPC700))
+        throw std::runtime_error("Object file: relocation type does not match the object target.");
     if (relocation.target_symbol_name.empty()) {
         throw std::runtime_error("Object file has a relocation without a target symbol.");
     }

@@ -533,8 +533,8 @@ elseif(CASE STREQUAL "gsu_mapping")
     reject_mapping(near-end-iwt "16-bit GSU relocation.*different bank")
     reject_mapping(far-end-bank "outside supported ROM/RAM")
     reject_mapping(far-end-offset "outside supported ROM/RAM")
-    reject_mapping(far-overflow "exceeds the 24-bit address range")
-    reject_mapping(near-overflow "exceeds the 16-bit address range")
+    reject_mapping(far-overflow "SPC700 payload exceeds the 64 KiB address space")
+    reject_mapping(near-overflow "SPC700 relocation target exceeds the 16-bit address space")
     # Exercise actual compiler output with a full 24-bit origin, not just
     # hand-authored objects. Near calls still encode offsets within PBR.
     foreach(origin IN ITEMS 0x408000 0x708000 0x710000)
@@ -806,6 +806,9 @@ elseif(CASE STREQUAL "spc700_target")
         message(FATAL_ERROR "SPC700 target should remain inspectable through IR\nstdout:\n${ir_output}\nstderr:\n${ir_error}")
     endif()
     run_expected_failure_contains("no code-generation backend" "${DISCC}" --target spc700 "${source}" -o "${TEST_DIR}/spc700.o")
+
+elseif(CASE STREQUAL "spc700_link")
+    include("${ROOT_DIR}/tests/run_spc700_assembler_regression.cmake")
 
 else()
     message(FATAL_ERROR "Unknown regression case: ${CASE}")

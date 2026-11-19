@@ -29,11 +29,39 @@ namespace {
 std::uint8_t alignmentPaddingByte(TargetKind target) {
     switch (target) {
         case TargetKind::GSU: return 0x01;
-        case TargetKind::SPC700: break;
+        case TargetKind::SPC700: return 0x00; // NOP
     }
-    // SPC700 objects are not executable yet; keep the historical byte until
-    // the SPC700 assembler defines its own padding.
     return 0x01;
+}
+
+// Range rules for SPC700 relocations in the 16-bit SPC address space. A
+// direct-page operand addresses page 0 only; page 1 (PSW.P = 1) needs an
+// explicit runtime contract that does not exist yet.
+void validateSPC700RelocationTarget(const RelocationEntry& reloc, std::uint32_t target_addr) {
+    switch (reloc.type) {
+        case RelocationType::SPC_DP8:
+            if (target_addr > 0xffu)
+                throw std::runtime_error("SPC700 direct-page relocation must target $0000-$00FF: " + reloc.target_symbol_name);
+            return;
+        case RelocationType::SPC_MEMBIT13:
+            if (target_addr > 0x1fffu)
+                throw std::runtime_error("SPC700 mem.bit relocation must target $0000-$1FFF: " + reloc.target_symbol_name);
+            return;
+        case RelocationType::SPC_ABS16:
+        case RelocationType::SPC_IMM8_LO:
+        case RelocationType::SPC_IMM8_HI:
+            if (target_addr > 0xffffu)
+                throw std::runtime_error("SPC700 relocation target exceeds the 16-bit address space: " + reloc.target_symbol_name);
+            return;
+        case RelocationType::ADDR16_JAL:
+        case RelocationType::ADDR16_IWT:
+        case RelocationType::ADDR24_BANK:
+        case RelocationType::ADDR24_OFFSET:
+        case RelocationType::ADDR16_RAM:
+        case RelocationType::ADDR8_SHORT_RAM:
+            break;
+    }
+    throw std::runtime_error("GSU relocation in an SPC700 link: " + reloc.target_symbol_name);
 }
 
 std::uint32_t parseOptionNumber(const std::string& text, std::uint32_t maximum) {
@@ -391,6 +419,9 @@ int runLinker(std::vector<std::string> arguments) {
         }
         if (config.target == TargetKind::GSU)
             GsuMemoryMap::validatePayload(config.code_start_address, final_code.size(), final_data.size());
+        if (config.target == TargetKind::SPC700 &&
+            static_cast<std::uint64_t>(config.code_start_address) + final_code.size() + final_data.size() > 0x10000u)
+            throw std::runtime_error("SPC700 payload exceeds the 64 KiB address space.");
         if (config.bitmap.enabled) {
             const std::uint64_t begin = 0x700000u + config.bitmap.base;
             const auto end = begin + config.bitmap.sizeBytes();
@@ -582,9 +613,10 @@ int runLinker(std::vector<std::string> arguments) {
                         // may intentionally represent a full 24-bit address.
                         GsuMemoryMap::validateAddress(target_addr);
                     }
-                } else if ((reloc.type == RelocationType::ADDR16_JAL ||
-                            reloc.type == RelocationType::ADDR16_IWT) && target_addr > 0xffffu) {
-                    throw std::runtime_error("Relocation target exceeds the 16-bit address range.");
+                } else {
+                    // ObjectFile validation guarantees SPC700 objects carry
+                    // only SPC700 relocation types.
+                    validateSPC700RelocationTarget(reloc, target_addr);
                 }
                 std::vector<uint8_t>& section_to_patch =
                     reloc.section_to_patch == SymbolSection::CODE ? final_code : final_data;
@@ -610,6 +642,23 @@ int runLinker(std::vector<std::string> arguments) {
                         break;
                     case RelocationType::ADDR8_SHORT_RAM:
                         section_to_patch[operand_index] = static_cast<std::uint8_t>((target_addr & 0xffffu) >> 1);
+                        break;
+                    case RelocationType::SPC_ABS16:
+                        section_to_patch[operand_index] = static_cast<std::uint8_t>(target_addr & 0xffu);
+                        section_to_patch[operand_index + 1] = static_cast<std::uint8_t>((target_addr >> 8) & 0xffu);
+                        break;
+                    case RelocationType::SPC_DP8:
+                    case RelocationType::SPC_IMM8_LO:
+                        section_to_patch[operand_index] = static_cast<std::uint8_t>(target_addr & 0xffu);
+                        break;
+                    case RelocationType::SPC_IMM8_HI:
+                        section_to_patch[operand_index] = static_cast<std::uint8_t>((target_addr >> 8) & 0xffu);
+                        break;
+                    case RelocationType::SPC_MEMBIT13:
+                        // Keep the assembler-encoded bit index in bits 13-15.
+                        section_to_patch[operand_index] = static_cast<std::uint8_t>(target_addr & 0xffu);
+                        section_to_patch[operand_index + 1] = static_cast<std::uint8_t>(
+                            (section_to_patch[operand_index + 1] & 0xe0u) | ((target_addr >> 8) & 0x1fu));
                         break;
                 }
             }

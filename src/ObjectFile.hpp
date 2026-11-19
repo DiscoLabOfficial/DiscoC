@@ -15,12 +15,24 @@ enum class RelocationType : uint8_t {
     ADDR24_BANK,    // The 8-bit bank byte of a 24-bit far address
     ADDR24_OFFSET,  // The 16-bit offset of a 24-bit far address
     ADDR16_RAM,    // RAM static-storage offset, independent of the program bank
-    ADDR8_SHORT_RAM // LMS/SMS operand: (even near RAM address < $0200) / 2
+    ADDR8_SHORT_RAM, // LMS/SMS operand: (even near RAM address < $0200) / 2
+    // SPC700 relocations (format version 11, SPC700 objects only). Their
+    // patch_offset names the first operand byte itself, not the opcode,
+    // because SPC700 operands do not always follow the opcode directly.
+    SPC_ABS16,      // 16-bit little-endian absolute address (!abs)
+    SPC_DP8,        // Direct-page byte; the address must lie in $0000-$00FF
+    SPC_MEMBIT13,   // mem.bit word: low 13 bits address, top 3 bits keep the bit index
+    SPC_IMM8_LO,    // #<sym: low byte of a 16-bit address
+    SPC_IMM8_HI     // #>sym: high byte of a 16-bit address
 };
+
+constexpr bool isSPC700Relocation(RelocationType type) {
+    return static_cast<std::uint8_t>(type) >= static_cast<std::uint8_t>(RelocationType::SPC_ABS16);
+}
 
 // Operand bytes a relocation rewrites, relative to RelocationEntry::patch_offset.
 // GSU relocation types record the opcode position and patch the operand that
-// immediately follows it. Every reader, writer, linker and exporter derives
+// immediately follows it; SPC700 types record the operand position. Every reader, writer, linker and exporter derives
 // relocation geometry from this one function. Callers validate `type` before
 // asking for its span.
 struct RelocationSpan {
@@ -41,6 +53,13 @@ constexpr RelocationSpan relocationSpan(RelocationType type) {
         case RelocationType::ADDR24_OFFSET:
         case RelocationType::ADDR16_RAM:
             break;
+        case RelocationType::SPC_DP8:
+        case RelocationType::SPC_IMM8_LO:
+        case RelocationType::SPC_IMM8_HI:
+            return RelocationSpan{0, 1};
+        case RelocationType::SPC_ABS16:
+        case RelocationType::SPC_MEMBIT13:
+            return RelocationSpan{0, 2};
     }
     return RelocationSpan{1, 2};
 }
@@ -75,9 +94,11 @@ public:
     // unless they carry a proof marker: version 8 for
     // GSUAbi::StaticRamProofSymbol, version 9 for a GSUAbi::StaticStackBoundPrefix
     // marker, version 10 for a short RAM section, SHORT_RAM symbols or
-    // ADDR8_SHORT_RAM relocations. A linker that cannot enforce a marker or
-    // place short RAM must refuse the object rather than ignore it.
-    static constexpr std::uint8_t CurrentFormatVersion = 10;
+    // ADDR8_SHORT_RAM relocations, version 11 for SPC700 relocations. A linker
+    // that cannot enforce a marker, place short RAM or apply a relocation type
+    // must refuse the object rather than ignore it.
+    static constexpr std::uint8_t CurrentFormatVersion = 11;
+    static constexpr std::uint8_t SPC700RelocationFormatVersion = 11;
     static constexpr std::uint8_t ShortRamFormatVersion = 10;
     static constexpr std::uint8_t StaticStackFormatVersion = 9;
     static constexpr std::uint8_t StaticRamProofFormatVersion = 8;
@@ -87,6 +108,7 @@ public:
     // `main`'s entry, or 0 when the object carries no such marker.
     std::uint32_t staticStackBound() const;
     bool usesShortRam() const;
+    bool usesSPC700Relocations() const;
     static constexpr std::uint32_t MaxSectionBytes = 64u * 1024u * 1024u;
     static constexpr std::uint32_t MaxObjectBytes = 128u * 1024u * 1024u;
     static constexpr std::uint32_t MaxStringBytes = 4096u;
