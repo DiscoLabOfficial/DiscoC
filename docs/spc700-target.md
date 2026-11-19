@@ -2,9 +2,10 @@
 
 DiscoC currently emits GSU code. This document records the target model and
 the initial ABI proposal for the future SPC-700 backend. Selecting `spc700` is
-intentionally accepted by the compiler configuration and object format, but code
-generation remains disabled until the assembler and lowering backend are
-implemented.
+accepted by the compiler configuration and object format. The SPC700 assembler,
+relocations, linker patching and assembly export are implemented (see
+[discas](assembler.md)); compiler code generation remains disabled until the
+ABI, runtime and lowering stages exist.
 
 ## Architectural model
 
@@ -61,9 +62,11 @@ This is the deliberately small ABI contract for the first backend milestone:
 * volatile memory access will be required for communication ports, DSP
   registers, timers, and other hardware-visible locations.
 
-The stack-base and runtime memory reservation are intentionally not fixed in
-this foundation PR. They belong in the object/linker configuration once the
-SPC-700 assembler and relocation model exist.
+The stack-base and runtime memory reservation are intentionally not fixed yet.
+They belong in the object/linker configuration now that the SPC-700 assembler
+and relocation model exist. Until then an SPC700 link only checks that the
+payload fits below `$10000` and that direct-page and `mem.bit` relocations fit
+their operand ranges; it does not protect `$00F0-$00FF` or the IPL ROM.
 
 ## Command-line configuration
 

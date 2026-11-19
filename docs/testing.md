@@ -150,6 +150,19 @@ prefix configurations (1,024 encoding cases), plus private/far relocations,
 placement, DATA bytes, and malformed export input. These are encoding tests,
 not execution coverage for every opcode.
 
+`spc700_assembler` assembles every SPC-700 opcode form and compares the bytes
+with a table produced once by the independent WLA-DX assembler. It also checks
+that the opcode map is complete and unambiguous, that SPC700 assembly export is
+a byte-exact fixed point, symbolic operands and their relocation offsets, every
+branch range boundary and long form, operand diagnostics, and object format 11
+rules. `spc700_link` links two SPC700 objects through every relocation type,
+round-trips the linked listing, and rejects out-of-range direct-page,
+`mem.bit` and payload placements as well as mixed-target links. When
+`wla-spc700` and `wlalink` are installed, `spc700_wla_oracle` re-checks all
+256 forms against WLA-DX directly (`ctest -L oracle`). WLA writes temporary
+files with `tmpfile()`, so it needs a writable system temporary directory.
+These are encoding and link tests, not SPC700 execution coverage.
+
 `gsu_runtime_loading` links multi-file programs at `$70:6000`, `$70:0000`, and
 `$71:6000`, verifies hand-encoded bootstrap bytes, and starts the instruction
 model with deliberately incorrect RAMBR/R10 state. It checks both data banks,
@@ -831,7 +844,8 @@ checks separately.
 
 ## Optional libFuzzer target
 
-The optional frontend fuzzer exercises the lexer, parser, textual assembler,
+The optional frontend fuzzer exercises the lexer, parser, textual assembler
+(GSU and SPC700),
 in-memory object-file reader, and bounded TOML manifest parser. It requires
 Clang with libFuzzer support:
 

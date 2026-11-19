@@ -95,9 +95,11 @@ rules rather than silently adopt C semantics.
 - [x] Bounded TOML manifests, in-process discc build, manifest-relative paths, and explicit CLI overrides.
 - [x] Native CMake/direct GCC/Clang build helpers and retained experimental C++14 DOS cross-build configuration.
 - [x] SPC700 target/layout foundation, capability diagnostics, and frontend/IR inspection.
+- [x] SPC700 assembler (`discas --target spc700`), object format 11 relocations,
+  linker patching and byte-exact assembly export, checked against WLA-DX.
 
 GSU binaries are fixed-origin payloads, not complete SNES ROMs or arbitrarily
-relocatable routines. SPC700 machine emission is not implemented. See
+relocatable routines. SPC700 assembly and linking work; SPC700 compiler code generation is not implemented. See
 [GSU loading](docs/gsu-loading.md) and the
 [SPC700 foundation](docs/spc700-target.md) for the current boundaries.
 
@@ -142,10 +144,10 @@ GSU emission or changing shared language semantics.
 
 ### 1. Assembler and object relocations
 
-- [ ] Implement SPC700 instruction encoding and operand validation.
-- [ ] Define target-specific relocations and branch-range handling.
-- [ ] Integrate assembly/object metadata with the existing target discriminator.
-- [ ] Add golden encodings, malformed-input tests, and assembly round trips.
+- [x] Implement SPC700 instruction encoding and operand validation.
+- [x] Define target-specific relocations and branch-range handling.
+- [x] Integrate assembly/object metadata with the existing target discriminator.
+- [x] Add golden encodings, malformed-input tests, and assembly round trips.
 
 Acceptance: supported instructions assemble to independently checked bytes;
 invalid operands, wrong-target objects, and unrepresentable relocations fail

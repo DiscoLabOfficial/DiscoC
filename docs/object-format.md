@@ -7,12 +7,13 @@ The format is intentionally small and implementation-owned. It is not ELF, SNES 
 ## Binary layout
 
 All multi-byte integer fields are serialized explicitly in little-endian byte
-order, independent of the host architecture. The reader accepts versions 3–10;
+order, independent of the host architecture. The reader accepts versions 3–11;
 writers select version 7 by default. Versions 8 and 9 keep the version-7 layout
 and carry the static-RAM or static stack-bound proof marker described below.
-Version 10 adds a short RAM section. The writer selects the highest version
-required by an object's proof markers, short RAM section, short RAM symbols or
-short RAM relocations. Older readers reject unsupported versions instead of
+Version 10 adds a short RAM section. Version 11 keeps the version-10 layout
+(with an empty short RAM image) and permits the SPC700 relocation types. The
+writer selects the highest version required by an object's proof markers, short
+RAM section, short RAM symbols or relocations, or SPC700 relocations. Older readers reject unsupported versions instead of
 ignoring required placement or proof constraints.
 
 The version-7 layout and its version-10 extension are serialized in this order:
@@ -20,7 +21,7 @@ The version-7 layout and its version-10 extension are serialized in this order:
 | Field | Encoding |
 | --- | --- |
 | Magic | 5 ASCII bytes: `DISCO` |
-| Format version | `uint8_t`: `7` by default, `8`/`9` for proof markers, `10` for short RAM |
+| Format version | `uint8_t`: `7` by default, `8`/`9` for proof markers, `10` for short RAM, `11` for SPC700 relocations |
 | Target | `uint8_t`: `0` = GSU, `1` = SPC700 |
 | Memory mapping | `uint8_t`: `0` = LoROM, `1` = HiROM |
 | Code start address | `uint32_t` |
@@ -31,7 +32,7 @@ The version-7 layout and its version-10 extension are serialized in this order:
 | Code section | `uint32_t` byte count, followed by raw code bytes |
 | Data section | `uint32_t` byte count, followed by raw data bytes |
 | RAM initialization image | `uint32_t` byte count, followed by initial RAM bytes (version 5) |
-| Short RAM image | `uint32_t` byte count (at most 510), followed by its initial bytes (version 10 only) |
+| Short RAM image | `uint32_t` byte count (at most 510), followed by its initial bytes (version 10 and later; empty in version 11) |
 | Symbol count | `uint32_t` |
 | Symbols | Repeated symbol records |
 | Relocation count | `uint32_t` |
@@ -90,6 +91,18 @@ The relocation types are:
 | `3` | `ADDR24_OFFSET` | 16-bit offset portion of a far address |
 | `4` | `ADDR16_RAM` | 16-bit address in the configured near RAM bank (version 5) |
 | `5` | `ADDR8_SHORT_RAM` | `LMS`/`SMS` word index: even near RAM address below `$0200`, halved (version 10) |
+| `6` | `SPC_ABS16` | SPC700 16-bit little-endian absolute address (version 11) |
+| `7` | `SPC_DP8` | SPC700 direct-page byte; the address must lie in `$0000-$00FF` (version 11) |
+| `8` | `SPC_MEMBIT13` | SPC700 `mem.bit` word: the address fills bits 0–12 and must lie in `$0000-$1FFF`; bits 13–15 keep the assembled bit index (version 11) |
+| `9` | `SPC_IMM8_LO` | SPC700 `#<symbol`: low byte of a 16-bit address (version 11) |
+| `10` | `SPC_IMM8_HI` | SPC700 `#>symbol`: high byte of a 16-bit address (version 11) |
+
+Types 0–5 belong to GSU objects and types 6–10 to SPC700 objects; reading or
+writing a relocation whose type does not match the object target fails. For GSU
+types `patch_offset` names the opcode and the operand starts one byte later.
+For SPC700 types `patch_offset` names the first operand byte itself, because
+SPC-700 operands do not always follow the opcode (for example
+`MOV dp,#imm` stores the immediate before the direct-page byte).
 
 The relocation section identifies the CODE/DATA section containing the
 placeholder. RAM-image patch records are not supported. The compiler primarily
@@ -155,7 +168,13 @@ base, not an unpadded sum. Padding counts toward the payload's bank limit and is
 preserved in final assembly exports. This metadata does not align arbitrary
 word declarations inside a hand-written packed section.
 
-For 16-bit address relocations, the linker patches the two bytes after the opcode placeholder. For bank relocations, it patches the byte after the opcode. For offset relocations, it patches the two-byte address field. An `ADDR8_SHORT_RAM` relocation patches the single word-index byte after the `LMS`/`SMS` opcode.
+For 16-bit address relocations, the linker patches the two bytes after the opcode placeholder. For bank relocations, it patches the byte after the opcode. For offset relocations, it patches the two-byte address field. An `ADDR8_SHORT_RAM` relocation patches the single word-index byte after the `LMS`/`SMS` opcode. SPC700 relocations patch the operand bytes starting at `patch_offset`.
+
+SPC700 links place CODE and DATA in the 64 KiB SPC address space: the origin
+plus the payload must not exceed `$10000`. Alignment padding is `$00` (`NOP`)
+for SPC700 and `$01` (`NOP`) for GSU. Static RAM, runtime initialization and
+protected regions (`$00F0-$00FF`, the IPL ROM) are not yet part of an SPC700
+link; see [SPC700 target](spc700-target.md).
 
 Undefined symbols and duplicate definitions are linker errors. Objects with incompatible target configurations are rejected before output is written.
 
@@ -283,12 +302,14 @@ host bitmap metadata and remains the default writer format. Versions 3 through
 6 have no bitmap field; the reader supplies an unselected profile.
 Version 8 permits the static-RAM proof marker; version 9 also permits a static
 stack-bound marker. Version 10 adds short RAM images, symbols and relocations,
-and requires at least one of those short RAM features. Proof markers may also
+and requires at least one of those short RAM features. Version 11 requires at
+least one SPC700 relocation and an SPC700 target. Proof markers may also
 appear in later supported versions; changing only a version byte cannot safely
 downgrade an object that relies on them.
 
 Versions 3/4 cannot contain RAM symbols or relocation type 4. Short RAM symbols
-and relocation type 5 require version 10. Versions outside 3–10, invalid
+and relocation type 5 require version 10, and relocation types 6–10 require
+version 11. Versions outside 3–11, invalid
 alignment bytes, truncated bitmap records, invalid flags and invalid profiles
 are rejected. RAM images are bounded to 64 KiB and short RAM images to 510
 bytes. Rebuild all three tools and compiler objects when upgrading: accepting
