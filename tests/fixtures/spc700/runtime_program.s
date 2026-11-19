@@ -1,51 +1,124 @@
-; SPC700 runtime/ABI fixture, object A: main, a nested call chain f -> g
-; and a recursive factorial. Used by spc700_runtime and spc700_luna_runtime;
-; main returns $9DCA in YA. See tests/run_spc700_runtime_regression.cmake.
+; SPC700 runtime/ABI fixture, object A. Used by spc700_runtime and
+; spc700_luna_runtime; main returns $9DCF in YA.
+;
+; Frames follow docs/spc700-target.md: with L bytes of locals, FP+0..1 hold
+; the caller's FP, FP+2..FP+L+1 the locals and FP+L+2.. the arguments (first
+; argument lowest). Callers push arguments last to first and pop them after
+; the call. Values live across calls stay in the frame; $04-$0B are scratch.
 .setcpu "SPC700"
 .export main
 .segment "CODE"
-; Push the byte in A as an argument (caller pops with incw $00).
+
+; main: L = 2, accumulator word at FP+2.
 main:
-    mov a,#8
+    movw ya,$02
+    movw $04,ya
+    mov x,#4
+main_alloc:
+    decw $00
+    dec x
+    bne main_alloc
+    mov y,#0
+    mov a,$04
+    mov [$00]+y,a
+    inc y
+    mov a,$05
+    mov [$00]+y,a
+    movw ya,$00
+    movw $02,ya
+
+    mov a,#8                ; acc = fact(8) = $9D80
     decw $00
     mov y,#0
     mov [$00]+y,a
-    call !fact              ; YA = 8! = $9D80
+    call !fact
     incw $00
-    movw $10,ya             ; f, g, fact and bump only use $04-$0B, so $10-$17 survive
-    mov a,#7
+    movw $04,ya
+    mov y,#2
+    mov a,$04
+    mov [$02]+y,a
+    inc y
+    mov a,$05
+    mov [$02]+y,a
+
+    mov a,#7                ; acc += f(7) = 22
     decw $00
     mov y,#0
     mov [$00]+y,a
-    call !f                 ; YA = g(7) + 1 = 22
+    call !f
     incw $00
-    addw ya,$10
-    movw $10,ya
-    call !bump              ; object B: counter = counter + 1, returns it in A
+    call !acc_add
+
+    call !bump              ; acc += counter after increment (1), object B
     mov y,#0
-    movw $14,ya
-    mov a,!t3               ; initialized static byte $33
+    call !acc_add
+
+    mov a,!t3               ; acc += initialized static byte $33
     mov y,#0
-    movw $16,ya
-    movw ya,$14
-    addw ya,$16
-    addw ya,$10
-    movw $10,ya
+    call !acc_add
+
     ; Record the stack limit for 16 bytes: lowest software-stack byte + 16.
     mov a,#<__disco_stack_limit_16
     mov !limit,a
     mov a,#>__disco_stack_limit_16
     mov !limit_hi,a
-    movw ya,$10
-    ret                     ; $9D80 + 22 + 1 + $33 = $9DCA
 
-; Prologue: push the caller's FP, then FP = SSP. Epilogue: SSP = FP, pop FP.
-; The first argument is at FP+2.
+    ; acc = add_word(acc, 5): push b, then the word a (low byte first).
+    mov a,#5
+    decw $00
+    mov y,#0
+    mov [$00]+y,a
+    mov y,#2
+    mov a,[$02]+y
+    mov $04,a
+    inc y
+    mov a,[$02]+y
+    mov $05,a
+    decw $00
+    decw $00
+    mov y,#0
+    mov a,$04
+    mov [$00]+y,a
+    inc y
+    mov a,$05
+    mov [$00]+y,a
+    call !add_word
+    incw $00
+    incw $00
+    incw $00
+    mov x,#4
+    jmp !epilogue           ; $9D80 + 22 + 1 + $33 + 5 = $9DCF
+
+; acc_add: internal helper of main, not an ABI function: it has no frame of
+; its own and adds YA to main's accumulator at main's FP+2.
+acc_add:
+    movw $04,ya
+    mov y,#2
+    mov a,[$02]+y
+    mov $06,a
+    inc y
+    mov a,[$02]+y
+    mov $07,a
+    movw ya,$06
+    addw ya,$04
+    movw $06,ya
+    mov y,#2
+    mov a,$06
+    mov [$02]+y,a
+    inc y
+    mov a,$07
+    mov [$02]+y,a
+    ret
+
+; f(byte x): L = 0, returns g(x) + 1.
 f:
     movw ya,$02
     movw $04,ya
+    mov x,#2
+f_alloc:
     decw $00
-    decw $00
+    dec x
+    bne f_alloc
     mov y,#0
     mov a,$04
     mov [$00]+y,a
@@ -55,22 +128,27 @@ f:
     movw ya,$00
     movw $02,ya
     mov y,#2
-    mov a,[$02]+y           ; argument
+    mov a,[$02]+y           ; x
     decw $00
     mov y,#0
     mov [$00]+y,a
-    call !g                 ; YA = arg * 3
+    call !g
     incw $00
     movw $04,ya
-    incw $04                ; + 1
+    incw $04
     movw ya,$04
-    bra epilogue
+    mov x,#2
+    jmp !epilogue
 
+; g(byte x): L = 0, returns x * 3.
 g:
     movw ya,$02
     movw $04,ya
+    mov x,#2
+g_alloc:
     decw $00
-    decw $00
+    dec x
+    bne g_alloc
     mov y,#0
     mov a,$04
     mov [$00]+y,a
@@ -83,13 +161,18 @@ g:
     mov a,[$02]+y
     mov y,#3
     mul ya
-    bra epilogue
+    mov x,#2
+    jmp !epilogue
 
+; fact(byte n): L = 1, local copy of n at FP+2, argument at FP+3.
 fact:
     movw ya,$02
     movw $04,ya
+    mov x,#3
+fact_alloc:
     decw $00
-    decw $00
+    dec x
+    bne fact_alloc
     mov y,#0
     mov a,$04
     mov [$00]+y,a
@@ -98,13 +181,16 @@ fact:
     mov [$00]+y,a
     movw ya,$00
     movw $02,ya
+    mov y,#3
+    mov a,[$02]+y           ; argument n
     mov y,#2
-    mov a,[$02]+y           ; n
+    mov [$02]+y,a           ; local n
     cmp a,#2
     bcs fact_recurse
     mov a,#1
     mov y,#0
-    bra epilogue
+    mov x,#3
+    jmp !epilogue
 fact_recurse:
     dec a
     decw $00
@@ -114,8 +200,8 @@ fact_recurse:
     incw $00
     movw $06,ya
     mov y,#2
-    mov a,[$02]+y
-    mov $08,a               ; n
+    mov a,[$02]+y           ; local n
+    mov $08,a
     mov a,$06
     mov y,$08
     mul ya
@@ -127,18 +213,72 @@ fact_recurse:
     adc a,$0B
     mov y,a
     mov a,$0A
+    mov x,#3
+    jmp !epilogue
 
-epilogue:
-    movw $04,ya             ; return value
+; add_word(word a, byte b): L = 2, sum stored in a local word at FP+2;
+; a at FP+4..5, b at FP+6.
+add_word:
     movw ya,$02
-    movw $00,ya             ; SSP = FP
+    movw $04,ya
+    mov x,#4
+add_alloc:
+    decw $00
+    dec x
+    bne add_alloc
+    mov y,#0
+    mov a,$04
+    mov [$00]+y,a
+    inc y
+    mov a,$05
+    mov [$00]+y,a
+    movw ya,$00
+    movw $02,ya
+    mov y,#6
+    mov a,[$02]+y
+    mov $04,a
+    mov $05,#0
+    mov y,#4
+    mov a,[$02]+y
+    mov $06,a
+    inc y
+    mov a,[$02]+y
+    mov $07,a
+    movw ya,$06
+    addw ya,$04
+    movw $06,ya
+    mov y,#2
+    mov a,$06
+    mov [$02]+y,a
+    inc y
+    mov a,$07
+    mov [$02]+y,a
+    mov y,#2                ; reload the local sum as the result
+    mov a,[$02]+y
+    mov $06,a
+    inc y
+    mov a,[$02]+y
+    mov y,a
+    mov a,$06
+    mov x,#4
+    jmp !epilogue
+
+; Epilogue: YA = result, X = L + 2. SSP = FP, FP = caller's FP, SSP += X.
+epilogue:
+    movw $04,ya
+    movw ya,$02
+    movw $00,ya
     mov y,#0
     mov a,[$00]+y
-    mov $02,a
+    mov $06,a
     inc y
     mov a,[$00]+y
-    mov $03,a               ; FP = caller's FP
+    mov $07,a
+    movw ya,$06
+    movw $02,ya
+epilogue_pop:
     incw $00
-    incw $00
+    dec x
+    bne epilogue_pop
     movw ya,$04
     ret

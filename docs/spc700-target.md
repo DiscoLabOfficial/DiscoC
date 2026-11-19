@@ -68,15 +68,26 @@ writes its output when it does.
 
 * Byte results are returned in `A`; word results in `YA` (low byte in `A`).
 * Arguments and locals live on the software stack. The caller pushes the
-  arguments (`decw $00` and a store through `[$00]+Y`) and pops them after the
-  call returns. Byte arguments have one-byte alignment and word arguments
-  two-byte alignment.
-* A callee pushes the caller's FP and sets FP = SSP. Its arguments start at
-  FP+2 and its locals lie below FP, all addressed with `[$02]+Y`, so one frame
-  holds at most 256 addressable bytes. The epilogue sets SSP = FP and pops FP.
-* `A`, `X`, `Y`, `PSW` and `$0004-$001F` are clobbered by a call. SSP and FP
-  are preserved. `PSW.P` is clear at every call boundary (direct page = page
-  0).
+  arguments from last to first (`decw $00` and stores through `[$00]+Y`), so
+  the first argument ends at the lowest address, and pops them after the call
+  returns. Stack slots are packed: a word argument occupies two consecutive
+  bytes, low byte first, with no alignment padding.
+* `Y` in `[$02]+Y` is an unsigned index, so a frame is laid out upward from
+  FP. A callee with `L` bytes of locals subtracts `L + 2` from SSP, stores the
+  caller's FP at SSP and sets FP = SSP:
+
+  | Address | Contents |
+  | --- | --- |
+  | `FP+0..FP+1` | caller's FP |
+  | `FP+2..FP+L+1` | locals |
+  | `FP+L+2..` | arguments, first argument first |
+
+  The epilogue sets SSP = FP, reloads the caller's FP from there and adds
+  `L + 2` to SSP. Saved FP, locals and arguments together span at most 256
+  bytes.
+* `A`, `X`, `Y`, `PSW` and `$0004-$001F` are clobbered by a call; a value live
+  across a call belongs in the caller's frame. SSP and FP are preserved.
+  `PSW.P` is clear at every call boundary (direct page = page 0).
 * `CALL`/`RET` use the hardware stack; nothing else may be left on it across
   a call.
 * `__disco_stack_limit_N`, referenced through an absolute (`!sym`) or

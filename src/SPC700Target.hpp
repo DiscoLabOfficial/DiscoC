@@ -43,17 +43,29 @@ struct DataLayout {
 //
 // Arguments and locals live on a software stack that grows downward in
 // ordinary RAM; the hardware stack in page 1 holds only return addresses and
-// balanced PUSH/POP pairs. The caller pushes arguments and pops them after
-// the call. The callee saves the caller's frame pointer and addresses its
-// frame through `[FramePointer]+Y`, which limits one frame to 256 bytes.
+// balanced PUSH/POP pairs. Y in `[FramePointer]+Y` is an unsigned index, so
+// everything a function addresses lies at or above its frame pointer:
+//
+//   FP+0..1          saved caller FP
+//   FP+2..FP+L+1     L bytes of locals
+//   FP+L+2..         arguments, first argument at the lowest address
+//
+// The caller pushes arguments last to first (stack slots are packed, words
+// little-endian) and pops them after the call. Prologue: SSP -= L + 2, store
+// the caller's FP at SSP, FP = SSP. Epilogue: SSP = FP, reload the caller's
+// FP, SSP += L + 2. One frame, arguments included, spans at most 256 bytes.
 struct Abi {
     static constexpr Register ByteReturnRegister = Register::A;
+    static constexpr std::uint8_t SavedFrameBytes = 2; // FP+0..1 hold the caller's FP.
     static constexpr Register WordReturnLowRegister = Register::A;
     static constexpr Register WordReturnHighRegister = Register::Y;
 
     // A, X, Y, PSW and the scratch bytes are clobbered by a call; the
     // software stack pointer and frame pointer are preserved. PSW.P is clear
-    // at every call boundary, so the direct page is page 0.
+    // at every call boundary, so the direct page is page 0. Values live
+    // across a call belong in the caller's frame, not in scratch bytes.
+    // Alignment of byte and word objects in static data; software-stack
+    // slots are packed.
     static constexpr std::uint32_t ScalarArgumentAlignment = 1;
     static constexpr std::uint32_t WordArgumentAlignment = 2;
 
@@ -68,9 +80,9 @@ struct Abi {
     // IPL ROM base, and may grow down to the end of the linked image.
     static constexpr std::uint16_t DefaultStackTop = DataLayout::IplRomBase;
 
-    // `__disco_stack_limit_N` resolves to the lowest software-stack address
-    // plus N, as on GSU; a function needing N bytes compares against it.
-    static constexpr const char* StackLimitPrefix = "__disco_stack_limit_";
+    // The shared `__disco_stack_limit_N` symbol (GSUAbi::StackLimitPrefix)
+    // resolves to the lowest software-stack address plus N; a function that
+    // needs N bytes compares SSP against it.
 };
 
 // Runtime contract: the startup code returns `main`'s YA result on ports 2/3

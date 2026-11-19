@@ -32,6 +32,6 @@ spc700_step("${WLALINK}" -r link.txt host.sfc)
 # initialized bytes 11 22 00 33 and the stack limit $4018 (see the fixture).
 # Page 0 is not checked: the real IPL ROM clears $0001-$00EF when it restarts.
 spc700_step("${LUNA}" state host.sfc --until-frame 120 --no-render
-    --assert 7E:0000=01 --assert 7E:0002=CA9D --assert 7E:0004=CA9D
+    --assert 7E:0000=01 --assert 7E:0002=CF9D --assert 7E:0004=CF9D
     --assert-aram 4000=0100112200331840
     --out luna.json)
