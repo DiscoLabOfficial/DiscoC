@@ -370,8 +370,14 @@ void metadataCases(Cases& cases) {
     cases.link("wrong-target", {first}, {"--target", "spc700"}, "does not match input objects");
     cases.link("target-before-origin", {first}, {"--target", "spc700", "--origin", "0x200"}, "target does not match input objects");
     cases.link("wrong-mapping", {first}, {"--memory-mapping", "hirom"}, "does not match input objects");
-    auto spc = first; spc.config.target = TargetKind::SPC700;
-    cases.link("spc-startup", {spc}, {"--init-runtime"}, "only supported for GSU");
+    auto spc = first; spc.config.target = TargetKind::SPC700; spc.config.code_start_address = 0x0200;
+    // SPC700 startup: clrp; mov x,#$FF; mov sp,x; software stack top $FFC0.
+    const auto spc_startup = cases.link("spc-startup", {spc}, {"--init-runtime"});
+    require(spc_startup.size() > 8 && spc_startup[0] == 0x20 && spc_startup[1] == 0xCD && spc_startup[2] == 0xFF &&
+        spc_startup[3] == 0xBD && spc_startup[4] == 0xE8 && spc_startup[5] == 0xC0 && spc_startup[7] == 0xFF,
+        "SPC700 runtime startup prefix");
+    cases.link("spc-ram-bank", {spc}, {"--ram-bank", "1"}, "GSU-only options");
+    cases.link("spc-stack-top", {spc}, {"--init-runtime", "--stack-pointer", "0xFFC2"}, "must not exceed $FFC0");
     for (const auto section : {SymbolSection::CODE, SymbolSection::DATA, SymbolSection::RAM}) {
         auto duplicate = second; duplicate.symbol_table.front() = {"main", section, 0};
         if (section == SymbolSection::DATA) duplicate.data_section = {0};

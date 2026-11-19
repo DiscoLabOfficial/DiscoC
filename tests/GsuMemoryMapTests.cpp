@@ -158,8 +158,7 @@ void writeFixtures(const std::filesystem::path& directory) {
         write(type == RelocationType::ADDR24_BANK ? "far-end-bank" : "far-end-offset", end);
     }
     // Address-width guards for the 16-bit SPC700 space: a payload must fit
-    // below $10000, and a relocation to the end of a payload that exactly
-    // fills it must not be clipped to 16 bits.
+    // below $10000, and one reaching the top overlaps the IPL ROM area.
     auto wide = sizedObject(0xfffffe, 3, 0);
     wide.config.target = TargetKind::SPC700;
     wide.symbol_table.push_back({"end", SymbolSection::CODE, 3});
