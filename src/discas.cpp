@@ -1,5 +1,6 @@
 #include "Assembler.hpp"
 #include "CompilerError.hpp"
+#include "TargetConfig.hpp"
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -19,15 +20,30 @@ std::string readFile(const std::string& path) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "Usage: discas <file.s> -o <file.o>\n";
+        std::cerr << "Usage: discas [--target <gsu|spc700>] <file.s> -o <file.o>\n";
         return 1;
     }
 
     std::string input_path;
     std::string output_path;
+    bool explicit_target = false;
+    TargetKind target = TargetKind::GSU;
     for (int i = 1; i < argc; ++i) {
         const std::string argument = argv[i];
-        if (argument == "-o") {
+        if (argument == "--target") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --target requires gsu or spc700.\n";
+                return 1;
+            }
+            const std::string name = argv[++i];
+            if (name == "gsu" || name == "superfx") target = TargetKind::GSU;
+            else if (name == "spc700") target = TargetKind::SPC700;
+            else {
+                std::cerr << "Error: unknown target '" << name << "'; expected gsu or spc700.\n";
+                return 1;
+            }
+            explicit_target = true;
+        } else if (argument == "-o") {
             if (i + 1 >= argc) {
                 std::cerr << "Error: -o requires a filename.\n";
                 return 1;
@@ -50,8 +66,11 @@ int main(int argc, char* argv[]) {
     }
 
     try {
-        Assembler assembler;
-        ObjectFile object = assembler.assemble(readFile(input_path));
+        const auto source = readFile(input_path);
+        // Without --target the first `.setcpu` selects the processor; an
+        // explicit target must agree with any `.setcpu` in the source.
+        Assembler assembler(explicit_target ? target : Assembler::detectTarget(source, TargetKind::GSU));
+        ObjectFile object = assembler.assemble(source);
         object.write(output_path);
         std::cout << "Assembled: " << input_path << " -> " << output_path << "\n";
     } catch (const CompilerError& error) {

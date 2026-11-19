@@ -38,8 +38,14 @@ This is DiscoC assembly, not directly consumable WLA-DX source.
 ## Command-line interface
 
 ```text
-discas <input.s> [-o <output.o>]
+discas [--target <gsu|spc700>] <input.s> [-o <output.o>]
 ```
+
+Without `--target`, the first `.setcpu` directive that names a supported
+processor (`"GSU"`/`"SUPERFX"` or `"SPC700"`) selects it; otherwise the source
+is GSU. A `.setcpu` that names the other supported processor is an error, so an
+explicit `--target` must agree with the source. Other `.setcpu` names remain
+accepted metadata.
 
 If `-o` is omitted, the assembler replaces the input extension with `.o`. The assembler reports source line and column information for syntax, operand, range, and unresolved-label errors.
 
@@ -68,7 +74,7 @@ The assembler recognizes:
 * `.export symbol`;
 * `.byte` and `.word` numeric data directives;
 * exported or private labels in CODE, DATA, and RAM;
-* `.setcpu` lines as accepted metadata directives;
+* `.setcpu` lines, which select the target as described above and are otherwise metadata;
 * `.define __DISCO_MEMORY_MAPPING lorom` (or `hirom`);
 * `.define __DISCO_CODE_START_ADDRESS <24-bit address>`;
 * `.define __DISCO_DATA_ALIGNMENT N` (power of two 1..128);
@@ -105,7 +111,7 @@ host automatically. They survive final linked assembly reassembly; see
 
 Numeric literals support decimal, hexadecimal with `$` or `0x`-style forms accepted by the compiler output, binary with `%`, and signed values where the instruction or data directive allows them.
 
-## Supported instruction families
+## Supported GSU instruction families
 
 The assembler supports the instruction forms currently emitted by `AssemblyGenerator`, including:
 
@@ -176,6 +182,68 @@ When hand-editing `.s` files:
 6. Assemble the edited file before linking.
 
 The assembler does not implement the full ca65 language or macro system. It uses its own built-in opcode and operand encodings rather than executing ca65 macros. The normative technical reference for the GSU instruction set is the official SNES Development Manual, Book II, Super FX section.
+
+## SPC700 assembly
+
+With `--target spc700` or `.setcpu "SPC700"`, `discas` assembles the complete
+SPC-700 instruction set (all 256 opcodes) using the canonical Sony mnemonics.
+Encodings come from one opcode map shared with the assembly exporter, and every
+opcode form is checked against bytes produced by WLA-DX.
+
+```asm
+.setcpu "SPC700"
+.define __DISCO_CODE_START_ADDRESS $0200
+.export main
+.segment "CODE"
+main:
+    mov x,#$EF
+    mov sp,x
+    mov a,counter        ; direct page
+    mov !$1234,a         ; absolute
+    set1 flags.3
+    cbne counter,main
+    ret
+```
+
+Operand forms:
+
+| Form | Meaning |
+| --- | --- |
+| `a`, `x`, `y`, `ya`, `sp`, `psw`, `c` | registers and the carry flag |
+| `#imm`, `#<sym`, `#>sym` | 8-bit immediate; low or high byte of a symbol address |
+| `dp`, `dp+x`, `dp+y` | direct-page byte (no `!`) |
+| `!abs`, `!abs+x`, `!abs+y` | 16-bit absolute address |
+| `(x)`, `(x)+`, `(y)` | register indirect |
+| `[dp+x]`, `[dp]+y`, `[!abs+x]` | indexed indirect |
+| `dp.bit`, `mem.bit`, `/mem.bit` | bit operands; `mem` is a 13-bit address |
+| label | branch target for `bra`, `bcc`-style branches, `cbne`, `dbnz`, `bbs`, `bbc` |
+| `tcall 0..15`, `pcall $00..$FF` | vector number and page-`$FF` offset |
+
+An address is direct page unless it is written with `!`. A numeric
+direct-page operand above `$FF` is an error, and a symbolic one becomes a
+direct-page relocation that the linker checks against `$0000-$00FF`. The
+instruction size therefore never depends on a symbol value. A trailing
+`.digits` always selects a bit, so symbols used as plain SPC700 operands must
+not end in `.digits`.
+
+Supported `.define` names are `__DISCO_CODE_START_ADDRESS` (16-bit),
+`__DISCO_DATA_ALIGNMENT` and `__DISCO_RAM_ALIGNMENT`; GSU-only definitions and
+the `SHORTRAM` segment are rejected. Symbolic operands produce the SPC700
+relocations described in [object format](object-format.md).
+
+Branch displacements are measured from the end of the branch instruction.
+Branch targets must be local CODE labels; use `jmp !symbol` or `call !symbol`
+for other objects. Out-of-range local branches are relaxed automatically:
+
+| Short form | Long form |
+| --- | --- |
+| `bra L` | `jmp !L` |
+| `beq L` (and other flag branches) | `bne +3` (inverted); `jmp !L` |
+| `bbs d.b,L` / `bbc d.b,L` | `bbc d.b,+3` / `bbs d.b,+3`; `jmp !L` |
+| `cbne d,L` / `dbnz d,L` / `dbnz y,L` | same instruction `+2`; `bra +3`; `jmp !L` |
+
+`discc --emit-asm` does not produce SPC700 code yet; `discld --emit-asm` exports
+linked SPC700 payloads as reassemblable listings.
 
 ## Diagnostics and validation
 

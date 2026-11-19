@@ -1,6 +1,7 @@
 #include "AssemblyGenerator.hpp"
 #include "GSUCodeLayout.hpp"
 #include "ABI.hpp"
+#include "SPC700Isa.hpp"
 #include <iomanip>
 #include <map>
 #include <set>
@@ -84,7 +85,8 @@ Instruction decodeAlt(const std::vector<std::uint8_t>& code, std::size_t offset)
 } // namespace
 
 std::string AssemblyGenerator::generate() const {
-    if (m_object.config.target != TargetKind::GSU) throw std::runtime_error("Assembly export is GSU-only.");
+    if (m_object.config.target == TargetKind::SPC700) return generateSPC700();
+    if (m_object.config.target != TargetKind::GSU) throw std::runtime_error("Assembly export: unsupported target.");
     std::ostringstream out;
     out << "; Canonical GSU backend: byte-exact assembly export.\n"
            "; Relocatable symbols require discld; numeric linked addresses are fixed.\n"
@@ -242,6 +244,250 @@ std::string AssemblyGenerator::generate() const {
             out << "    .byte " << hex(m_object.short_ram_section[offset]) << '\n';
         }
         labelsAt(short_labels, m_object.short_ram_section.size());
+    }
+    return out.str();
+}
+
+namespace {
+
+using SPC700Isa::OperandPattern;
+
+const char* registerName(OperandPattern pattern) {
+    switch (pattern) {
+        case OperandPattern::A: return "a";
+        case OperandPattern::X: return "x";
+        case OperandPattern::Y: return "y";
+        case OperandPattern::YA: return "ya";
+        case OperandPattern::SP: return "sp";
+        case OperandPattern::PSW: return "psw";
+        case OperandPattern::C: return "c";
+        default: return nullptr;
+    }
+}
+
+bool relocationFits(OperandPattern pattern, RelocationType type) {
+    switch (pattern) {
+        case OperandPattern::Imm: return type == RelocationType::SPC_IMM8_LO || type == RelocationType::SPC_IMM8_HI;
+        case OperandPattern::Dp:
+        case OperandPattern::DpX:
+        case OperandPattern::DpY:
+        case OperandPattern::DpXInd:
+        case OperandPattern::DpIndY:
+        case OperandPattern::DpBit: return type == RelocationType::SPC_DP8;
+        case OperandPattern::Abs:
+        case OperandPattern::AbsX:
+        case OperandPattern::AbsY:
+        case OperandPattern::AbsXInd: return type == RelocationType::SPC_ABS16;
+        case OperandPattern::MemBit:
+        case OperandPattern::NotMemBit: return type == RelocationType::SPC_MEMBIT13;
+        default: return false;
+    }
+}
+
+} // namespace
+
+// SPC700 export uses the same opcode map as the encoder. Every listing
+// reassembles to identical bytes: operands with relocations print the symbol
+// and branch displacements print generated labels. Bytes that decode as a
+// branch leaving CODE, or a trailing partial instruction, are emitted as
+// explicit .byte statements. A label inside a decoded instruction is an error.
+std::string AssemblyGenerator::generateSPC700() const {
+    std::ostringstream out;
+    out << "; SPC700 byte-exact assembly export.\n"
+           "; Relocatable symbols require discld; numeric linked addresses are fixed.\n"
+           ".setcpu \"SPC700\"\n"
+        << ".define __DISCO_CODE_START_ADDRESS " << hex(m_object.config.code_start_address, 4)
+        << "\n.define __DISCO_DATA_ALIGNMENT " << static_cast<unsigned>(m_object.data_alignment)
+        << "\n.define __DISCO_RAM_ALIGNMENT " << static_cast<unsigned>(m_object.ram_alignment) << '\n';
+
+    std::set<std::string> names;
+    for (const auto& symbol : m_object.symbol_table) names.insert(symbol.name);
+    std::map<std::string, std::string> renamed;
+    std::map<std::size_t, std::vector<std::string>> code_labels, data_labels, ram_labels;
+    std::size_t serial = 0;
+    const auto uniqueName = [&]() {
+        std::string name;
+        do { name = "__disco_local_" + std::to_string(serial++); } while (names.count(name));
+        names.insert(name);
+        return name;
+    };
+    for (const auto& symbol : m_object.symbol_table) {
+        if (symbol.name.empty()) throw std::runtime_error("Assembly export: empty symbol name.");
+        if (symbol.section == SymbolSection::SHORT_RAM) throw std::runtime_error("Assembly export: short RAM requires GSU.");
+        const bool local = symbol.name.front() == '\x01';
+        const auto name = local ? uniqueName() : symbol.name;
+        renamed.emplace(symbol.name, name);
+        auto& labels = symbol.section == SymbolSection::CODE ? code_labels :
+            symbol.section == SymbolSection::DATA ? data_labels : ram_labels;
+        const auto size = symbol.section == SymbolSection::CODE ? m_object.code_section.size() :
+            symbol.section == SymbolSection::DATA ? m_object.data_section.size() : m_object.ram_section.size();
+        if (symbol.offset > size) throw std::runtime_error("Assembly export: symbol outside section.");
+        labels[symbol.offset].push_back(name);
+        if (!local) out << ".export " << name << '\n';
+    }
+    const auto& code = m_object.code_section;
+    std::map<std::size_t, const RelocationEntry*> relocations;
+    for (const auto& relocation : m_object.relocation_table) {
+        const auto span = relocationSpan(relocation.type);
+        if (relocation.section_to_patch != SymbolSection::CODE || !isSPC700Relocation(relocation.type) ||
+            relocation.patch_offset > code.size() || span.extent() > code.size() - relocation.patch_offset ||
+            !relocations.emplace(relocation.patch_offset, &relocation).second) {
+            throw std::runtime_error("Assembly export: unsupported or invalid relocation.");
+        }
+    }
+    const auto symbolName = [&](const RelocationEntry& entry) {
+        const auto found = renamed.find(entry.target_symbol_name);
+        return found == renamed.end() ? entry.target_symbol_name : found->second;
+    };
+
+    // Pass 1: instruction boundaries and branch-target labels. A trailing
+    // partial instruction is emitted byte by byte.
+    std::map<std::size_t, std::string> branch_labels;
+    std::set<std::size_t> raw_instructions; // Emitted as .byte, e.g. data in CODE.
+    for (std::size_t offset = 0; offset < code.size();) {
+        const auto& info = SPC700Isa::instruction(code[offset]);
+        if (info.size > code.size() - offset) break;
+        const auto count = info.operands[0] == OperandPattern::None ? 0u : info.operands[1] == OperandPattern::None ? 1u : 2u;
+        if (count && info.operands[count - 1] == OperandPattern::Rel && !relocations.count(offset + info.size - 1)) {
+            const auto byte = code[offset + info.size - 1];
+            const int displacement = byte < 128 ? byte : static_cast<int>(byte) - 256;
+            const auto target = static_cast<std::int64_t>(offset + info.size) + displacement;
+            if (target < 0 || static_cast<std::uint64_t>(target) > code.size()) {
+                raw_instructions.insert(offset);
+            } else {
+                const auto name = uniqueName();
+                code_labels[static_cast<std::size_t>(target)].push_back(name);
+                branch_labels.emplace(offset, name);
+            }
+        }
+        offset += info.size;
+    }
+
+    const auto labelsAt = [&](const std::map<std::size_t, std::vector<std::string>>& labels, std::size_t offset) {
+        const auto found = labels.find(offset);
+        if (found != labels.end()) for (const auto& name : found->second) out << name << ":\n";
+    };
+
+    out << "\n.segment \"CODE\"\n";
+    for (std::size_t offset = 0; offset < code.size();) {
+        labelsAt(code_labels, offset);
+        const auto& info = SPC700Isa::instruction(code[offset]);
+        if (info.size > code.size() - offset) {
+            if (relocations.count(offset)) throw std::runtime_error("Assembly export: relocation inside instruction.");
+            out << "    .byte " << hex(code[offset]) << " ; explicit encoding ; CODE+" << hex(static_cast<std::uint32_t>(offset), 4) << '\n';
+            ++offset;
+            continue;
+        }
+        const auto next_label = code_labels.upper_bound(offset);
+        if (next_label != code_labels.end() && next_label->first < offset + info.size)
+            throw std::runtime_error("Assembly export: label inside instruction.");
+        if (raw_instructions.count(offset)) {
+            const auto next_relocation = relocations.lower_bound(offset);
+            if (next_relocation != relocations.end() && next_relocation->first < offset + info.size)
+                throw std::runtime_error("Assembly export: relocation inside instruction.");
+            out << "    .byte ";
+            for (std::size_t i = 0; i < info.size; ++i) out << (i ? ", " : "") << hex(code[offset + i]);
+            out << " ; explicit encoding ; CODE+" << hex(static_cast<std::uint32_t>(offset), 4) << '\n';
+            offset += info.size;
+            continue;
+        }
+
+        const auto count = info.operands[0] == OperandPattern::None ? 0u : info.operands[1] == OperandPattern::None ? 1u : 2u;
+        // Byte position of each source operand after the opcode.
+        std::size_t position[2] = {offset + 1, offset + 1};
+        if (count == 2) {
+            const auto first = SPC700Isa::operandBytes(info.operands[0]);
+            const auto second = SPC700Isa::operandBytes(info.operands[1]);
+            if (info.layout == SPC700Isa::OperandLayout::Reversed) position[0] = offset + 1 + second;
+            else position[1] = offset + 1 + first;
+        }
+        std::size_t used_relocations = 0;
+        std::string text = info.mnemonic;
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto pattern = info.operands[index];
+            const auto at = position[index];
+            const RelocationEntry* relocation = nullptr;
+            if (SPC700Isa::operandBytes(pattern) != 0) {
+                const auto found = relocations.find(at);
+                if (found != relocations.end()) {
+                    if (!relocationFits(pattern, found->second->type))
+                        throw std::runtime_error("Assembly export: relocation does not match its operand.");
+                    relocation = found->second;
+                    ++used_relocations;
+                }
+            }
+            const auto byte = [&]() { return relocation ? symbolName(*relocation) : hex(code[at]); };
+            const auto word = [&]() {
+                return relocation ? "!" + symbolName(*relocation) :
+                    "!" + hex(code[at] | (static_cast<std::uint32_t>(code[at + 1]) << 8), 4);
+            };
+            std::string operand;
+            if (const char* name = registerName(pattern)) operand = name;
+            else switch (pattern) {
+                case OperandPattern::Imm:
+                    operand = relocation ? std::string(relocation->type == RelocationType::SPC_IMM8_LO ? "#<" : "#>") +
+                        symbolName(*relocation) : "#" + hex(code[at]);
+                    break;
+                case OperandPattern::Dp: operand = byte(); break;
+                case OperandPattern::DpX: operand = byte() + "+x"; break;
+                case OperandPattern::DpY: operand = byte() + "+y"; break;
+                case OperandPattern::Abs: operand = word(); break;
+                case OperandPattern::AbsX: operand = word() + "+x"; break;
+                case OperandPattern::AbsY: operand = word() + "+y"; break;
+                case OperandPattern::IndX: operand = "(x)"; break;
+                case OperandPattern::IndXInc: operand = "(x)+"; break;
+                case OperandPattern::IndY: operand = "(y)"; break;
+                case OperandPattern::DpXInd: operand = "[" + byte() + "+x]"; break;
+                case OperandPattern::DpIndY: operand = "[" + byte() + "]+y"; break;
+                case OperandPattern::AbsXInd: operand = "[" + word() + "+x]"; break;
+                case OperandPattern::DpBit: operand = byte() + "." + std::to_string(info.fixed); break;
+                case OperandPattern::MemBit:
+                case OperandPattern::NotMemBit: {
+                    const auto value = code[at] | (static_cast<std::uint32_t>(code[at + 1]) << 8);
+                    if (relocation && (value & 0x1fffu) != 0)
+                        throw std::runtime_error("Assembly export: mem.bit relocation has a nonzero address addend.");
+                    operand = (pattern == OperandPattern::NotMemBit ? "/" : "") +
+                        (relocation ? symbolName(*relocation) : hex(value & 0x1fffu, 4)) + "." + std::to_string(value >> 13);
+                    break;
+                }
+                case OperandPattern::Rel: operand = branch_labels.at(offset); break;
+                case OperandPattern::Upage: operand = hex(code[at]); break;
+                case OperandPattern::TcallN: operand = std::to_string(info.fixed); break;
+                default: throw std::runtime_error("Assembly export: unknown SPC700 operand.");
+            }
+            text += (index == 0 ? " " : ",") + operand;
+        }
+        // Every relocation must start at an operand of this instruction.
+        const auto first_relocation = relocations.lower_bound(offset);
+        std::size_t inside = 0;
+        for (auto it = first_relocation; it != relocations.end() && it->first < offset + info.size; ++it) ++inside;
+        if (inside != used_relocations) throw std::runtime_error("Assembly export: relocation inside instruction.");
+        // A nonzero placeholder under a relocation would be lost on reassembly.
+        for (auto it = first_relocation; it != relocations.end() && it->first < offset + info.size; ++it) {
+            const auto span = relocationSpan(it->second->type);
+            const bool keeps_bit = it->second->type == RelocationType::SPC_MEMBIT13;
+            for (std::size_t i = 0; i < span.operand_bytes; ++i) {
+                const auto value = code[it->first + i] & (keeps_bit && i == 1 ? 0x1fu : 0xffu);
+                if (value != 0) throw std::runtime_error("Assembly export: relocation placeholder is not zero.");
+            }
+        }
+        out << "    " << text << " ; CODE+" << hex(static_cast<std::uint32_t>(offset), 4) << '\n';
+        offset += info.size;
+    }
+    labelsAt(code_labels, code.size());
+    out << "\n.segment \"DATA\"\n";
+    for (std::size_t offset = 0; offset < m_object.data_section.size(); ++offset) {
+        labelsAt(data_labels, offset);
+        out << "    .byte " << hex(m_object.data_section[offset]) << '\n';
+    }
+    labelsAt(data_labels, m_object.data_section.size());
+    if (!m_object.ram_section.empty() || !ram_labels.empty()) {
+        out << "\n.segment \"RAM\"\n";
+        for (std::size_t offset = 0; offset < m_object.ram_section.size(); ++offset) {
+            labelsAt(ram_labels, offset);
+            out << "    .byte " << hex(m_object.ram_section[offset]) << '\n';
+        }
+        labelsAt(ram_labels, m_object.ram_section.size());
     }
     return out.str();
 }

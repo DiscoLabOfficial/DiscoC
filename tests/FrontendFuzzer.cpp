@@ -21,11 +21,13 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
         // Invalid source is an expected fuzzing result.
     }
 
-    try {
-        Assembler assembler;
-        (void)assembler.assemble(input);
-    } catch (...) {
-        // Invalid assembly is an expected fuzzing result.
+    for (const auto target : {TargetKind::GSU, TargetKind::SPC700}) {
+        try {
+            Assembler assembler(target);
+            (void)assembler.assemble(input);
+        } catch (...) {
+            // Invalid assembly is an expected fuzzing result.
+        }
     }
 
     try {
