@@ -49,9 +49,6 @@ public:
 
     virtual TargetKind target() const = 0;
 
-    // True when a lowercase `.setcpu` name selects this encoder's processor.
-    virtual bool acceptsCpuName(const std::string& name) const = 0;
-
     // Handles `.define NAME VALUE` at parse time (`rest` is the text after the
     // directive). Throws a CompilerError for unsupported names or values.
     virtual void parseDefine(const std::string& rest, int line_number) = 0;

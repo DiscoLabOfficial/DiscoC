@@ -41,9 +41,11 @@ This is DiscoC assembly, not directly consumable WLA-DX source.
 discas [--target <gsu|spc700>] <input.s> [-o <output.o>]
 ```
 
-Without `--target`, the first `.setcpu` directive selects the processor
-(`"GSU"`/`"SUPERFX"` or `"SPC700"`); a source without `.setcpu` is GSU. An
-explicit `--target` must agree with any `.setcpu` in the source.
+Without `--target`, the first `.setcpu` directive that names a supported
+processor (`"GSU"`/`"SUPERFX"` or `"SPC700"`) selects it; otherwise the source
+is GSU. A `.setcpu` that names the other supported processor is an error, so an
+explicit `--target` must agree with the source. Other `.setcpu` names remain
+accepted metadata.
 
 If `-o` is omitted, the assembler replaces the input extension with `.o`. The assembler reports source line and column information for syntax, operand, range, and unresolved-label errors.
 
@@ -72,7 +74,7 @@ The assembler recognizes:
 * `.export symbol`;
 * `.byte` and `.word` numeric data directives;
 * exported or private labels in CODE, DATA, and RAM;
-* `.setcpu "GSU"` (or `"SUPERFX"`) and `.setcpu "SPC700"`, which must name the selected target and precede every label and statement;
+* `.setcpu` lines, which select the target as described above and are otherwise metadata;
 * `.define __DISCO_MEMORY_MAPPING lorom` (or `hirom`);
 * `.define __DISCO_CODE_START_ADDRESS <24-bit address>`;
 * `.define __DISCO_DATA_ALIGNMENT N` (power of two 1..128);

@@ -461,6 +461,14 @@ void branchRanges() {
         require(again.code_section == object.code_section, "long form round trip of '" + form.first + "'");
     }
 
+    // Data in CODE that decodes as a branch leaving the section exports as
+    // explicit bytes and still round-trips.
+    const auto data = assembleSpc("    .byte $2F, $80\n    nop\n");
+    const auto data_listing = AssemblyGenerator(data).generate();
+    require(data_listing.find(".byte $2F, $80") != std::string::npos, "out-of-section branch bytes must stay explicit");
+    require(Assembler(TargetKind::SPC700).assemble(data_listing).code_section == data.code_section,
+        "explicit branch bytes did not round-trip");
+
     // Relaxing the first branch pushes the second out of range: the layout
     // fixpoint must relax both.
     const auto chain = assembleSpc("    beq far\n    beq other\n" + fill(123) + "far:\n    nop\n" + fill(200) +
@@ -491,7 +499,9 @@ void diagnostics() {
     expectFailure(TargetKind::SPC700, ".define __DISCO_CODE_START_ADDRESS $10000\n", "fit in 16 bits");
     expectFailure(TargetKind::SPC700, ".setcpu \"GSU\"\n", "does not match the selected SPC700 target");
     expectFailure(TargetKind::GSU, ".setcpu \"SPC700\"\n", "does not match the selected GSU target");
-    expectFailure(TargetKind::SPC700, ".segment \"CODE\"\nstart:\n.setcpu \"SPC700\"\n", "must precede");
+    expectFailure(TargetKind::SPC700, ".segment \"CODE\"\nstart:\n    nop\n.setcpu \"GSU\"\n", "does not match");
+    // GSU keeps accepting any other .setcpu name or position, as before SPC700.
+    Assembler(TargetKind::GSU).assemble(".setcpu \"none\"\n.segment \"CODE\"\nl:\n    stop\n.setcpu \"GSU\"\n");
     // Each instruction set rejects the other's mnemonics.
     expectFailure(TargetKind::GSU, ".segment \"CODE\"\n    mov a,#$12\n", "unknown instruction or directive 'mov'");
     expectSpcFailure("    iwt r1, #$1234\n", "unknown instruction or directive 'iwt'");
@@ -499,6 +509,8 @@ void diagnostics() {
     require(Assembler::detectTarget("; comment\n.setcpu \"SPC700\"\n", TargetKind::GSU) == TargetKind::SPC700, "detect SPC700");
     require(Assembler::detectTarget(".setcpu \"GSU\"\n", TargetKind::SPC700) == TargetKind::GSU, "detect GSU");
     require(Assembler::detectTarget("nop\n", TargetKind::SPC700) == TargetKind::SPC700, "detect fallback");
+    require(Assembler::detectTarget(".setcpu \"none\"\n.setcpu \"SPC700\"\n", TargetKind::GSU) == TargetKind::SPC700,
+        "detect skips unknown names");
 }
 
 Bytes readFile(const std::filesystem::path& path) {

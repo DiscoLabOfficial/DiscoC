@@ -29,7 +29,7 @@ includes its unused functions. Combined code/data must fit the linker's single
 program-bank limit.
 
 The core sources pass common-language/IR checks with `--target spc700 --check`.
-SPC700 machine emission remains unavailable; these checks are not evidence of
+SPC700 compiler code generation remains unavailable; these checks are not evidence of
 an executable SPC700 library.
 
 ## Signed fixed-point

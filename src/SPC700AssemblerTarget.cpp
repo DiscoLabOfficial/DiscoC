@@ -259,8 +259,6 @@ class SPC700TargetEncoder final : public TargetEncoder {
 public:
     TargetKind target() const override { return TargetKind::SPC700; }
 
-    bool acceptsCpuName(const std::string& name) const override { return name == "spc700"; }
-
     void parseDefine(const std::string& rest, int line_number) override {
         std::istringstream definition(rest);
         std::string name, value, extra;

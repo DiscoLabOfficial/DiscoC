@@ -48,6 +48,15 @@ std::string cpuName(const std::string& operand) {
     return lower(trim(name));
 }
 
+// Maps a `.setcpu` name to a supported processor. Other names (for example
+// ca65's "none") remain accepted metadata, as they always were for GSU.
+bool knownCpuTarget(const std::string& name, TargetKind& target) {
+    if (name == "gsu" || name == "superfx") target = TargetKind::GSU;
+    else if (name == "spc700") target = TargetKind::SPC700;
+    else return false;
+    return true;
+}
+
 bool isDriverDirective(const std::string& operation) {
     return operation == ".segment" || operation == ".export" || operation == ".setcpu" ||
            operation == ".include" || operation == ".define";
@@ -113,7 +122,6 @@ private:
         std::istringstream input(source);
         std::string raw;
         int line_number = 0;
-        bool content_seen = false;
 
         while (std::getline(input, raw)) {
             ++line_number;
@@ -131,7 +139,6 @@ private:
             if (colon != std::string::npos && (whitespace == std::string::npos || colon < whitespace)) {
                 line.label = trim(raw.substr(0, colon));
                 if (!isIdentifier(line.label)) fail("invalid label '" + line.label + "'.", line_number);
-                content_seen = true;
                 raw = trim(raw.substr(colon + 1));
                 if (raw.empty()) {
                     lines.push_back(line);
@@ -147,17 +154,13 @@ private:
             if (line.operation == ".define") m_encoder->parseDefine(rest, line_number);
             line.operands = splitOperands(rest);
             lines.push_back(line);
-            if (line.operation == ".setcpu") {
-                // The processor is fixed before the first byte or label, so a
-                // source cannot switch instruction sets midway.
-                if (content_seen) fail(".setcpu must precede every label and statement.", line_number);
-                if (line.operands.size() != 1) fail(".setcpu expects one processor name.", line_number);
-                if (!m_encoder->acceptsCpuName(cpuName(line.operands.front())))
-                    fail(".setcpu " + line.operands.front() + " does not match the selected " +
-                         targetName(m_encoder->target()) + " target.", line_number);
-            } else if (!isDriverDirective(line.operation)) {
-                content_seen = true;
-            }
+            // One source assembles for one processor: a `.setcpu` naming the
+            // other supported target is an error wherever it appears.
+            TargetKind named = TargetKind::GSU;
+            if (line.operation == ".setcpu" && line.operands.size() == 1 &&
+                knownCpuTarget(cpuName(line.operands.front()), named) && named != m_encoder->target())
+                fail(".setcpu " + line.operands.front() + " does not match the selected " +
+                     targetName(m_encoder->target()) + " target.", line_number);
 
             if (line.operation == ".segment") {
                 if (line.operands.size() != 1) fail(".segment expects one name.", line_number);
@@ -353,10 +356,8 @@ TargetKind Assembler::detectTarget(const std::string& source, TargetKind fallbac
         if (lower(operation) != ".setcpu") continue;
         std::string rest;
         std::getline(statement, rest);
-        const auto name = cpuName(rest);
-        if (name == "spc700") return TargetKind::SPC700;
-        if (name == "gsu" || name == "superfx") return TargetKind::GSU;
-        return fallback;
+        TargetKind named = fallback;
+        if (knownCpuTarget(cpuName(rest), named)) return named;
     }
     return fallback;
 }

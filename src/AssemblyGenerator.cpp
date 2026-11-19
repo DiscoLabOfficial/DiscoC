@@ -287,9 +287,10 @@ bool relocationFits(OperandPattern pattern, RelocationType type) {
 } // namespace
 
 // SPC700 export uses the same opcode map as the encoder. Every listing
-// reassembles to identical bytes: operands with relocations print the symbol,
-// branch displacements print generated labels, and anything the map cannot
-// express inside the section falls back to explicit .byte statements.
+// reassembles to identical bytes: operands with relocations print the symbol
+// and branch displacements print generated labels. Bytes that decode as a
+// branch leaving CODE, or a trailing partial instruction, are emitted as
+// explicit .byte statements. A label inside a decoded instruction is an error.
 std::string AssemblyGenerator::generateSPC700() const {
     std::ostringstream out;
     out << "; SPC700 byte-exact assembly export.\n"
@@ -342,6 +343,7 @@ std::string AssemblyGenerator::generateSPC700() const {
     // Pass 1: instruction boundaries and branch-target labels. A trailing
     // partial instruction is emitted byte by byte.
     std::map<std::size_t, std::string> branch_labels;
+    std::set<std::size_t> raw_instructions; // Emitted as .byte, e.g. data in CODE.
     for (std::size_t offset = 0; offset < code.size();) {
         const auto& info = SPC700Isa::instruction(code[offset]);
         if (info.size > code.size() - offset) break;
@@ -350,11 +352,13 @@ std::string AssemblyGenerator::generateSPC700() const {
             const auto byte = code[offset + info.size - 1];
             const int displacement = byte < 128 ? byte : static_cast<int>(byte) - 256;
             const auto target = static_cast<std::int64_t>(offset + info.size) + displacement;
-            if (target < 0 || static_cast<std::uint64_t>(target) > code.size())
-                throw std::runtime_error("Assembly export: branch outside code.");
-            const auto name = uniqueName();
-            code_labels[static_cast<std::size_t>(target)].push_back(name);
-            branch_labels.emplace(offset, name);
+            if (target < 0 || static_cast<std::uint64_t>(target) > code.size()) {
+                raw_instructions.insert(offset);
+            } else {
+                const auto name = uniqueName();
+                code_labels[static_cast<std::size_t>(target)].push_back(name);
+                branch_labels.emplace(offset, name);
+            }
         }
         offset += info.size;
     }
@@ -377,6 +381,16 @@ std::string AssemblyGenerator::generateSPC700() const {
         const auto next_label = code_labels.upper_bound(offset);
         if (next_label != code_labels.end() && next_label->first < offset + info.size)
             throw std::runtime_error("Assembly export: label inside instruction.");
+        if (raw_instructions.count(offset)) {
+            const auto next_relocation = relocations.lower_bound(offset);
+            if (next_relocation != relocations.end() && next_relocation->first < offset + info.size)
+                throw std::runtime_error("Assembly export: relocation inside instruction.");
+            out << "    .byte ";
+            for (std::size_t i = 0; i < info.size; ++i) out << (i ? ", " : "") << hex(code[offset + i]);
+            out << " ; explicit encoding ; CODE+" << hex(static_cast<std::uint32_t>(offset), 4) << '\n';
+            offset += info.size;
+            continue;
+        }
 
         const auto count = info.operands[0] == OperandPattern::None ? 0u : info.operands[1] == OperandPattern::None ? 1u : 2u;
         // Byte position of each source operand after the opcode.

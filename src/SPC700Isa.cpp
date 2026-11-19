@@ -5,9 +5,9 @@
 namespace SPC700Isa {
 namespace {
 
-// One row per opcode, indexed by opcode. Verified against the SNESdev SPC-700
-// instruction-set reference; tests/fixtures/spc700/opcodes.golden keeps an
-// independently assembled byte image of every row.
+// One row per opcode, indexed by opcode. Every row is checked against bytes
+// produced by the independent WLA-DX assembler (tests/SPC700AssemblerTests.cpp
+// and the optional spc700_wla_oracle test).
 const InstructionInfo Table[256] = {
     {0x00, "nop", {OperandPattern::None, OperandPattern::None}, 1, OperandLayout::Normal, -1},
     {0x01, "tcall", {OperandPattern::TcallN, OperandPattern::None}, 1, OperandLayout::Normal, 0},
