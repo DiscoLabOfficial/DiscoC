@@ -9,5 +9,6 @@ public:
     explicit AssemblyGenerator(const ObjectFile& object) : m_object(object) {}
     std::string generate() const;
 private:
+    std::string generateSPC700() const;
     const ObjectFile& m_object;
 };

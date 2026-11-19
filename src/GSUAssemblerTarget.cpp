@@ -69,6 +69,10 @@ class GSUTargetEncoder final : public TargetEncoder {
 public:
     TargetKind target() const override { return TargetKind::GSU; }
 
+    bool acceptsCpuName(const std::string& name) const override {
+        return name == "gsu" || name == "superfx";
+    }
+
     void parseDefine(const std::string& rest, int line_number) override {
         std::istringstream definition(rest);
         std::string name, value, extra;

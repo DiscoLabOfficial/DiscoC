@@ -3,6 +3,7 @@
 #include "AssemblerSupport.hpp"
 #include "AssemblerTarget.hpp"
 #include "GSUAssemblerTarget.hpp"
+#include "SPC700AssemblerTarget.hpp"
 
 #include <cstdint>
 #include <map>
@@ -18,9 +19,9 @@ namespace AsmSupport {
 std::unique_ptr<TargetEncoder> makeTargetEncoder(TargetKind target) {
     switch (target) {
         case TargetKind::GSU: return makeGSUTargetEncoder();
-        case TargetKind::SPC700: break;
+        case TargetKind::SPC700: return makeSPC700TargetEncoder();
     }
-    fail("SPC700 assembly is not implemented yet.", 1);
+    fail("unsupported assembler target.", 1);
 }
 
 } // namespace AsmSupport
@@ -39,6 +40,13 @@ struct BranchFixup {
     std::string target;
     int line_number = 0;
 };
+
+// Strips the quotes of a `.setcpu "NAME"` operand and lowercases the name.
+std::string cpuName(const std::string& operand) {
+    auto name = trim(operand);
+    if (name.size() >= 2 && name.front() == '"' && name.back() == '"') name = name.substr(1, name.size() - 2);
+    return lower(trim(name));
+}
 
 bool isDriverDirective(const std::string& operation) {
     return operation == ".segment" || operation == ".export" || operation == ".setcpu" ||
@@ -105,6 +113,7 @@ private:
         std::istringstream input(source);
         std::string raw;
         int line_number = 0;
+        bool content_seen = false;
 
         while (std::getline(input, raw)) {
             ++line_number;
@@ -122,6 +131,7 @@ private:
             if (colon != std::string::npos && (whitespace == std::string::npos || colon < whitespace)) {
                 line.label = trim(raw.substr(0, colon));
                 if (!isIdentifier(line.label)) fail("invalid label '" + line.label + "'.", line_number);
+                content_seen = true;
                 raw = trim(raw.substr(colon + 1));
                 if (raw.empty()) {
                     lines.push_back(line);
@@ -137,6 +147,17 @@ private:
             if (line.operation == ".define") m_encoder->parseDefine(rest, line_number);
             line.operands = splitOperands(rest);
             lines.push_back(line);
+            if (line.operation == ".setcpu") {
+                // The processor is fixed before the first byte or label, so a
+                // source cannot switch instruction sets midway.
+                if (content_seen) fail(".setcpu must precede every label and statement.", line_number);
+                if (line.operands.size() != 1) fail(".setcpu expects one processor name.", line_number);
+                if (!m_encoder->acceptsCpuName(cpuName(line.operands.front())))
+                    fail(".setcpu " + line.operands.front() + " does not match the selected " +
+                         targetName(m_encoder->target()) + " target.", line_number);
+            } else if (!isDriverDirective(line.operation)) {
+                content_seen = true;
+            }
 
             if (line.operation == ".segment") {
                 if (line.operands.size() != 1) fail(".segment expects one name.", line_number);
@@ -319,6 +340,26 @@ private:
         }
     }
 };
+
+TargetKind Assembler::detectTarget(const std::string& source, TargetKind fallback) {
+    std::istringstream input(source);
+    std::string raw;
+    while (std::getline(input, raw)) {
+        const auto comment = raw.find(';');
+        if (comment != std::string::npos) raw.erase(comment);
+        std::istringstream statement(trim(raw));
+        std::string operation;
+        statement >> operation;
+        if (lower(operation) != ".setcpu") continue;
+        std::string rest;
+        std::getline(statement, rest);
+        const auto name = cpuName(rest);
+        if (name == "spc700") return TargetKind::SPC700;
+        if (name == "gsu" || name == "superfx") return TargetKind::GSU;
+        return fallback;
+    }
+    return fallback;
+}
 
 ObjectFile Assembler::assemble(const std::string& source) {
     return AssemblerImpl(m_target).assemble(source);

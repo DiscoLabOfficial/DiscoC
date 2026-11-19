@@ -16,6 +16,11 @@ public:
 
     ObjectFile assemble(const std::string& source);
 
+    // Returns the processor named by the first `.setcpu` directive in
+    // `source`, or `fallback` when there is none or the name is unknown (the
+    // assembler then reports the mismatch with a line number).
+    static TargetKind detectTarget(const std::string& source, TargetKind fallback);
+
 private:
     TargetKind m_target;
 };
