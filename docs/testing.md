@@ -179,7 +179,8 @@ records registers, flags and scratch memory.
 
 When Luna (`Luna_Emulator/luna`), `wla-65816` and `wlalink` are available,
 `spc700_luna_differential` uploads five torture programs (600 cases covering
-every non-control-flow opcode plus random ones) through the APU IPL with the
+every opcode except control transfers, PUSH/POP, `MOV SP,X` and `SLEEP`/`STOP`,
+plus random ones) through the APU IPL with the
 host in `tests/spc700_host/upload.asm`, runs them in Luna and in the model, and
 compares the result tables byte for byte. It needs a writable system temporary
 directory for WLA (`ctest -L oracle`).

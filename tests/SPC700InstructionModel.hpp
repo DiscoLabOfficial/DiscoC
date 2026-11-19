@@ -12,10 +12,10 @@
 // applied when a run starts: SP = $EF, $0001-$00EF cleared and $0000/$0001
 // holding the start address.
 //
-// Flag behavior follows the SNESdev SPC-700 instruction-set notes; the
-// optional spc700_luna_differential test compares generated per-instruction
-// results (including DIV, DAA/DAS and half-carry edge cases) with the Luna
-// emulator.
+// Flag behavior was written from the SNESdev SPC-700 instruction-set notes
+// and is checked by the optional spc700_luna_differential test, which compares
+// generated per-instruction results (including DIV, DAA/DAS and half-carry
+// edge cases) with the Luna emulator.
 
 #include "SPC700Isa.hpp"
 
@@ -46,10 +46,9 @@ public:
     // `fill` initializes the rest of RAM so tests notice reads of state the
     // program never wrote.
     Machine(const std::vector<std::uint8_t>& payload, std::uint16_t origin, std::uint8_t fill = 0)
-        : ram_{}, origin_(origin), size_(payload.size()) {
+        : ram_(0x10000, fill), origin_(origin), size_(payload.size()) {
         if (payload.empty() || payload.size() > 0x10000u - origin)
             throw std::runtime_error("SPC700 payload does not fit in the 64 KiB address space");
-        ram_.fill(fill);
         for (std::size_t index = 0; index < payload.size(); ++index) ram_[origin + index] = payload[index];
     }
     Machine(const Machine&) = delete;
@@ -104,7 +103,7 @@ public:
     std::uint8_t outputPort(unsigned port) const { return out_.at(port); }
     std::uint8_t dspRegister(std::uint8_t index) const { return dsp_.at(index & 0x7F); }
     const ExecutionMetrics& metrics() const { return metrics_; }
-    const std::array<std::uint8_t, 0x10000>& memory() const { return ram_; }
+    const std::vector<std::uint8_t>& memory() const { return ram_; }
 
     // Test hooks for hand-encoded vectors.
     void setRegisters(std::uint8_t a, std::uint8_t x, std::uint8_t y, std::uint8_t sp, std::uint8_t psw) {
@@ -114,7 +113,9 @@ public:
 private:
     using Pattern = SPC700Isa::OperandPattern;
 
-    std::array<std::uint8_t, 0x10000> ram_;
+    // Heap-allocated: tests create many machines, and 64 KiB each would
+    // exhaust small default thread stacks (1 MiB on Windows).
+    std::vector<std::uint8_t> ram_;
     std::array<std::uint8_t, 128> dsp_{};
     std::array<std::uint8_t, 4> in_{}, out_{};
     std::uint16_t origin_;
