@@ -168,6 +168,10 @@ start_and_wait:
   sta APUIO0
 - cmp APUIO0
   bne -
+  ; The IPL has echoed the command and jumped to the program. Clear port 0
+  ; before the program returns: a restarted IPL that still saw $CC there
+  ; would take it as a new command and run the program again.
+  stz APUIO0
   jsr wait_ipl_ready
   rts
 
