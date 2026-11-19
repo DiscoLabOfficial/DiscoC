@@ -23,6 +23,7 @@ foreach(test IN ITEMS disco_object_tests disco_ir_verifier_tests
     run_checked("${BIN_DIR}/${test}${EXE_SUFFIX}")
 endforeach()
 run_checked("${BIN_DIR}/disco_gsu_execution_tests${EXE_SUFFIX}" --self-test)
+run_checked("${BIN_DIR}/disco_spc700_execution_tests${EXE_SUFFIX}" --self-test)
 run_checked("${BIN_DIR}/disco_gsu_differential_tests${EXE_SUFFIX}" --self-test)
 run_checked("${CMAKE_COMMAND}"
     "-DDISCC=${BIN_DIR}/discc${EXE_SUFFIX}" "-DDISCAS=${BIN_DIR}/discas${EXE_SUFFIX}"
@@ -45,6 +46,7 @@ function(add_toolchain_regression name case_name)
         "-DDISCLD=${BIN_DIR}/discld${EXE_SUFFIX}"
         "-DGSU_RUNNER=${BIN_DIR}/disco_gsu_execution_tests${EXE_SUFFIX}"
         "-DGSU_MAPPING_TESTER=${BIN_DIR}/disco_gsu_mapping_tests${EXE_SUFFIX}"
+        "-DSPC700_RUNNER=${BIN_DIR}/disco_spc700_execution_tests${EXE_SUFFIX}"
         -P "${ROOT_DIR}/tests/run_toolchain_regression.cmake")
 endfunction()
 include("${ROOT_DIR}/tests/toolchain-cases.cmake")
