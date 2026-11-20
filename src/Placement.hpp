@@ -1,5 +1,6 @@
 #pragma once
 #include "GsuMemoryMap.hpp"
+#include "SPC700Target.hpp"
 #include "TargetConfig.hpp"
 #include <string>
 
@@ -20,6 +21,7 @@ inline void applyPlacement(CompilerConfig& config, const PlacementOptions& optio
     if (config.target != TargetKind::GSU) {
         if (options.explicit_origin || options.mapping != MemoryMapping::LoROM || options.execution != PlacementOptions::Execution::Automatic)
             throw std::runtime_error("GSU placement options are not supported for this target.");
+        if (config.target == TargetKind::SPC700) config.code_start_address = SPC700Target::DataLayout::DefaultOrigin;
         return;
     }
     if (options.execution != PlacementOptions::Execution::Automatic) {

@@ -363,6 +363,16 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
             -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/spc700_luna_differential
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_spc700_luna_differential.cmake)
         set_tests_properties(spc700_luna_differential PROPERTIES LABELS "spc700;execution;oracle" TIMEOUT 900)
+        add_test(NAME spc700_luna_runtime COMMAND ${CMAKE_COMMAND}
+            -DDISCAS=$<TARGET_FILE:discas>
+            -DDISCLD=$<TARGET_FILE:discld>
+            -DWLA_65816=${DISCO_WLA_65816}
+            -DWLALINK=${DISCO_WLALINK}
+            -DLUNA=${DISCO_LUNA}
+            -DROOT_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/spc700_luna_runtime
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_spc700_luna_runtime.cmake)
+        set_tests_properties(spc700_luna_runtime PROPERTIES LABELS "spc700;runtime;oracle" TIMEOUT 300)
     endif()
     set_tests_properties(language_contract PROPERTIES LABELS "language;unit")
     set_tests_properties(ir_verifier PROPERTIES LABELS "ir;unit")

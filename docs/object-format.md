@@ -171,10 +171,11 @@ word declarations inside a hand-written packed section.
 For 16-bit address relocations, the linker patches the two bytes after the opcode placeholder. For bank relocations, it patches the byte after the opcode. For offset relocations, it patches the two-byte address field. An `ADDR8_SHORT_RAM` relocation patches the single word-index byte after the `LMS`/`SMS` opcode. SPC700 relocations patch the operand bytes starting at `patch_offset`.
 
 SPC700 links place CODE and DATA in the 64 KiB SPC address space: the origin
-plus the payload must not exceed `$10000`. Alignment padding is `$00` (`NOP`)
-for SPC700 and `$01` (`NOP`) for GSU. Static RAM, runtime initialization and
-protected regions (`$00F0-$00FF`, the IPL ROM) are not yet part of an SPC700
-link; see [SPC700 target](spc700-target.md).
+(default `$0200`) plus the payload must not exceed `$10000`. Alignment padding
+is `$00` (`NOP`) for SPC700 and `$01` (`NOP`) for GSU. SPC700 static RAM uses
+flat 16-bit addresses (by default right after the payload), the runtime startup
+and reserved regions follow [SPC700 target](spc700-target.md), and
+`--ram-bank`/`--rom-bank` are rejected.
 
 Undefined symbols and duplicate definitions are linker errors. Objects with incompatible target configurations are rejected before output is written.
 

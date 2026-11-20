@@ -82,7 +82,7 @@ function(spc700_reject_link name origin diagnostic)
         message(FATAL_ERROR "Rejected SPC700 link overwrote its output: ${name}")
     endif()
 endfunction()
-spc700_reject_link(dp-range "$0100" "direct-page relocation must target \\$0000-\\$00FF" "    mov a,target")
+spc700_reject_link(dp-range "$0200" "direct-page relocation must target \\$0000-\\$00FF" "    mov a,target")
 spc700_reject_link(membit-range "$2000" "mem.bit relocation must target \\$0000-\\$1FFF" "    not1 target.1")
 spc700_reject_link(payload-range "$FFFF" "SPC700 payload exceeds the 64 KiB address space" "    nop")
 

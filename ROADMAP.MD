@@ -97,6 +97,9 @@ rules rather than silently adopt C semantics.
 - [x] SPC700 target/layout foundation, capability diagnostics, and frontend/IR inspection.
 - [x] SPC700 assembler (`discas --target spc700`), object format 11 relocations,
   linker patching and byte-exact assembly export, checked against WLA-DX.
+- [x] SPC700 ABI and runtime contract: software stack with frame pointer,
+  reserved direct page, flat static RAM placement, `--init-runtime` startup
+  returning to the IPL, and an instruction-level execution model.
 
 GSU binaries are fixed-origin payloads, not complete SNES ROMs or arbitrarily
 relocatable routines. SPC700 assembly and linking work; SPC700 compiler code generation is not implemented. See
@@ -155,14 +158,14 @@ deterministically.
 
 ### 2. ABI, runtime, and linker placement
 
-- [ ] Finalize scalar returns, argument passing, register preservation, and
+- [x] Finalize scalar returns, argument passing, register preservation, and
   caller/callee cleanup from the initial ABI proposal.
-- [ ] Keep compiler-managed locals/arguments separate from the hardware
+- [x] Keep compiler-managed locals/arguments separate from the hardware
   return-address stack, with explicit memory reservations.
-- [ ] Define code, mutable data, static initialization, entry, and runtime
+- [x] Define code, mutable data, static initialization, entry, and runtime
   placement in the shared address space.
-- [ ] Protect MMIO, stack, and IPL-related regions according to the selected
-  runtime contract; add target settings only after that contract exists.
+- [x] Protect MMIO, stack, and IPL-related regions according to the selected
+  runtime contract; project-manifest settings follow with code generation.
 
 Acceptance: multi-object layout, static initialization, nested calls, stack
 ownership, and invalid overlaps have positive and negative tests. Do not reuse
@@ -185,9 +188,12 @@ and assembled paths agree on linked bytes and behavior.
 
 ### 4. Independent execution and SNES integration
 
-- [ ] Add an SPC700 execution test path and validate it against an independent
-  emulator/reference implementation.
-- [ ] Supply a minimal host upload/start/communication example.
+- [x] Add an SPC700 execution test path and validate it against an independent
+  emulator/reference implementation (instruction model in CI; Luna comparison
+  optional, when the emulator is installed).
+- [ ] Supply a minimal host upload/start/communication example. A test host
+  (`tests/spc700_host/upload.asm`) uploads, starts and reruns payloads; a
+  documented example under `examples/` remains.
 - [ ] Test runtime state, nested calls, repeated execution, and volatile
   communication accesses end to end.
 

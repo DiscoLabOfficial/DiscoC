@@ -1,6 +1,7 @@
 #include "SPC700AssemblerTarget.hpp"
 
 #include "SPC700Isa.hpp"
+#include "SPC700Target.hpp"
 
 #include <cstdint>
 #include <set>
@@ -331,6 +332,7 @@ private:
     CompilerConfig m_config = []() {
         CompilerConfig config;
         config.target = TargetKind::SPC700;
+        config.code_start_address = SPC700Target::DataLayout::DefaultOrigin;
         return config;
     }();
     std::uint8_t m_data_alignment = 1;

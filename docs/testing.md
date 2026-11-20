@@ -185,6 +185,19 @@ host in `tests/spc700_host/upload.asm`, runs them in Luna and in the model, and
 compares the result tables byte for byte. It needs a writable system temporary
 directory for WLA (`ctest -L oracle`).
 
+`spc700_runtime` links the hand-written ABI fixtures in `tests/fixtures/spc700/`
+(nested calls with software-stack arguments, a recursive factorial, a
+cross-object helper and zeroed plus initialized static RAM in a second object)
+with `--init-runtime` and runs them twice in the model on poisoned RAM. It
+checks the result ports, restored SSP/FP and hardware SP, static RAM contents,
+the `__disco_stack_limit_N` value, the startup bytes, default and explicit RAM
+placement, and the linked listing round trip; and it rejects payloads, RAM or
+the stack overlapping each reserved region, globals without an initialization
+mode, invalid stack tops, GSU-only options and a missing entry, preserving the
+output each time. With Luna available, `spc700_luna_runtime` uploads the same
+payload through the IPL, starts it twice and checks both results and the static
+RAM on the emulator.
+
 `gsu_runtime_loading` links multi-file programs at `$70:6000`, `$70:0000`, and
 `$71:6000`, verifies hand-encoded bootstrap bytes, and starts the instruction
 model with deliberately incorrect RAMBR/R10 state. It checks both data banks,

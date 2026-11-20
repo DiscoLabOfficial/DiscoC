@@ -17,6 +17,8 @@
 #include "AssemblyGenerator.hpp"
 #include "ABI.hpp"
 #include "RuntimeInitialization.hpp"
+#include "SPC700Runtime.hpp"
+#include "SPC700Target.hpp"
 #include <cctype>
 #if __cplusplus >= 201703L
 #include <filesystem>
@@ -88,12 +90,16 @@ void usage() {
                  "  --memory-mapping <lorom|hirom> Assert the objects' mapping.\n"
                  "  --execution-memory <rom|ram>   Validate the execution region.\n"
                  "  --origin <24-bit address> Override the link/execution origin.\n"
-                 "  --init-runtime           Initialize RAMBR/R10 and jump to the entry.\n"
-                 "  --ram-bank <0|1>          Data/stack bank (default: 0, bank $70).\n"
-                 "  --ram-origin <word>       Static RAM start (default: 0x0400).\n"
+                 "  --init-runtime           GSU: initialize RAMBR/R10 and jump to the entry.\n"
+                 "                           SPC700: set up the stacks and RAM, call the entry,\n"
+                 "                           report YA on $F6/$F7 and return to the IPL ROM.\n"
+                 "  --ram-bank <0|1>          GSU data/stack bank (default: 0, bank $70).\n"
+                 "  --ram-origin <word>       Static RAM start (GSU default: 0x0400;\n"
+                 "                           SPC700 default: after the payload).\n"
                  "  --host-initialized-globals Host supplies global initial values instead of startup.\n"
-                 "  --rom-bank <bank>         Near ROM bank (default: execution bank, or 0 for RAM code).\n"
-                 "  --stack-pointer <word>    Initial aligned R10 (default: 0x2000).\n"
+                 "  --rom-bank <bank>         GSU near ROM bank (default: execution bank, or 0 for RAM code).\n"
+                 "  --stack-pointer <word>    GSU initial aligned R10 (default: 0x2000); SPC700\n"
+                 "                           software stack top (default and maximum: 0xFFC0).\n"
                  "  --entry <symbol>          Runtime entry (default: main).\n"
                  "  --emit-asm <file.s>       Export exact linked instructions/data.\n";
 }
@@ -118,6 +124,8 @@ int runLinker(std::vector<std::string> arguments) {
     std::uint32_t rom_bank = 0;
     bool rom_bank_override = false;
     std::uint32_t ram_origin = 0x0400;
+    // SPC700 derives its own defaults; these record what the user chose.
+    bool ram_origin_explicit = false, stack_pointer_explicit = false, ram_bank_explicit = false;
     bool host_globals = false;
     bool target_expected = false, mapping_expected = false;
     TargetKind expected_target = TargetKind::GSU;
@@ -157,10 +165,10 @@ int runLinker(std::vector<std::string> arguments) {
             if (i + 1 >= argc) throw std::runtime_error(arg + " requires a value.");
             const std::string value = arguments[++i];
             if (arg == "--origin") { origin = parseOptionNumber(value, 0xffffff); origin_override = true; }
-            else if (arg == "--ram-bank") { ram_bank = parseOptionNumber(value, 1); }
-            else if (arg == "--ram-origin") { ram_origin = parseOptionNumber(value, 65535); }
+            else if (arg == "--ram-bank") { ram_bank = parseOptionNumber(value, 1); ram_bank_explicit = true; }
+            else if (arg == "--ram-origin") { ram_origin = parseOptionNumber(value, 65535); ram_origin_explicit = true; }
             else if (arg == "--rom-bank") { rom_bank = parseOptionNumber(value, 0x5f); rom_bank_override = true; }
-            else if (arg == "--stack-pointer") { stack_pointer = parseOptionNumber(value, 0xfffe); runtime_options = true; }
+            else if (arg == "--stack-pointer") { stack_pointer = parseOptionNumber(value, 0xfffe); runtime_options = true; stack_pointer_explicit = true; }
             else if (arg == "--entry") { entry_name = value; runtime_options = true; }
             else assembly_filepath = value;
         } else if (!arg.empty() && arg.front() == '-') {
@@ -274,8 +282,18 @@ int runLinker(std::vector<std::string> arguments) {
             }
         }
         config.bitmap.validate();
-        if (initialize_runtime && config.target != TargetKind::GSU)
-            throw std::runtime_error("Runtime initialization is only supported for GSU.");
+        const bool spc700 = config.target == TargetKind::SPC700;
+        if (spc700) {
+            if (ram_bank_explicit || rom_bank_override)
+                throw std::runtime_error("--ram-bank and --rom-bank are GSU-only options.");
+            if (!stack_pointer_explicit) stack_pointer = SPC700Target::Abi::DefaultStackTop;
+            if (stack_pointer > SPC700Target::DataLayout::IplRomBase)
+                throw std::runtime_error("SPC700 software stack top must not exceed $FFC0.");
+        }
+        // Without --ram-origin, SPC700 static RAM follows the payload. Lay it
+        // out from a base that is aligned like that final origin, which is a
+        // multiple of the largest RAM alignment.
+        std::uint32_t ram_layout_origin = spc700 && !ram_origin_explicit ? 0u : ram_origin;
         // Short RAM: every object's section, word-aligned, in link order from
         // GSUAbi::ShortRamBase. Only there do LMS/SMS operands reach them.
         std::vector<std::uint8_t> final_short;
@@ -291,10 +309,12 @@ int runLinker(std::vector<std::string> arguments) {
         const auto short_start = 0x700000u | (ram_bank << 16) | GSUAbi::ShortRamBase;
         std::vector<std::uint8_t> final_ram;
         std::vector<std::size_t> ram_bases;
+        std::uint8_t max_ram_alignment = 1;
         for (const auto& object : objects) {
-            while ((ram_origin + final_ram.size()) % object.ram_alignment) final_ram.push_back(0);
+            max_ram_alignment = std::max(max_ram_alignment, object.ram_alignment);
+            while ((ram_layout_origin + final_ram.size()) % object.ram_alignment) final_ram.push_back(0);
             ram_bases.push_back(final_ram.size());
-            if (final_ram.size() > 65536u - ram_origin || object.ram_section.size() > 65536u - ram_origin - final_ram.size())
+            if (final_ram.size() > 65536u - ram_layout_origin || object.ram_section.size() > 65536u - ram_layout_origin - final_ram.size())
                 throw std::runtime_error("Static storage crosses a RAM bank boundary.");
             final_ram.insert(final_ram.end(), object.ram_section.begin(), object.ram_section.end());
             // The object's code omits null checks for its own static RAM. Every
@@ -306,13 +326,23 @@ int runLinker(std::vector<std::string> arguments) {
         }
         if ((!final_ram.empty() || !final_short.empty()) && !initialize_runtime && !host_globals)
             throw std::runtime_error("Static globals require --init-runtime or --host-initialized-globals.");
-        if ((!final_ram.empty() || !final_short.empty()) && config.target != TargetKind::GSU)
-            throw std::runtime_error("Static storage placement is currently GSU-only.");
         if (!final_short.empty() && !final_ram.empty() && ram_origin < GSUAbi::ShortRamBase + final_short.size())
             throw std::runtime_error("Static RAM overlaps the short RAM window; use a --ram-origin of at least $0200.");
-        const auto startup = initialize_runtime ? makeRuntimeInitialization(static_cast<std::uint8_t>(ram_bank),
-            static_cast<std::uint16_t>(stack_pointer), static_cast<std::uint16_t>(ram_origin), final_ram, final_short) :
-            RuntimeInitialization{};
+        // SPC700 startup is sized now and regenerated with final addresses
+        // after layout; its length depends only on which parts are present.
+        const auto spc700_init_span = spc700NonzeroSpan(final_ram);
+        SPC700RuntimeLayout spc700_runtime;
+        spc700_runtime.ram_bytes = static_cast<std::uint32_t>(final_ram.size());
+        spc700_runtime.copy_bytes = static_cast<std::uint32_t>(spc700_init_span.bytes);
+        RuntimeInitialization startup;
+        if (initialize_runtime && spc700) {
+            const auto sized = makeSPC700RuntimeInitialization(spc700_runtime);
+            startup.bytes = sized.bytes;
+            startup.entry_patch = sized.entry_patch;
+        } else if (initialize_runtime) {
+            startup = makeRuntimeInitialization(static_cast<std::uint8_t>(ram_bank),
+                static_cast<std::uint16_t>(stack_pointer), static_cast<std::uint16_t>(ram_origin), final_ram, final_short);
+        }
         const std::size_t startup_size = startup.bytes.size();
 
         if (config.target == TargetKind::GSU) {
@@ -339,17 +369,24 @@ int runLinker(std::vector<std::string> arguments) {
         std::map<std::string, bool> code_targets;
         bool entry_is_instruction = false;
         // Short RAM symbols are near static RAM too: they resolve as RAM.
-        for (std::size_t index = 0; index < objects.size(); ++index) {
-            for (const auto& symbol : objects[index].symbol_table) {
-                if ((symbol.section != SymbolSection::RAM && symbol.section != SymbolSection::SHORT_RAM) ||
-                    (!symbol.name.empty() && symbol.name.front() == '\x01')) continue;
-                if (final_addresses.count(symbol.name)) throw std::runtime_error("Duplicate global symbol: " + symbol.name);
-                final_addresses.emplace(symbol.name, symbol.section == SymbolSection::SHORT_RAM
-                    ? checkedAddress(static_cast<std::uint64_t>(short_start) + short_bases[index] + symbol.offset, "short RAM symbol address")
-                    : 0x700000u | (ram_bank << 16) | checkedAddress(ram_origin + ram_bases[index] + symbol.offset, "RAM symbol address"));
-                final_sections.emplace(symbol.name, SymbolSection::RAM);
+        // SPC700 RAM uses flat 16-bit addresses, registered once its origin
+        // is known after layout.
+        const auto registerRamSymbols = [&]() {
+            for (std::size_t index = 0; index < objects.size(); ++index) {
+                for (const auto& symbol : objects[index].symbol_table) {
+                    if ((symbol.section != SymbolSection::RAM && symbol.section != SymbolSection::SHORT_RAM) ||
+                        (!symbol.name.empty() && symbol.name.front() == '\x01')) continue;
+                    if (final_addresses.count(symbol.name)) throw std::runtime_error("Duplicate global symbol: " + symbol.name);
+                    final_addresses.emplace(symbol.name, spc700
+                        ? checkedAddress(static_cast<std::uint64_t>(ram_origin) + ram_bases[index] + symbol.offset, "RAM symbol address")
+                        : symbol.section == SymbolSection::SHORT_RAM
+                        ? checkedAddress(static_cast<std::uint64_t>(short_start) + short_bases[index] + symbol.offset, "short RAM symbol address")
+                        : 0x700000u | (ram_bank << 16) | checkedAddress(ram_origin + ram_bases[index] + symbol.offset, "RAM symbol address"));
+                    final_sections.emplace(symbol.name, SymbolSection::RAM);
+                }
             }
-        }
+        };
+        if (!spc700) registerRamSymbols();
 
         std::uint64_t current_code_offset = startup_size;
         std::vector<std::uint64_t> code_bases;
@@ -419,9 +456,65 @@ int runLinker(std::vector<std::string> arguments) {
         }
         if (config.target == TargetKind::GSU)
             GsuMemoryMap::validatePayload(config.code_start_address, final_code.size(), final_data.size());
-        if (config.target == TargetKind::SPC700 &&
-            static_cast<std::uint64_t>(config.code_start_address) + final_code.size() + final_data.size() > 0x10000u)
-            throw std::runtime_error("SPC700 payload exceeds the 64 KiB address space.");
+        std::uint32_t spc700_stack_floor = 0;
+        if (spc700) {
+            // The runtime copies nonzero initial RAM bytes from a span
+            // appended to DATA.
+            std::uint64_t copy_source = 0;
+            if (initialize_runtime && spc700_init_span.bytes != 0) {
+                copy_source = static_cast<std::uint64_t>(data_start_address) + final_data.size();
+                final_data.insert(final_data.end(),
+                    final_ram.begin() + static_cast<std::ptrdiff_t>(spc700_init_span.first),
+                    final_ram.begin() + static_cast<std::ptrdiff_t>(spc700_init_span.first + spc700_init_span.bytes));
+            }
+            const std::uint64_t payload_begin = config.code_start_address;
+            const std::uint64_t payload_end = payload_begin + final_code.size() + final_data.size();
+            if (payload_end > 0x10000u) throw std::runtime_error("SPC700 payload exceeds the 64 KiB address space.");
+            if (!ram_origin_explicit)
+                ram_origin = static_cast<std::uint32_t>((payload_end + max_ram_alignment - 1) / max_ram_alignment * max_ram_alignment);
+            const std::uint64_t ram_end = static_cast<std::uint64_t>(ram_origin) + final_ram.size();
+            if (!final_ram.empty() && ram_end > 0x10000u)
+                throw std::runtime_error("SPC700 static RAM exceeds the 64 KiB address space.");
+            const auto overlaps = [](std::uint64_t begin, std::uint64_t end, std::uint64_t other_begin, std::uint64_t other_end) {
+                return begin < end && other_begin < other_end && begin < other_end && other_begin < end;
+            };
+            std::vector<SPC700Target::ReservedRegion> reserved;
+            if (initialize_runtime) reserved.push_back(SPC700Target::CompilerDirectPage);
+            reserved.insert(reserved.end(), {SPC700Target::MemoryMappedRegisters, SPC700Target::HardwareStack,
+                                             SPC700Target::IplRom});
+            for (const auto& region : reserved) {
+                if (overlaps(payload_begin, payload_end, region.begin, region.end))
+                    throw std::runtime_error(std::string("SPC700 payload overlaps ") + region.name + ".");
+                if (!final_ram.empty() && overlaps(ram_origin, ram_end, region.begin, region.end))
+                    throw std::runtime_error(std::string("SPC700 static RAM overlaps ") + region.name + ".");
+            }
+            if (!final_ram.empty() && overlaps(payload_begin, payload_end, ram_origin, ram_end))
+                throw std::runtime_error("Static RAM overlaps the linked payload.");
+            // The software stack grows down from its top to the end of the
+            // highest image placed below it, and never into pages 0 and 1.
+            spc700_stack_floor = SPC700Target::DataLayout::DefaultOrigin;
+            const auto lower = [&](std::uint64_t begin, std::uint64_t end, const char* what) {
+                if (begin >= end || begin >= stack_pointer) return;
+                if (end > stack_pointer)
+                    throw std::runtime_error(std::string("SPC700 ") + what + " overlaps the software stack top.");
+                spc700_stack_floor = std::max(spc700_stack_floor, static_cast<std::uint32_t>(end));
+            };
+            lower(payload_begin, payload_end, "payload");
+            if (!final_ram.empty()) lower(ram_origin, ram_end, "static RAM");
+            if (initialize_runtime && spc700_stack_floor >= stack_pointer)
+                throw std::runtime_error("SPC700 layout leaves no room for the software stack below its top.");
+            registerRamSymbols();
+            if (initialize_runtime) {
+                spc700_runtime.stack_top = static_cast<std::uint16_t>(stack_pointer);
+                spc700_runtime.ram_start = static_cast<std::uint16_t>(ram_origin);
+                spc700_runtime.copy_source = static_cast<std::uint16_t>(copy_source);
+                spc700_runtime.copy_destination = static_cast<std::uint16_t>(ram_origin + spc700_init_span.first);
+                const auto final_startup = makeSPC700RuntimeInitialization(spc700_runtime);
+                if (final_startup.bytes.size() != startup_size || final_startup.entry_patch != startup.entry_patch)
+                    throw std::logic_error("SPC700 startup size changed after layout.");
+                std::copy(final_startup.bytes.begin(), final_startup.bytes.end(), final_code.begin());
+            }
+        }
         if (config.bitmap.enabled) {
             const std::uint64_t begin = 0x700000u + config.bitmap.base;
             const auto end = begin + config.bitmap.sizeBytes();
@@ -446,7 +539,7 @@ int runLinker(std::vector<std::string> arguments) {
             if (initialize_runtime && GSUAbi::ShortRamBase + final_short.size() >= stack_pointer)
                 throw std::runtime_error("Short RAM must end below the initial stack pointer.");
         }
-        if (!final_ram.empty()) {
+        if (!final_ram.empty() && !spc700) {
             const auto ram_start = 0x700000u | (ram_bank << 16) | ram_origin;
             const auto ram_end = static_cast<std::uint64_t>(ram_start) + final_ram.size();
             const auto payload_end = static_cast<std::uint64_t>(config.code_start_address) + final_code.size() + final_data.size();
@@ -462,12 +555,12 @@ int runLinker(std::vector<std::string> arguments) {
             if (entry == final_addresses.end() || final_sections.at(entry_name) != SymbolSection::CODE ||
                 !entry_is_instruction)
                 throw std::runtime_error("Runtime entry must name an instruction in CODE: " + entry_name);
-            GsuMemoryMap::validateNearTarget(config.code_start_address, entry->second);
+            if (!spc700) GsuMemoryMap::validateNearTarget(config.code_start_address, entry->second);
             final_code.at(startup.entry_patch) = static_cast<std::uint8_t>(entry->second);
             final_code.at(startup.entry_patch + 1) = static_cast<std::uint8_t>(entry->second >> 8);
             const auto stack_address = 0x700000u | (ram_bank << 16) | stack_pointer;
             const std::uint64_t payload_end = static_cast<std::uint64_t>(data_start_address) + final_data.size();
-            if (stack_address < payload_end &&
+            if (!spc700 && stack_address < payload_end &&
                 static_cast<std::uint64_t>(stack_address) + 2 > config.code_start_address)
                 throw std::runtime_error("Initial stack word overlaps the linked payload.");
         }
@@ -476,7 +569,7 @@ int runLinker(std::vector<std::string> arguments) {
         std::size_t current_object = 0;
 
         const auto ram_bank_base = 0x700000u + (ram_bank << 16);
-        auto stack_floor = final_ram.empty() ? 0u :
+        auto stack_floor = spc700 ? spc700_stack_floor : final_ram.empty() ? 0u :
             static_cast<std::uint32_t>((ram_origin + final_ram.size() + 1u) & ~1u);
         const auto reserve_below_stack = [&](std::uint64_t begin, std::uint64_t end) {
             if (begin < ram_bank_base + stack_pointer && end > ram_bank_base)
@@ -489,7 +582,7 @@ int runLinker(std::vector<std::string> arguments) {
             reserve_below_stack(short_start, static_cast<std::uint64_t>(short_start) + final_short.size());
         // A descending stack must not grow into still-executable RAM code or
         // payload DATA, even when its initial word itself does not overlap.
-        if (initialize_runtime && GsuMemoryMap::region(config.code_start_address) == GsuMemoryMap::Region::Ram &&
+        if (initialize_runtime && !spc700 && GsuMemoryMap::region(config.code_start_address) == GsuMemoryMap::Region::Ram &&
             (config.code_start_address >> 16) == 0x70u + ram_bank)
             reserve_below_stack(config.code_start_address,
                 static_cast<std::uint64_t>(config.code_start_address) + final_code.size() + final_data.size());
@@ -550,18 +643,23 @@ int runLinker(std::vector<std::string> arguments) {
                         : local_symbol->section == SymbolSection::DATA ? data_start_address + current_data_base
                         : local_symbol->section == SymbolSection::SHORT_RAM
                         ? static_cast<std::uint64_t>(short_start) + short_bases.at(current_object)
+                        : spc700 ? static_cast<std::uint64_t>(ram_origin) + ram_bases.at(current_object)
                         : (0x700000u | (ram_bank << 16)) + ram_origin + ram_bases.at(current_object);
                     if (target_section == SymbolSection::SHORT_RAM) target_section = SymbolSection::RAM;
                     target_addr = checkedAddress(base + local_symbol->offset,
                         "local branch target address");
                 } else if (reloc.target_symbol_name.compare(0, std::string(GSUAbi::StackLimitPrefix).size(), GSUAbi::StackLimitPrefix) == 0) {
-                    if (reloc.type != RelocationType::ADDR16_RAM || config.target != TargetKind::GSU)
+                    const bool spc700_limit = spc700 && (reloc.type == RelocationType::SPC_ABS16 ||
+                        reloc.type == RelocationType::SPC_IMM8_LO || reloc.type == RelocationType::SPC_IMM8_HI);
+                    if (spc700 && !spc700_limit)
+                        throw std::runtime_error("Stack-limit symbol requires an SPC700 absolute or immediate relocation.");
+                    if (!spc700 && (reloc.type != RelocationType::ADDR16_RAM || config.target != TargetKind::GSU))
                         throw std::runtime_error("Stack-limit symbol requires a GSU RAM relocation.");
                     const auto required = parseOptionNumber(reloc.target_symbol_name.substr(std::string(GSUAbi::StackLimitPrefix).size()), 65535);
                     if (stack_floor > 65535u - required) throw std::runtime_error("Reserved RAM leaves no room for the requested stack frame.");
                     if (initialize_runtime && stack_floor + required > stack_pointer)
                         throw std::runtime_error("Initial stack pointer leaves no room for the requested stack frame.");
-                    target_addr = ram_bank_base + stack_floor + required;
+                    target_addr = spc700 ? stack_floor + required : ram_bank_base + stack_floor + required;
                     target_section = SymbolSection::RAM;
                 } else if (reloc.target_symbol_name == GSUAbi::NearRamBankSymbol ||
                            reloc.target_symbol_name == GSUAbi::NearRomBankSymbol) {
