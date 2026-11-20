@@ -659,8 +659,50 @@ struct SymbolicValue {
 };
 struct PendingStore { std::size_t index; SymbolicValue address; unsigned width; };
 
-bool storeOpcode(const Instruction& i) {
-    return i.bytes.size() == 1 && i.bytes[0] >= 0x30 && i.bytes[0] <= 0x3b && i.reachable_alt <= 1;
+bool storeOpcode(const Instruction& i, unsigned alt) {
+    return i.bytes.size() == 1 && i.bytes[0] >= 0x30 && i.bytes[0] <= 0x3b && alt <= 1;
+}
+// Whether executing `i` leaves clear selectors and ALT: every complete
+// instruction except a TO/WITH/FROM/ALT prefix or a branch, which keeps them.
+bool resetsSelectors(const Instruction& i) {
+    if (i.bytes.empty() || i.operand_fragment) return false;
+    const auto op = i.bytes[0];
+    return !((op >= 0x10 && op <= 0x2f) || (op >= 0xb0 && op <= 0xbf) || (op >= 0x3d && op <= 0x3f) ||
+             (op >= 5 && op <= 15));
+}
+// Control-flow entries whose incoming selector/ALT state is provably clear.
+// decode() treats every entry as unknown, because an exported or relocated
+// label can be reached from anywhere. A private label that nothing names in
+// a relocation is reached only by fallthrough and by relative branches, so
+// its state is clear when the instruction before it and every branch's
+// delay slot reset the prefixes. Since stack-free leaves start their body
+// at the stack guard's branch target, this keeps a leading literal provable.
+std::set<std::size_t> clearEntries(const std::vector<Instruction>& code, const ObjectFile& object) {
+    std::set<std::size_t> named;
+    std::map<std::string, std::size_t> symbols;
+    for (const auto& symbol : object.symbol_table) if (symbol.section == SymbolSection::CODE) {
+        symbols.emplace(symbol.name, symbol.offset);
+        if (symbol.name.empty() || symbol.name.front() != '\x01') named.insert(symbol.offset);
+    }
+    for (const auto& r : object.relocation_table) {
+        const auto symbol = symbols.find(r.target_symbol_name);
+        if (symbol != symbols.end()) named.insert(symbol->second);
+    }
+    std::map<std::size_t, bool> branch_edges_clear;
+    for (std::size_t n = 0; n < code.size(); ++n) if (code[n].target != Missing) {
+        const bool clear = n + 1 < code.size() && code[n + 1].delay_slot && resetsSelectors(code[n + 1]);
+        auto edges = branch_edges_clear.emplace(code[n].target, true).first;
+        edges->second = edges->second && clear;
+    }
+    std::set<std::size_t> result;
+    for (std::size_t n = 1; n < code.size(); ++n) {
+        const auto& i = code[n];
+        if (!i.reachable_entry || i.delay_slot || named.count(i.old)) continue;
+        const auto edges = branch_edges_clear.find(i.old);
+        if ((edges != branch_edges_clear.end() && !edges->second) || !resetsSelectors(code[n - 1])) continue;
+        result.insert(i.old);
+    }
+    return result;
 }
 bool onePrefix(const Instruction& i, std::uint8_t first, std::uint8_t last) {
     return i.bytes.size() == 1 && !i.delay_slot && !i.operand_fragment && i.bytes[0] >= first && i.bytes[0] <= last;
@@ -691,7 +733,8 @@ std::size_t prefixGroupStart(const std::vector<Instruction>& code, std::size_t l
 // and any other store in between ends the window too. Window state is O(1)
 // per instruction and at most MaxPendingStores candidates are tracked.
 void eliminateDeadStores(std::vector<Instruction>& code, const ObjectFile& object,
-                         const std::set<std::size_t>& entries, const std::set<std::size_t>& relocation_offsets,
+                         const std::set<std::size_t>& entries, const std::set<std::size_t>& clear_entries,
+                         const std::set<std::size_t>& relocation_offsets,
                          const GSUMachineScheduler::Hints& hints, GSUMachineScheduler::Statistics& stats) {
     if (hints.nonvolatile_stores.empty()) return;
     constexpr std::size_t MaxPendingStores = 16;
@@ -716,11 +759,17 @@ void eliminateDeadStores(std::vector<Instruction>& code, const ObjectFile& objec
     for (std::size_t n = 0; n < code.size(); ++n) {
         const auto& i = code[n];
         if (entries.count(i.old)) reset();
-        if (i.bytes.empty() || i.delay_slot || i.operand_fragment || i.reachable_alt > 3 ||
-            i.reachable_source > 15 || i.reachable_destination > 15) { reset(); continue; }
+        // A provably clear entry is decoded as such, not as unknown.
+        const bool clear_entry = clear_entries.count(i.old) != 0;
+        const unsigned alt = clear_entry ? 0u : i.reachable_alt;
+        const unsigned source = clear_entry ? 0u : i.reachable_source;
+        const unsigned destination = clear_entry ? 0u : i.reachable_destination;
+        if (i.bytes.empty() || i.delay_slot || i.operand_fragment || alt > 3 || source > 15 || destination > 15) {
+            reset(); continue;
+        }
         const auto op = i.bytes[0];
-        const unsigned alt = i.reachable_alt, source = i.reachable_source, destination = i.reachable_destination;
-        const bool after_with = n && code[n - 1].bytes.size() == 1 && code[n - 1].bytes[0] >= 0x20 && code[n - 1].bytes[0] <= 0x2f;
+        const bool after_with = !clear_entry && n && code[n - 1].bytes.size() == 1 &&
+            code[n - 1].bytes[0] >= 0x20 && code[n - 1].bytes[0] <= 0x2f;
         if (i.bytes.size() == 1 && (op == 1 || (op >= 0x20 && op <= 0x2f) || (op >= 0x3d && op <= 0x3f))) continue;
         if (i.bytes.size() == 1 && ((op >= 0x10 && op <= 0x1f) || (op >= 0xb0 && op <= 0xbf))) {
             if (!after_with) continue; // TO/FROM prefix only.
@@ -757,7 +806,7 @@ void eliminateDeadStores(std::vector<Instruction>& code, const ObjectFile& objec
             }
             continue;
         }
-        if (storeOpcode(i)) {
+        if (storeOpcode(i, alt)) {
             const auto address = registers[op & 15u];
             const unsigned width = alt == 1 ? 1u : 2u;
             if (!address.static_ram || !hints.nonvolatile_stores.count(static_cast<std::uint32_t>(i.old))) {
@@ -783,6 +832,7 @@ void eliminateDeadStores(std::vector<Instruction>& code, const ObjectFile& objec
             } else if (increment(i)) {
                 registers[op & 15u] = adjust(registers[op & 15u], op <= 0xdd ? 1 : -1);
             } else {
+                // Unknown at an entry: every register is then forgotten.
                 const auto effect = registerEffect(code, n);
                 for (unsigned r = 0; r < 15; ++r)
                     if (!effect.known || (effect.writes & (1u << r))) registers[r] = fresh();
@@ -833,8 +883,8 @@ bool retargetableResult(const Instruction& i) {
 // only the operand bytes) stays valid. R13-R15 are excluded: R13 literals
 // mark pixel loops, R14 starts ROM reads and R15 is the PC.
 void retargetAccumulatorMoves(std::vector<Instruction>& code, const ObjectFile& object,
-                              const std::set<std::size_t>& entries, const std::set<std::size_t>& relocation_offsets,
-                              GSUMachineScheduler::Statistics& stats) {
+                              const std::set<std::size_t>& entries, const std::set<std::size_t>& clear_entries,
+                              const std::set<std::size_t>& relocation_offsets, GSUMachineScheduler::Statistics& stats) {
     std::map<std::size_t, std::vector<RelocationType>> relocations;
     for (const auto& r : object.relocation_table)
         if (r.section_to_patch == SymbolSection::CODE) relocations[r.patch_offset].push_back(r.type);
@@ -849,7 +899,8 @@ void retargetAccumulatorMoves(std::vector<Instruction>& code, const ObjectFile& 
         auto& producer = code[w - 1];
         if (producer.bytes.empty() || producer.delay_slot || producer.operand_fragment) continue;
         const auto op = producer.bytes[0];
-        if (producer.reachable_alt == 0 && ((producer.bytes.size() == 2 && op == 0xa0) ||
+        const bool literal_alt_clear = producer.reachable_alt == 0 || clear_entries.count(producer.old) != 0;
+        if (literal_alt_clear && ((producer.bytes.size() == 2 && op == 0xa0) ||
                                             (producer.bytes.size() == 3 && op == 0xf0))) {
             bool linkable = true;
             for (std::size_t b = 1; b < producer.bytes.size(); ++b)
@@ -938,7 +989,10 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object, con
     }
 
     // Runs first, on the decoded stream whose offsets the hints name.
-    eliminateDeadStores(code, object, entries, relocation_offsets, hints, stats);
+    // Computed once on the decoded stream; the rewrites below keep every
+    // entry's offset and never touch the instruction before an entry.
+    const auto clear_entries = clearEntries(code, object);
+    eliminateDeadStores(code, object, entries, clear_entries, relocation_offsets, hints, stats);
 
     // MOVE Ra -> Rb (WITH a / TO b) whose destination the very next
     // instruction overwrites without reading it: a home copy of a value its
@@ -1078,7 +1132,7 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object, con
 
     // After the copy rewrites above, which already handle their own
     // R0/home forms, before any slot or ROM-latency scheduling.
-    retargetAccumulatorMoves(code, object, entries, relocation_offsets, stats);
+    retargetAccumulatorMoves(code, object, entries, clear_entries, relocation_offsets, stats);
 
     // A private one-PLOT loop may put PLOT in LOOP's always-executed slot,
     // including its first/final iteration and the raw zero-count wrap. Keep

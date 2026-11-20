@@ -708,6 +708,21 @@ void directMoves() {
     labeled.symbol_table.push_back({std::string("\x01") + "anchor",SymbolSection::CODE,1}); saved = labeled;
     require(GSUMachineScheduler::run(labeled).direct_literals == 1 && labeled.symbol_table[0].offset == 1 &&
         labeled.code_section[1] == 0xa6, "A labeled literal lost its label or was not rewritten");
+    // A private branch target is entered with clear selectors when the
+    // fallthrough and every branch slot reset them (a stack-free leaf's body
+    // starts at its guard's target). A prefix in the slot, or a public or
+    // relocated label, leaves the incoming ALT unknown: $A0 could be LMS.
+    struct BranchEntry { std::uint8_t slot; bool public_label; bool rewritten; };
+    for (const auto& item : {BranchEntry{1, false, true}, BranchEntry{0x21, false, false}, BranchEntry{1, true, false}}) {
+        // BRA's slot and the target are separated by a NOP, so only the
+        // branch edge (not the fallthrough) carries the slot's prefix.
+        auto o = object({1, 0x05,0x02, item.slot, 1, 0xa0,5, 0x20,0x16, 0xa0,9, 0,1});
+        if (item.public_label) o.symbol_table.push_back({"entry",SymbolSection::CODE,5});
+        saved = o;
+        require((GSUMachineScheduler::run(o).direct_literals == 1) == item.rewritten,
+            "A branch target's incoming selector state was misjudged");
+        equivalent(saved, o);
+    }
     // R0 is the return value, so a copy before JMP R11 stays.
     auto returned = object({0xfb,0,0, 0xa0,5, 0x20,0x16, 0x9b,1, 0,1});
     returned.symbol_table.push_back({"exit",SymbolSection::CODE,9});
@@ -830,6 +845,11 @@ void deadStoreElimination() {
     // R5 is an incoming pointer: equal addresses, but not named static storage.
     require(deadStores(StoreFixture().bytes({0xa6,5}).store(5,6,false,true)
         .bytes({0xa0,9}).store(5,0,false,true).end(), 0) == 0, "A store through a pointer register was removed");
+    // The first address literal may start a branch-target block.
+    auto targeted = StoreFixture().bytes({0x05,0x01, 1});
+    require(deadStores(targeted.address(1).bytes({0xa6,5}).store(1,6,false,true)
+        .address(2).bytes({0xa0,9}).store(2,0,false,true).end(), 2) == 1,
+        "A dead store after a clearly entered branch target was kept");
     // WITH R5 / FROM R6 right before the store is MOVES R5,R6, not a prefix
     // of STW (R1): removing it would lose R5 and the flags it sets.
     require(deadStores(StoreFixture().address(1).bytes({0xa6,5, 0xa0,7, 0x25,0xb6}).store(1,0,false,true)
