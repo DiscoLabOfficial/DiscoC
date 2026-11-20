@@ -17,6 +17,7 @@
 #include "AssemblyGenerator.hpp"
 #include "ABI.hpp"
 #include "RuntimeInitialization.hpp"
+#include "GSURegisterCallAdapter.hpp"
 #include "SPC700Runtime.hpp"
 #include "SPC700Target.hpp"
 #include <cctype>
@@ -253,6 +254,13 @@ int runLinker(std::vector<std::string> arguments) {
                     throw std::runtime_error("Static storage crosses a RAM bank boundary.");
             }
             objects.push_back(std::move(object));
+        }
+
+        // GSU register entries referenced but not defined by any input (an
+        // O0/O1 or assembly definition) are bound to linker-made adapters.
+        {
+            auto adapters = makeGSURegisterCallAdapters(objects);
+            if (!adapters.code_section.empty()) objects.push_back(std::move(adapters));
         }
 
         CompilerConfig config = objects.front().config;

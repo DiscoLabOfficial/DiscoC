@@ -156,24 +156,104 @@ bool entryParameterLoads(const IRFunction& f, std::map<std::uint32_t, std::size_
     }
     return true;
 }
+bool registerArgumentSignature(const std::vector<Type>& parameters) {
+    if (parameters.empty() || parameters.size() > GSUAbi::RegisterArgumentCount) return false;
+    return std::all_of(parameters.begin(), parameters.end(), registerArgumentType);
+}
 } // namespace
 
 void IRCodeGenerator::planRegisterArguments(const IRModule& module) {
     m_register_arguments.clear();
+    m_public_register_entries.clear();
+    m_external_register_calls.clear();
     if (!globallyOptimized() || m_config.target != TargetKind::GSU) return;
     // Every caller of an unaddressed internal function is in this module, so
     // both sides of the call change together; any address use keeps the
     // stack area, since an indirect caller could not know the convention.
-    std::set<std::string> referenced;
+    std::set<std::string> referenced, defined;
     for (const auto& f : module.functions) for (const auto& b : f.blocks) for (const auto& i : b.instructions)
         if (i.opcode == IROpcode::Address && !i.symbol.empty()) referenced.insert(i.symbol);
     std::map<std::uint32_t, std::size_t> loads;
     for (const auto& f : module.functions) {
         const auto symbol = functionSymbol(f);
-        if (f.link_name.empty() || f.link_name.front() != '\x01' || f.name == "main" ||
-            referenced.count(symbol) || referenced.count(f.name) || !entryParameterLoads(f, loads)) continue;
+        defined.insert(symbol);
+        if (f.name == "main" || !entryParameterLoads(f, loads)) continue;
+        if (!f.link_name.empty() && f.link_name.front() == '\x01') {
+            if (!referenced.count(symbol) && !referenced.count(f.name))
+                m_register_arguments.emplace(symbol, f.parameters.size());
+            continue;
+        }
+        // A public function keeps its stack-argument label for indirect and
+        // other-object callers; that label loads the arguments and falls
+        // into the register entry. An @cache function's CACHE starts the
+        // register entry, so both entries execute the same CACHE (and thus
+        // the same cache base) before the body.
+        if (symbol.find('$') != std::string::npos) continue;
         m_register_arguments.emplace(symbol, f.parameters.size());
+        m_public_register_entries.emplace(symbol, GSUAbi::registerCallSymbol(symbol, f.parameters.size()));
     }
+    // External callees: the prototype alone decides, exactly as the defining
+    // object's parameter list does, so both sides agree on eligibility.
+    std::map<std::string, const FunctionSymbol*> prototypes;
+    for (const auto& entry : m_global_function_symbols)
+        prototypes.emplace(entry.second.link_name.empty() ? entry.first : entry.second.link_name, &entry.second);
+    for (const auto& f : module.functions) for (const auto& b : f.blocks) for (const auto& i : b.instructions) {
+        if (i.opcode != IROpcode::Call || i.symbol.empty() || i.symbol.front() == '\x01' || i.symbol == "main" ||
+            defined.count(i.symbol) || i.symbol.find('$') != std::string::npos) continue;
+        const auto prototype = prototypes.find(i.symbol);
+        if (prototype == prototypes.end()) continue;
+        const auto& parameters = prototype->second->paramTypes;
+        if (registerArgumentSignature(parameters) && parameters.size() == i.operands.size())
+            m_external_register_calls.emplace(i.symbol, parameters.size());
+    }
+}
+
+bool IRCodeGenerator::stacklessLeafCandidate(const IRFunction& function, bool frameless) const {
+    // Conservative prefilter; emission still counts every stack operation and
+    // LINK, and a function that performs one is excluded and re-emitted.
+    if (!frameless || !globallyOptimized() || m_config.target != TargetKind::GSU || function.name == "main" ||
+        m_stackful_leaves.count(functionSymbol(function))) return false;
+    for (const auto& location : m_register_allocator.locations())
+        if (location.second.has_register && location.second.physical_register == GSUAbi::LinkRegister) return false;
+    for (const auto& b : function.blocks) for (const auto& i : b.instructions) {
+        if (i.opcode == IROpcode::Call || i.opcode == IROpcode::DivMod || i.opcode == IROpcode::DivModResult ||
+            i.opcode == IROpcode::MemoryInitialize ||
+            (i.opcode == IROpcode::Binary && (i.operation == "/" || i.operation == "%")) ||
+            (i.opcode == IROpcode::HardwareLoop && !m_register_hardware_loops.count(i.loop_id))) return false;
+    }
+    return true;
+}
+
+void IRCodeGenerator::emitPublicRegisterEntry(const IRFunction& function) {
+    const auto symbol = functionSymbol(function);
+    const auto count = m_register_arguments.at(symbol);
+    if (count == 0 || count > GSUAbi::RegisterArgumentCount)
+        fail("IR codegen: invalid public register entry.", Token(TokenType::UNKNOWN, function.name, 1, 1));
+    if (m_checked_pointer_mode) {
+        // The argument checks of a stack-argument prologue: an even SP, then
+        // an argument area that does not wrap the bank. The body's stack
+        // limit follows at the register entry, so an SP that is both odd and
+        // below the limit (only a host can produce one) now stops with R6=1
+        // rather than R6=2; every other SP stops exactly as before.
+        emitMove(Register::R0, GSUAbi::StackPointerRegister);
+        emitByte(0x3e); emitByte(0x71);
+        emitGuard(OpCode::BEQ, 1);
+        emitCompare(Register::R10_SP, static_cast<std::uint16_t>(65535u - count * GSUAbi::ParameterSlotSize));
+        emitGuard(OpCode::BCC, 2);
+    }
+    // PUSH stores before decrementing, so the first argument is at SP+2 and
+    // each next one two bytes above. Only loads: SP and memory are unchanged.
+    emitByte(0xba); emitByte(0x13); emitByte(0x3e); emitByte(0x52); // R3 = R10 + 2
+    for (std::size_t p = 0; p < count; ++p) {
+        if (p) { emitByte(0xd3); emitByte(0xd3); } // INC R3 twice
+        emitByte(static_cast<std::uint8_t>(0x10 | GSUAbi::RegisterArguments[p]));
+        emitByte(0x43); // LDW (R3)
+    }
+    m_spill_cache.clear();
+    m_last_ram_word_address = IRValueId{};
+    m_stack_check_credit.reset();
+    m_object_file.symbol_table.push_back({m_public_register_entries.at(symbol), SymbolSection::CODE,
+        static_cast<std::uint32_t>(m_object_file.code_section.size())});
 }
 
 void IRCodeGenerator::planStaticFrames(const IRModule& module) {

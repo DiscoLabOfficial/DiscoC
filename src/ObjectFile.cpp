@@ -143,8 +143,33 @@ bool ObjectFile::usesSPC700Relocations() const {
         [](const RelocationEntry& relocation) { return isSPC700Relocation(relocation.type); });
 }
 
+bool ObjectFile::usesRegisterCalls() const {
+    std::string name;
+    std::size_t count = 0;
+    return std::any_of(symbol_table.begin(), symbol_table.end(),
+            [&](const SymbolEntry& symbol) { return GSUAbi::parseRegisterCallSymbol(symbol.name, name, count); }) ||
+        std::any_of(relocation_table.begin(), relocation_table.end(),
+            [&](const RelocationEntry& relocation) { return GSUAbi::parseRegisterCallSymbol(relocation.target_symbol_name, name, count); });
+}
+
 void ObjectFile::validate() const {
     GSUCodeLayout::alignment(*this);
+    {
+        // A register entry is GSU code entered by LINK; nothing else may
+        // define or reference one. Reassembled exports spell the call's
+        // `iwt r15, #entry` as an ordinary IWT relocation.
+        std::string name;
+        std::size_t count = 0;
+        for (const auto& symbol : symbol_table)
+            if (GSUAbi::parseRegisterCallSymbol(symbol.name, name, count) &&
+                (config.target != TargetKind::GSU || symbol.section != SymbolSection::CODE))
+                throw std::runtime_error("Invalid GSU register entry definition: " + symbol.name);
+        for (const auto& relocation : relocation_table)
+            if (GSUAbi::parseRegisterCallSymbol(relocation.target_symbol_name, name, count) &&
+                (config.target != TargetKind::GSU ||
+                 (relocation.type != RelocationType::ADDR16_JAL && relocation.type != RelocationType::ADDR16_IWT)))
+                throw std::runtime_error("GSU register entry requires a call relocation: " + relocation.target_symbol_name);
+    }
     unsigned stack_markers = 0;
     for (const auto& symbol : symbol_table) {
         if (staticStackMarker(symbol.name)) {
@@ -249,7 +274,8 @@ void ObjectFile::write(const std::string& path) {
 
     // Magic Header
     out.write("DISCO", 5);
-    const std::uint8_t version = usesSPC700Relocations() ? SPC700RelocationFormatVersion :
+    const std::uint8_t version = usesRegisterCalls() ? RegisterCallFormatVersion :
+        usesSPC700Relocations() ? SPC700RelocationFormatVersion :
         usesShortRam() ? ShortRamFormatVersion : staticStackBound() ? StaticStackFormatVersion :
         hasStaticRamProof() ? StaticRamProofFormatVersion : BaselineFormatVersion;
     write_u8(out, version);
@@ -445,8 +471,12 @@ ObjectFile ObjectFile::read_stream(std::istream& in, const std::string& path) {
     // Section/enum bounds above already confine short RAM to version 10.
     if (version == ShortRamFormatVersion && !obj.usesShortRam())
         throw std::runtime_error("Object file uses format version 10 without short RAM: " + path);
-    if (version >= SPC700RelocationFormatVersion && !obj.usesSPC700Relocations())
+    if (version == SPC700RelocationFormatVersion && !obj.usesSPC700Relocations())
         throw std::runtime_error("Object file uses format version 11 without SPC700 relocations: " + path);
+    if ((version >= RegisterCallFormatVersion) != obj.usesRegisterCalls())
+        throw std::runtime_error(version >= RegisterCallFormatVersion
+            ? "Object file uses format version 12 without a GSU register entry: " + path
+            : "Object file names a GSU register entry before format version 12: " + path);
     return obj;
 }
 

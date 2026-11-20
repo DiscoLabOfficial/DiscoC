@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 // Stable compiler-side names for the GSU calling convention. The convention
 // retains the scalar stack-frame layout; far argument slots are four bytes.
@@ -57,6 +58,32 @@ constexpr int FirstParameterOffset = 6;
 // The caller writes them, so they belong to the callee's clobber set.
 constexpr std::size_t RegisterArgumentCount = 4;
 constexpr std::uint8_t RegisterArguments[RegisterArgumentCount] = {5, 7, 8, 4};
+
+// Public register entry, `__disco_regcall<N>$<name>` (N = 1..4): an O2/Os
+// definition of public `name` whose N parameters are one-word values also
+// exports this CODE symbol. It takes the arguments in RegisterArguments and
+// otherwise behaves exactly like `name`, which keeps the stack convention for
+// every other caller. `$` cannot occur in a source identifier, so the name
+// never collides with a function. An O2/Os caller of an external `name` with
+// such a prototype calls the register entry; when no input object defines
+// it, the linker supplies an adapter that pushes the registers as stack
+// arguments and calls `name`. Objects that define or reference a register
+// entry are written as format version 12, which older linkers refuse.
+constexpr const char* RegisterCallPrefix = "__disco_regcall";
+inline std::string registerCallSymbol(const std::string& name, std::size_t count) {
+    return std::string(RegisterCallPrefix) + std::to_string(count) + "$" + name;
+}
+// Splits a register-entry symbol into its target name and argument count.
+// Returns false for any other symbol, including malformed register names.
+inline bool parseRegisterCallSymbol(const std::string& symbol, std::string& name, std::size_t& count) {
+    const std::string prefix(RegisterCallPrefix);
+    if (symbol.size() < prefix.size() + 3 || symbol.compare(0, prefix.size(), prefix) != 0) return false;
+    const char digit = symbol[prefix.size()];
+    if (digit < '1' || digit > '0' + static_cast<int>(RegisterArgumentCount) || symbol[prefix.size() + 1] != '$') return false;
+    count = static_cast<std::size_t>(digit - '0');
+    name = symbol.substr(prefix.size() + 2);
+    return true;
+}
 
 // R9 and R11 are preserved by every non-entry function: a frameless one never
 // touches R9 unless it is module-private and its in-module callers save R9

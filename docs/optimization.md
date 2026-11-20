@@ -817,6 +817,24 @@ bounded machine scheduling. It has no LLVM dependency.
   The conservative reset repair is covered by the current
   [local validation](testing.md#gem-chess-local-validation); older timing
   snapshots below do not validate later control-flow changes.
+- **Calling-convention cost.** Only remove a stack guard where nothing can
+  exhaust the stack, never by moving a larger check earlier. A stack-free leaf
+  (frameless, no calls or division kernels, no `R11` allocation, no push, pop,
+  allocation or `LINK` in its emitted body) skips both its `R11` save and its
+  entry guard; emission counts stack operations, and a function that performs
+  one is re-emitted with its frame in a bounded retry (each retry excludes at
+  least one more function). Exported functions with one to four one-word
+  parameters add a register entry behind their stack-argument label, which
+  only loads the arguments and falls through; in-unit callers use it. O2/Os
+  calls to functions defined elsewhere use the register entry of an eligible
+  prototype, and the linker adapts it to stack-convention definitions with
+  per-push checks. O0/O1 code and every call-free unit are unchanged byte for
+  byte, and exported labels keep the stack convention and every entry check
+  (an SP both odd and below the limit reports `R6=1` before `R6=2`). A definition whose parameter address escapes has no register
+  entry, so O2/Os callers in other units pay the adapter (about 17 more
+  executed instructions than a stack call). See
+  [architecture](architecture.md#gsu-abi-conventions) for the ABI and
+  [object format](object-format.md) for the version-12 linking rules.
 - **Divmod fusion.** A dominating word division/remainder can own both results
   when a later opposite operation uses the same resolved SSA operands and type.
   `divmod /` (or `%`) keeps the first operation's result; `divmod.result` selects
