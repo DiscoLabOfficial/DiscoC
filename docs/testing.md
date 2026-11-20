@@ -897,8 +897,9 @@ They require Clang with libFuzzer support; use a separate build directory.
 
 `CompilerError` and `std::runtime_error` are the compiler's diagnostics and are
 expected. In `disco_compiler_fuzzer` any other escaping exception, such as
-`std::out_of_range`, and an `IRVerifier` rejection of IR lowered from analyzed
-source abort the run as defects.
+`std::out_of_range`, aborts the run as a defect. So does an `IRVerifier`
+rejection, reported as an `IR verifier:` diagnostic, of IR lowered from
+analyzed source or produced by an optimization pass or the code generator.
 
 ```bash
 cmake -S . -B build/fuzz -G Ninja \

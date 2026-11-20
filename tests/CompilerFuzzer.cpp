@@ -108,6 +108,14 @@ std::unique_ptr<AnalyzedUnit> analyze(const std::string& source, const CompilerC
     return unit;
 }
 
+// Optimization passes re-run IRVerifier on their output. The input IR already
+// verified, so a verifier rejection there is a miscompilation, not a
+// diagnostic, even though it is reported as a CompilerError.
+void rejectVerifierFailure(const char* stage, const CompilerError& error) {
+    static const std::string prefix = "IR verifier:";
+    if (error.getMessage().compare(0, prefix.size(), prefix) == 0) reportDefect(stage, error.what());
+}
+
 void generate(const AnalyzedUnit& unit, CompilerConfig config, OptimizationLevel level) {
     config.optimization = level;
     try {
@@ -115,8 +123,9 @@ void generate(const AnalyzedUnit& unit, CompilerConfig config, OptimizationLevel
             unit.data, config);
         const auto object = generator.generate(unit.ir);
         (void)AssemblyGenerator(object).generate();
-    } catch (const CompilerError&) {
+    } catch (const CompilerError& error) {
         // Backend limits (cache, ranges, spills) are diagnostics.
+        rejectVerifierFailure("GSU code generation", error);
     } catch (const std::runtime_error&) {
     }
     if (!isGlobalOptimization(level)) return;
@@ -125,7 +134,8 @@ void generate(const AnalyzedUnit& unit, CompilerConfig config, OptimizationLevel
     try {
         IRGlobalOptimizer::run(optimized, unit.analyzer->getAllLocalSymbols(), level);
         (void)dumpIR(optimized);
-    } catch (const CompilerError&) {
+    } catch (const CompilerError& error) {
+        rejectVerifierFailure("IR global optimization", error);
     } catch (const std::runtime_error&) {
     }
 }
