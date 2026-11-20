@@ -5,6 +5,7 @@
 #include "IRCodeGenerator.hpp"
 #include "LinearScanAllocator.hpp"
 #include "AssemblyGenerator.hpp"
+#include "ABI.hpp"
 #include "GSUInstructionModel.hpp"
 #include "Lexer.hpp"
 #include "Optimizer.hpp"
@@ -460,10 +461,20 @@ void sizePolicy() {
     const auto single = compile("word f(word a,word b){return a/b;}", OptimizationLevel::Size);
     for (const auto& symbol : single.symbol_table)
         require(symbol.name.find("__disco_os_divmod_") == std::string::npos, "One division acquired a larger outlined helper");
+    // A parameterless @cache function starts with its CACHE. With one-word
+    // parameters the public label first loads the stack arguments, and the
+    // CACHE starts the register entry that both entries then execute.
+    const auto plain_cached = compile("@cache word f(){return *(volatile word*)0x100 + 1;}", OptimizationLevel::Size);
+    require(plain_cached.code_section.front() == 2, "Os removed an explicit CACHE instruction");
     const auto cached = compile("@cache word f(word a){return a+1;}", OptimizationLevel::Size);
-    require(cached.code_section.front() == 2, "Os removed an explicit CACHE instruction");
+    bool entry_cache = false;
     for (const auto& symbol : cached.symbol_table)
-        require(symbol.name.find("__disco_cache_align16") == std::string::npos, "Os added CACHE padding metadata");
+        if (symbol.name == GSUAbi::registerCallSymbol("f", 1))
+            entry_cache = symbol.offset < cached.code_section.size() && cached.code_section.at(symbol.offset) == 2;
+    require(entry_cache, "Os removed the CACHE instruction of a register entry");
+    for (const auto* object : {&plain_cached, &cached})
+        for (const auto& symbol : object->symbol_table)
+            require(symbol.name.find("__disco_cache_align16") == std::string::npos, "Os added CACHE padding metadata");
     require(AssemblyGenerator(size).generate() == AssemblyGenerator(compile(repeated, OptimizationLevel::Size)).generate(),
         "Os machine candidate selection is nondeterministic");
 }

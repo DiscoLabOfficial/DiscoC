@@ -561,6 +561,115 @@ were not obtained here. Rotation cycles are GO-to-STOP master clocks from
 Luna's trace, not the Mesen window used for earlier rotation tables: compare
 this row only with itself.
 
+### Dead static stores and direct materialization
+
+Two more machine peepholes run inside `GSUMachineScheduler`, so they apply at
+**O2 and Os only**. They reuse the scheduler's decoded instruction stream,
+selector/ALT state, entry and relocation fences and the bounded `deadFrom`
+liveness scan; there is no new analysis framework. O1 does not run the
+machine scheduler, and turning it on there would change every O1 payload
+that the O1 regressions pin byte for byte. O1 still emits the
+`IBT/IWT R0` / `MOVE Rn,R0` shape (60 sites in the nine benchmarks, before
+any liveness proof), so adding a minimal machine pass at O1 is a possible
+follow-up rather than part of this change.
+
+- **Direct materialization.** A value produced in R0 and then copied by
+  `WITH R0 / TO Rn` (`MOVE Rn,R0`) is produced in Rn directly when the
+  `deadFrom` scan proves R0 is overwritten before any read:
+  `IBT/IWT R0,#k` becomes `IBT/IWT Rn,#k` (2 bytes saved), `MOVE R0,Ra`
+  becomes `MOVE Rn,Ra` (2 bytes), and a one-byte result such as
+  `[FROM s] [ALT] ADD/SUB/AND/OR/XOR/MULT/shift/SWAP/LOB/HIB/SEX/LDW/LDB`
+  becomes `TO Rn / [FROM s] [ALT] op` (1 byte). MOVE, IBT and IWT write no
+  flag, and the retargeted operation computes the same value and NZCV, so the
+  flags are identical; only the dead R0 differs. A function return keeps R0
+  live (it is the result), as do branches, STOP and real entries. CMP, INC/DEC,
+  R14/R15 operands and R13-R15 destinations are excluded. A relocated literal
+  keeps its opcode offset: `ADDR16_IWT`/`ADDR16_RAM` patch only the operand
+  bytes, so only the register nibble changes. An entry at the literal is kept;
+  an entry at the copy, or inside a retargeted prefix group, blocks the rewrite.
+  The decoder treats every control-flow entry as entered with unknown
+  ALT/selector state. Both passes accept a private branch target as clear
+  when no relocation names it and the instruction before it and every
+  incoming branch's delay slot reset the prefixes; stack-free leaves start
+  their body at such a target.
+- **Dead static stores.** A `STW/STB` to relocated static RAM is removed when
+  a later store in the same straight-line window writes at least the same
+  bytes (same symbol and offset, followed through `IWT`, `MOVE`, `ADD/SUB #`
+  and `INC/DEC`). Machine bytes cannot tell a volatile store from a plain one,
+  so the code generator lists the `STW/STB` offsets it emits while lowering a
+  nonvolatile store, and only listed stores can kill or be killed. Numeric
+  (MMIO-like) and pointer-derived addresses are never candidates. Any load,
+  unlisted store, `SBK` (which reuses the address latch the removed store
+  would have set), bank change, PLOT/RPIX, CACHE, branch or fault guard, call,
+  return, STOP, LOOP, delay slot or entry ends the window, so a fault point or
+  callee can never observe the difference.
+
+The local IR store pass already removes overwritten stores to unescaped
+locals, and global double stores usually reach the backend as `STW` + `SBK`,
+which this pass deliberately keeps. Dead static stores therefore did not fire
+in the nine benchmarks or in the three demos below (their store counts are
+unchanged); the regression fixture `tests/fixtures/gsu_machine_peephole.dc`
+exercises them, together with the volatile, numeric, read-between, call and
+pointer cases that must keep both stores. All measured gains here come from
+direct materialization.
+
+Linux (GCC Release), Mesen 2.2.1 (`benchmarks/run-mesen.cmake`), before
+(`main` at 084353e, which already passes arguments in registers and drops
+stack-free leaves' frames) → after:
+
+| O2 workload | CODE bytes | Executed opcodes | Fast-GSU cycles | Change |
+| --- | ---: | ---: | ---: | ---: |
+| `triangle_fill` | 216 → 214 | 26,651 → 26,649 | 58,772 → 58,770 | -0.00% |
+| `horizontal_span` | 127 → 123 | 329 → 325 | 1,142 → 1,130 | -1.05% |
+| `rom_palette_plot` | 156 → 150 | 3,160 → 2,772 | 5,031 → 4,633 | -7.91% |
+| `ram_palette_plot` | 190 → 185 | 2,427 → 2,295 | 4,244 → 3,944 | -7.07% |
+| `memcpy` | 236 → 232 | 3,313 → 3,309 | 4,772 → 4,832 | +1.26% |
+| `function_call` | 126 → 124 | 2,737 → 2,735 | 16,660 → 16,650 | -0.06% |
+| `switch_dense` | 265 → 262 | 676 → 665 | 4,380 → 4,325 | -1.26% |
+| `switch_sparse` | 270 → 268 | 665 → 663 | 4,420 → 4,410 | -0.23% |
+| `arithmetic` | 260 → 250 | 11,461 → 11,265 | 15,167 → 14,883 | -1.87% |
+
+| Os workload | CODE bytes | Executed opcodes | Fast-GSU cycles | Change |
+| --- | ---: | ---: | ---: | ---: |
+| `triangle_fill` | 160 → 158 | 80,867 → 80,865 | 130,718 → 130,716 | -0.00% |
+| `horizontal_span` | 87 → 83 | 568 → 564 | 3,920 → 3,900 | -0.51% |
+| `rom_palette_plot` | 116 → 110 | 4,028 → 3,640 | 6,427 → 5,939 | -7.59% |
+| `ram_palette_plot` | 149 → 144 | 3,167 → 3,035 | 5,240 → 5,096 | -2.75% |
+| `memcpy` | 194 → 186 | 4,815 → 4,299 | 28,080 → 25,500 | -9.19% |
+| `function_call` | 126 → 124 | 2,737 → 2,735 | 16,660 → 16,650 | -0.06% |
+| `switch_dense` | 265 → 262 | 676 → 665 | 4,380 → 4,325 | -1.26% |
+| `switch_sparse` | 270 → 268 | 665 → 663 | 4,420 → 4,410 | -0.23% |
+| `arithmetic` | 235 → 224 | 11,824 → 11,534 | 17,269 → 16,855 | -2.40% |
+
+Every workload shrinks and executes the same or fewer opcodes at both
+levels; total cycles fall 0.88% at O2 and 1.71% at Os. The one slower row,
+O2 `memcpy`, changes only `main`'s setup (two literals now load directly,
+4 bytes fewer): `copy_bytes` is byte-identical but its hot loop now starts
+4 bytes earlier, so the 60 extra cycles are a cache-line layout effect, not
+more work. O1 payloads are byte-identical before and after.
+
+The RAM-execution demos, same hosts and policies as the earlier tables,
+same before/after toolchains:
+
+| Demo / policy | Payload bytes | GSU cycles | Change | Measured with |
+| --- | ---: | ---: | ---: | --- |
+| Gem chess, all 18 publications, O2 | 13,940 → 13,647 | 287,642,295 → 281,972,895 | -1.97% | Mesen `verify.lua` |
+| Gem chess, all 18 publications, Os | 13,432 → 13,153 | 324,086,732 → 317,725,309 | -1.96% | Mesen `verify.lua` |
+| Interactive wireframe, O2 | 5,448 → 5,335 | 196,074 → 192,885 | -1.63% | Mesen `benchmark.lua` |
+| Interactive filled, O2 | 5,448 → 5,335 | 344,917 → 340,757 | -1.21% | Mesen `benchmark.lua` |
+| Interactive wireframe, Os | 5,193 → 5,084 | 203,603 → 202,598 | -0.49% | Mesen `benchmark.lua` |
+| Interactive filled, Os | 5,193 → 5,084 | 397,716 → 394,371 | -0.84% | Mesen `benchmark.lua` |
+| Rotating triangle, O2 | 2,262 → 2,190 | 341,488.48 → 332,941.02 mean over 64 poses | -2.50% | Luna `--superfx-trace` |
+| Rotating triangle, Os | 2,094 → 2,024 | 386,191.84 → 379,133.89 mean over 64 poses | -1.83% | Luna `--superfx-trace` |
+
+Every gem chess publication improves (by 1.67% to 2.97% at O2 and 1.80% to
+2.12% at Os), and its complete Mesen verification and negative ROM pass
+before and after at both levels, as does the interactive shapes
+verification. Rotating-triangle framebuffer hashes from Luna match before
+and after at seven frames between 40 and 400 at both levels; its Mesen
+verification still fails on this Linux Mesen build for both toolchains, as
+noted above. These are emulator measurements, not physical-hardware timings.
+
 ## What O1 does
 
 - Fold scalar constants through narrowing, sign extension, bool conversion
@@ -817,6 +926,24 @@ bounded machine scheduling. It has no LLVM dependency.
   The conservative reset repair is covered by the current
   [local validation](testing.md#gem-chess-local-validation); older timing
   snapshots below do not validate later control-flow changes.
+- **Calling-convention cost.** Only remove a stack guard where nothing can
+  exhaust the stack, never by moving a larger check earlier. A stack-free leaf
+  (frameless, no calls or division kernels, no `R11` allocation, no push, pop,
+  allocation or `LINK` in its emitted body) skips both its `R11` save and its
+  entry guard; emission counts stack operations, and a function that performs
+  one is re-emitted with its frame in a bounded retry (each retry excludes at
+  least one more function). Exported functions with one to four one-word
+  parameters add a register entry behind their stack-argument label, which
+  only loads the arguments and falls through; in-unit callers use it. O2/Os
+  calls to functions defined elsewhere use the register entry of an eligible
+  prototype, and the linker adapts it to stack-convention definitions with
+  per-push checks. O0/O1 code and every call-free unit are unchanged byte for
+  byte, and exported labels keep the stack convention and every entry check
+  (an SP both odd and below the limit reports `R6=1` before `R6=2`). A definition whose parameter address escapes has no register
+  entry, so O2/Os callers in other units pay the adapter (about 17 more
+  executed instructions than a stack call). See
+  [architecture](architecture.md#gsu-abi-conventions) for the ABI and
+  [object format](object-format.md) for the version-12 linking rules.
 - **Divmod fusion.** A dominating word division/remainder can own both results
   when a later opposite operation uses the same resolved SSA operands and type.
   `divmod /` (or `%`) keeps the first operation's result; `divmod.result` selects

@@ -7,21 +7,23 @@ The format is intentionally small and implementation-owned. It is not ELF, SNES 
 ## Binary layout
 
 All multi-byte integer fields are serialized explicitly in little-endian byte
-order, independent of the host architecture. The reader accepts versions 3–11;
+order, independent of the host architecture. The reader accepts versions 3–12;
 writers select version 7 by default. Versions 8 and 9 keep the version-7 layout
 and carry the static-RAM or static stack-bound proof marker described below.
 Version 10 adds a short RAM section. Version 11 keeps the version-10 layout
-(with an empty short RAM image) and permits the SPC700 relocation types. The
-writer selects the highest version required by an object's proof markers, short
-RAM section, short RAM symbols or relocations, or SPC700 relocations. Older readers reject unsupported versions instead of
-ignoring required placement or proof constraints.
+(with an empty short RAM image) and permits the SPC700 relocation types.
+Version 12 keeps the version-10 layout and marks a GSU object that defines or
+references a register entry (below). The writer selects the highest version
+required by an object's proof markers, short RAM section, short RAM symbols or
+relocations, SPC700 relocations or register entries. Older readers reject
+unsupported versions instead of ignoring required placement or proof constraints.
 
 The version-7 layout and its version-10 extension are serialized in this order:
 
 | Field | Encoding |
 | --- | --- |
 | Magic | 5 ASCII bytes: `DISCO` |
-| Format version | `uint8_t`: `7` by default, `8`/`9` for proof markers, `10` for short RAM, `11` for SPC700 relocations |
+| Format version | `uint8_t`: `7` by default, `8`/`9` for proof markers, `10` for short RAM, `11` for SPC700 relocations, `12` for GSU register entries |
 | Target | `uint8_t`: `0` = GSU, `1` = SPC700 |
 | Memory mapping | `uint8_t`: `0` = LoROM, `1` = HiROM |
 | Code start address | `uint32_t` |
@@ -250,7 +252,7 @@ the internal functions reached only from it, without recursion or address use.
 The object then carries a private RAM marker `__disco_static_stack_<bytes>` at
 offset 0: the cumulative depth those functions can reach below `main`'s entry
 SP. Such objects require at least format version 9 (version 10 when they also
-use short RAM), which older readers refuse.
+use short RAM, 12 with register entries), which older readers refuse.
 The linker accepts the marker only with runtime initialization, entry `main`
 defined by that object and referenced by no relocation, and `floor + bytes <=
 --stack-pointer`; otherwise linking fails. No omitted guard can then fail, so
@@ -258,6 +260,21 @@ the remaining guards (exported, recursive or shared callees, helpers) keep the
 precise R6=2 fault behaviour. Version 8 likewise marks objects whose static RAM
 accesses omit null checks (`__disco_static_ram_nonnull`, nonzero RAM origin).
 Final linked assembly carries neither marker.
+
+A GSU register entry is an exported CODE symbol `__disco_regcall<N>$<name>`
+with `N` in 1–4 (see [the ABI](architecture.md#gsu-abi-conventions)): the
+entry of public function `name` that takes its `N` one-word arguments in
+`R5`, `R7`, `R8`, `R4`. It may only be defined in CODE, by an object that also
+exports `name` in CODE; the linker rejects any other definition. It may only be
+referenced by a call (`ADDR16_JAL`, or the `ADDR16_IWT` that reassembled
+`link #4; iwt r15, #entry` produces). When the inputs reference a register
+entry that none of them defines, `discld` appends one generated adapter per
+missing entry after the input objects, before layout. The adapter pushes
+`R11` and then the argument registers last first, each push with its own
+`__disco_stack_limit_2` check, calls `name`, removes the arguments, restores
+`R11` and returns. It is ordinary CODE in the linked image and in the final
+assembly export, which therefore reassembles and relinks byte for byte. An
+undefined `name` is reported like any other undefined symbol.
 
 Short RAM (version 10) is static RAM the linker places in the only range
 `LMS`/`SMS` reach: `$0000-$01FF` of the near RAM bank. Every object's short RAM
@@ -304,13 +321,15 @@ host bitmap metadata and remains the default writer format. Versions 3 through
 Version 8 permits the static-RAM proof marker; version 9 also permits a static
 stack-bound marker. Version 10 adds short RAM images, symbols and relocations,
 and requires at least one of those short RAM features. Version 11 requires at
-least one SPC700 relocation and an SPC700 target. Proof markers may also
+least one SPC700 relocation and an SPC700 target. Version 12 requires at
+least one register-entry symbol or relocation, and register entries require
+version 12. Proof markers may also
 appear in later supported versions; changing only a version byte cannot safely
 downgrade an object that relies on them.
 
 Versions 3/4 cannot contain RAM symbols or relocation type 4. Short RAM symbols
 and relocation type 5 require version 10, and relocation types 6–10 require
-version 11. Versions outside 3–11, invalid
+version 11. Versions outside 3–12, invalid
 alignment bytes, truncated bitmap records, invalid flags and invalid profiles
 are rejected. RAM images are bounded to 64 KiB and short RAM images to 510
 bytes. Rebuild all three tools and compiler objects when upgrading: accepting

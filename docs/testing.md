@@ -528,6 +528,17 @@ Additional O2/Os fixtures execute internal register arguments, static frames,
 frameless calls and short RAM homes while comparing results and preserved ABI
 state. `--static-stack-proof` coverage retains guards for ineligible call graphs
 and emits link-checked bounds for eligible runtime-entered `main` graphs.
+Public register entries and stack-free leaves are checked the same way: an
+exported leaf loses its `R11` save and guard and is called through its register
+entry, a leaf whose pointer comparison pushes is re-emitted with both, and
+results plus `R9`/`R10` match O0. Callers and callees at every pairing of
+O0/O1/O2/Os link (native register entry or linker adapter as expected),
+reassemble their final export byte for byte and return the same result, also
+for a four-argument call that no argument permutation satisfies and an
+`@cache` callee whose CACHE starts its register entry; at the
+smallest SP where the native O2 pairing returns, the adapter to an O0 callee
+stops with `R6=2`. Object tests cover the version-12 rules and an orphan
+register entry is rejected by `discld`.
 Near-ROM table proofs keep their bank relocation, retain checks for unbounded
 accesses, and reject incompatible RAM-origin or ROM-bank links through direct
 objects, compiler assembly and final linked exports.

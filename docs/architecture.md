@@ -264,11 +264,13 @@ branches that exceed the short displacement range are relaxed by the assembler
 or canonical IR backend into object-relative absolute jumps.
 
 The linker lays out CODE then ROM DATA in the payload. Object versions 4
-through 11 record DATA alignment. Version 5 introduced static RAM; version 6
+through 12 record DATA alignment. Version 5 introduced static RAM; version 6
 adds its explicit alignment; version 7 adds optional bitmap host metadata and
 remains the default writer format. Versions 8/9 carry placement/stack proof
 markers; version 10 adds short RAM images, symbols and relocations; version 11
-adds SPC700 relocations. The reader accepts versions 3–11. SPC700 links use
+adds SPC700 relocations; version 12 marks GSU register entries, for which the
+linker may append generated adapters after the input CODE. The reader accepts
+versions 3–12. SPC700 links use
 flat 16-bit placement with the reserved regions and runtime described in
 [SPC700 target](spc700-target.md). Ordinary RAM is allocated separately from `--ram-origin`
 in the near RAM bank; short RAM is placed from `$0002` in that bank. Optional
@@ -358,8 +360,46 @@ instruction; the caller fills them after its live-register saves (computed
 arguments are parked on the stack first, register homes move in one parallel
 copy, frame-resident values load directly, literals last). These registers
 are part of the callee's clobber set, and its checked prologue omits the
-parameter-area SP ceiling guard, which can no longer fail. Exported,
-address-taken, larger or far-pointer signatures keep the stack convention.
+parameter-area SP ceiling guard, which can no longer fail. Address-taken
+internal functions and larger or far-pointer signatures keep the stack
+convention.
+
+An exported function compiled at O2/Os with the same kind of signature (one
+to four one-word parameters read only at entry, not `main`) keeps its
+stack-convention label and adds a register entry, `__disco_regcall<N>$<name>`,
+right after it. The public label performs the argument checks of a
+stack-argument prologue (in checked-pointer mode, an even SP and then an
+argument area that does not wrap the bank), loads the arguments from `SP+2`,
+`SP+4`, … into `R5`, `R7`, `R8`, `R4` without writing memory or `SP`, and
+falls through into the register entry, whose stack-limit check therefore
+follows them. A stack-argument prologue checked the stack limit first, so an
+SP that is both odd and below the limit (only a host can produce one) now
+stops with `R6=1` instead of `R6=2`; every other SP stops in the same case
+with the same category. An `@cache`
+function's `CACHE` starts the register entry, so both entries execute the
+same `CACHE` before the body. Indirect calls and
+O0/O1 or assembly callers use the public label; their convention, results and
+preserved `R9`/`R11`/`SP` are unchanged. An exported function never allocates
+`R9` and never gets a static frame through this, because it can still be
+entered from outside the unit. `$` cannot occur in a source identifier, so a
+register entry never collides with a function name.
+
+An O2/Os caller of a function that is not defined in its unit calls the
+register entry when the visible prototype has one to four one-word
+parameters (the same test as the definition's signature), passing the
+arguments in registers exactly like an internal call. If no input object
+defines that register entry (an O0/O1 or assembly definition, or one whose
+body keeps stack arguments), `discld` links in an adapter for it: a checked
+push of `R11`, a checked push of each argument register (last first), the
+stack call, argument cleanup, `R11` restore and return. Every push keeps its
+own stack-limit check, so stack exhaustion stops with `R6=2` before the same
+words a stack call would have written; `R0`/`R4` and `R9` survive it. The
+adapter costs its `R11` save and a second call: an O2/Os call to a definition
+without a register entry (O0/O1, assembly, or an O2/Os body whose parameter
+address escapes) executes about 17 more instructions than the former stack
+call. Objects that define or reference register entries use object format
+version 12 (see [object format](object-format.md)), which older linkers
+refuse.
 
 Under `--static-stack-proof` (runtime-initialized `main`), in a unit that
 already owns static RAM, a function that can never be active twice (its
@@ -377,7 +417,18 @@ At O2/Os a function other than `main` with no stack-passed parameters and no
 FP-relative frame (none at all, or a static one) is frameless: it saves only
 `R11`, never touches `R9`, and returns without `SP := FP` (every return is
 balanced: callers clean up arguments and the IR verifier closes each
-hardware-loop save first). `main` keeps its frame because its `STOP` state
+hardware-loop save first). A frameless function that also makes no calls
+(no shared division kernel either), does not allocate `R11` and performs no
+push, pop, stack allocation or `LINK` is a stack-free leaf: it does not save
+`R11` and has no stack guard, because nothing in it can exhaust the stack. It
+returns with `JMP R11` on the caller's link value. The selection is decided
+before emission from the IR and the allocation; if emission still produces a
+stack operation (a pointer comparison, a parked operand), that function is
+re-emitted with its `R11` save and guard, in a bounded retry. A stack-free
+leaf therefore has no stack-limit stop; in checked-pointer mode it still
+stops with `R6=1` on an odd SP. Functions that use the stack keep every
+check, so they stop in the same cases (with the category precedence above for
+exported labels). `main` keeps its frame because its `STOP` state
 includes `SP` and the `FP + 4` reload of `R11`. A frameless function that is
 also `internal` and static-frame eligible may allocate `R9` as a last-resort
 value register. All of its callers are in the module and see `R9` in its

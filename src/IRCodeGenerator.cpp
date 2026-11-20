@@ -84,6 +84,7 @@ void IRCodeGenerator::emitMove(Register destination_register, std::uint8_t sourc
 
 void IRCodeGenerator::emitStackGuard(std::size_t required, const Token& source) {
     if (required > 65535u) fail("Stack requirement exceeds one bank.", source);
+    ++m_stack_touches;
     if (m_stack_proof.active()) { m_stack_proof.guard(required); return; }
     if (globallyOptimized() && m_stack_check_credit.covers(required)) return;
     const auto patch = m_object_file.code_section.size();
@@ -95,6 +96,7 @@ void IRCodeGenerator::emitStackGuard(std::size_t required, const Token& source) 
 }
 
 void IRCodeGenerator::emitPush(std::uint8_t reg) {
+    ++m_stack_touches;
     m_last_ram_word_address = IRValueId{};
     emitStackGuard(2, Token(TokenType::UNKNOWN, "", 0, 0));
     if (reg != 0) {
@@ -110,6 +112,7 @@ void IRCodeGenerator::emitPush(std::uint8_t reg) {
 }
 
 void IRCodeGenerator::emitPop(std::uint8_t reg) {
+    ++m_stack_touches;
     m_spill_cache.clobber(reg);
     m_last_ram_word_address = IRValueId{};
     emitByte(0xDA);
@@ -141,6 +144,8 @@ void IRCodeGenerator::emitStore(Register address, std::uint8_t value_reg, bool b
     if (byte) {
         emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
     }
+    if (m_lowering_nonvolatile_store)
+        m_nonvolatile_store_offsets.insert(static_cast<std::uint32_t>(m_object_file.code_section.size()));
     emitByte(static_cast<std::uint8_t>(0x30 | address_reg));
 }
 
@@ -178,6 +183,7 @@ void IRCodeGenerator::emitImmediateArithmetic(OpCode operation,
 }
 
 void IRCodeGenerator::emitAdjustStack(std::size_t bytes, bool add, const Token& source) {
+    if (bytes) ++m_stack_touches;
     if (add) m_stack_proof.pop(bytes); else m_stack_proof.push(bytes);
     if (globallyOptimized()) {
         if (add) m_stack_check_credit.increase(bytes);
@@ -231,7 +237,8 @@ void IRCodeGenerator::emitFunctionEpilogue() {
         return;
     }
     if (!m_frameless) emitPop(GSUAbi::FramePointerRegister);
-    emitPop(GSUAbi::LinkRegister);
+    // A stack-free leaf never saved R11: nothing in it writes R11.
+    if (!m_stackless) emitPop(GSUAbi::LinkRegister);
     emitByte(static_cast<std::uint8_t>(0x90 | GSUAbi::LinkRegister));
     emitByte(static_cast<std::uint8_t>(OpCode::NOP));
 }
@@ -862,6 +869,7 @@ void IRCodeGenerator::emitCast(const IRInstruction& instruction) {
 }
 
 void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
+    ++m_stack_touches; // LINK writes R11.
     m_checked_addresses.clear();
     m_spill_cache.clear();
     m_last_ram_word_address = IRValueId{};
@@ -875,7 +883,19 @@ void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
     if (save_x) emitPush(1);
     if (save_y) emitPush(2);
     std::size_t argument_bytes = 0;
-    const bool register_arguments = m_register_arguments.count(instruction.symbol) != 0;
+    // A public in-module callee or an eligible external prototype is called
+    // through its register entry; an internal one has only that convention.
+    std::string target = instruction.symbol;
+    const auto public_entry = m_public_register_entries.find(instruction.symbol);
+    const auto external = m_external_register_calls.find(instruction.symbol);
+    if (public_entry != m_public_register_entries.end()) target = public_entry->second;
+    else if (external != m_external_register_calls.end()) {
+        if (external->second != instruction.operands.size())
+            fail("IR codegen: register call does not match its prototype.", instruction.source);
+        target = GSUAbi::registerCallSymbol(instruction.symbol, external->second);
+    }
+    const bool register_arguments = m_register_arguments.count(instruction.symbol) != 0 ||
+        external != m_external_register_calls.end();
     if (register_arguments) emitRegisterArguments(instruction);
     else for (auto argument = instruction.operands.rbegin();
          argument != instruction.operands.rend(); ++argument) {
@@ -889,7 +909,7 @@ void IRCodeGenerator::emitCall(const IRInstruction& instruction) {
     const auto patch_offset = m_object_file.code_section.size();
     emitByte(static_cast<std::uint8_t>(OpCode::IWT) | 0x0F);
     emitWord(0);
-    addRelocation(instruction.symbol, patch_offset, RelocationType::ADDR16_JAL);
+    addRelocation(target, patch_offset, RelocationType::ADDR16_JAL);
     // IWT R15 leaves the next opcode in the pipeline. LINK #4 returns after
     // this delay slot, so caller cleanup must begin after the NOP.
     emitByte(static_cast<std::uint8_t>(OpCode::NOP));
@@ -1003,6 +1023,14 @@ void IRCodeGenerator::emitStoreIndirect(const IRInstruction& instruction) {
     const auto value = instruction.operands[1];
     const auto& target = producer(address, instruction.source);
     const bool byte = usesByteStorage(instruction.type);
+    // Mark this lowering's STW/STB opcodes for the dead-store pass, never a
+    // volatile one. Restored on every return path.
+    struct StoreScope {
+        bool& flag;
+        bool saved;
+        ~StoreScope() { flag = saved; }
+    } store_scope{m_lowering_nonvolatile_store, m_lowering_nonvolatile_store};
+    m_lowering_nonvolatile_store = !instruction.memory_volatile;
     if (optimized() || m_checked_pointer_mode) {
         if (target.type.space == AddressSpace::ROM)
             fail("IR codegen: cannot store through a ROM address.", instruction.source);
@@ -1183,6 +1211,7 @@ void IRCodeGenerator::emitLoopBoundary(const IRInstruction&, bool reload) {
 }
 
 void IRCodeGenerator::emitHardwareLoopCapacityGuard(const Token& source) {
+    ++m_stack_touches;
     if (m_stack_proof.active()) { m_stack_proof.guard(4); return; }
     if (m_stack_check_credit.covers(4)) return;
     const auto ready = localLabel();
@@ -2442,7 +2471,18 @@ void IRCodeGenerator::runAddressProof(const IRFunction& function, std::size_t fr
 }
 
 IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRModule& module) {
+    // Every retry adds at least one function to m_stackful_leaves, so at most
+    // one pass per function plus a final one can be needed.
+    for (std::size_t pass = 0; pass <= module.functions.size(); ++pass) {
+        try { return generateInternalPass(module); }
+        catch (const NeedsStackFrame&) { continue; }
+    }
+    fail("IR codegen: stack-free leaf selection did not converge.", Token(TokenType::UNKNOWN, "", 0, 0));
+}
+
+IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternalPass(const IRModule& module) {
     m_object_file = ObjectFile();
+    m_stackless = m_stackless_retry = false;
     m_spill_issues.clear();
     m_relaxation_pending.clear();
     m_selected_auto_cache = m_had_cache_probe = false;
@@ -2451,6 +2491,8 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
     m_address_proof = GSUAddressProof{};
     m_static_ram_proof_used = false;
     m_stack_proof.clear();
+    m_nonvolatile_store_offsets.clear();
+    m_lowering_nonvolatile_store = false;
     if (globallyOptimized() && m_config.static_stack_proof && m_config.target == TargetKind::GSU) m_stack_proof.plan(module);
     planRegisterArguments(module);
     m_static_frame_sizes.clear(); m_static_frame_slots.clear(); m_static_frame_owner.clear();
@@ -2495,7 +2537,7 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
         m_stack_check_credit.reset();
         m_stack_proof.enter(function.link_name.empty() ? function.name : function.link_name);
         m_parameter_inputs = parameterInputs(function);
-        m_static_frame_owner.clear(); m_static_frame_bytes = 0; m_frameless = false;
+        m_static_frame_owner.clear(); m_static_frame_bytes = 0; m_frameless = false; m_stackless = false;
         m_boundary_stores_emitted.clear();
         m_static_ram_proof_used = m_static_ram_proof_used || m_address_proof.usedStaticObjectProof();
         m_address_proof = GSUAddressProof{};
@@ -2586,11 +2628,16 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
             (frame_bytes == 0 || static_frame);
         if (framePointerAllocatable(function) && !m_frameless)
             fail("IR codegen: R9-allocating function needs a frame pointer.", function.blocks.front().instructions.front().source);
+        m_stackless = stacklessLeafCandidate(function, m_frameless);
+        // A stack-free leaf cannot exhaust the stack: it neither saves R11
+        // nor pushes, allocates, calls or LINKs (verified after its body).
+        const std::size_t frame_guard = m_stackless ? 0 :
+            static_cast<std::size_t>(static_frame ? 0 : frame_bytes) + (m_frameless ? 2 : 4);
         const auto function_offset = static_cast<std::uint32_t>(m_object_file.code_section.size());
         m_object_file.symbol_table.push_back({function.link_name.empty() ? function.name : function.link_name, SymbolSection::CODE, function_offset});
+        if (m_public_register_entries.count(frame_owner)) emitPublicRegisterEntry(function);
         if (function.is_cached) emitByte(static_cast<std::uint8_t>(OpCode::CACHE));
-        emitStackGuard(static_cast<std::size_t>(static_frame ? 0 : frame_bytes) + (m_frameless ? 2 : 4),
-                       Token(TokenType::UNKNOWN, function.name, 1, 1));
+        if (frame_guard) emitStackGuard(frame_guard, Token(TokenType::UNKNOWN, function.name, 1, 1));
         if (m_checked_pointer_mode) {
             emitMove(Register::R0, 10);
             emitByte(0x3e); emitByte(0x71);
@@ -2607,7 +2654,8 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
             }
         }
 
-        emitPush(GSUAbi::LinkRegister);
+        if (!m_stackless) emitPush(GSUAbi::LinkRegister);
+        m_stack_touches = 0;
         if (!m_frameless) {
             emitPush(GSUAbi::FramePointerRegister);
             emitMove(static_cast<Register>(GSUAbi::FramePointerRegister), GSUAbi::StackPointerRegister);
@@ -2637,7 +2685,15 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
         }
         patchBranches();
         selectAutomaticCaches();
+        if (m_stackless && m_stack_touches) {
+            // The prefilter missed a stack use: re-emit with a saved R11.
+            if (!m_stackful_leaves.insert(frame_owner).second)
+                fail("IR codegen: excluded stack-free leaf was selected again.", Token(TokenType::UNKNOWN, function.name, 1, 1));
+            m_stackless_retry = true;
+        }
+        m_stackless = false;
     }
+    if (m_stackless_retry) throw NeedsStackFrame{};
 
     // Collect all functions' widening requests before retrying. Stopping at
     // the first function made the pass bound depend on function count and
@@ -2703,7 +2759,12 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
         m_object_file.symbol_table.push_back({std::string(GSUAbi::ImmutablePoolPrefix) + function.name + "." +
             std::to_string(array.first.value), SymbolSection::DATA, offset});
     }
-    if (globallyOptimized()) GSUMachineScheduler::run(m_object_file);
+    if (globallyOptimized()) {
+        GSUMachineScheduler::Hints hints;
+        hints.nonvolatile_stores = std::move(m_nonvolatile_store_offsets);
+        m_nonvolatile_store_offsets.clear();
+        GSUMachineScheduler::run(m_object_file, hints);
+    }
     GeneratedCandidate result;
     result.object = std::move(m_object_file); result.issues = std::move(m_spill_issues);
     if (globallyOptimized()) {
@@ -2723,7 +2784,7 @@ ObjectFile IRCodeGenerator::generate(const IRModule& module) {
         IRCodeGenerator& generator;
         ~Cleanup() { generator.resetCandidateEmissionState(); }
     } cleanup{*this};
-    m_function_candidates.clear(); m_function_smallest.clear();
+    m_function_candidates.clear(); m_function_smallest.clear(); m_stackful_leaves.clear();
     m_function_policies.clear(); m_function_division_policies.clear();
     m_function_pool_policies.clear(); m_pool_enabled = true;
     m_collect_function_candidates = false;

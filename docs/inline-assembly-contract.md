@@ -44,6 +44,13 @@ check operand types, constraints, effects, and target-state boundaries.
 
 ## GSU state is more than integer registers
 
+O2/Os callers pass one to four one-word arguments of an external function in
+R5/R7/R8/R4 through the reserved register entry `__disco_regcall<N>$<name>`
+(see [the ABI](architecture.md#gsu-abi-conventions)). An assembly definition
+that exports only `name` keeps the stack convention: the linker reaches it
+through a generated adapter. Hand-written assembly must not export a name with
+the register-entry prefix unless it implements that entry for its own `name`.
+
 The present ABI allocates scalar values in R5/R7/R8. A block that overwrites one
 must declare that clobber; the compiler cannot assume ordinary call preservation
 will cover it. R9/R10 own the frame/stack, R11 carries the link, and R15 is PC;
