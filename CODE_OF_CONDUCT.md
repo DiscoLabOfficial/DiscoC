@@ -157,8 +157,8 @@ stewarded by the Organization for Ethical Source and licensed under
 This adaptation is distributed under the same license.
 
 Project-specific changes identify the maintainer as the Community Moderator,
-leave the private reporting contact explicitly pending, and use consistent
-moderator terminology and reformatted enforcement headings.
+name security@discolab.dev as the private reporting contact, and use
+consistent moderator terminology and reformatted enforcement headings.
 This document's license does not replace DiscoC's software license.
 
 For common questions, see the
