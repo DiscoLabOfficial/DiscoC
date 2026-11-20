@@ -71,5 +71,6 @@ release evidence or physical-hardware performance claims.
 
 See [contributors](../README.MD#contributors-and-community),
 [Contributing](../CONTRIBUTING.md), and the
-[Code of Conduct](../CODE_OF_CONDUCT.md). The private reporting contact is
-pending; no private reporting channel is currently advertised.
+[Code of Conduct](../CODE_OF_CONDUCT.md). Conduct reports go privately to
+[security@discolab.dev](mailto:security@discolab.dev); vulnerabilities are
+reported as described in the [security policy](../SECURITY.md).
