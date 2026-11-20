@@ -561,6 +561,111 @@ were not obtained here. Rotation cycles are GO-to-STOP master clocks from
 Luna's trace, not the Mesen window used for earlier rotation tables: compare
 this row only with itself.
 
+### Dead static stores and direct materialization
+
+Two more machine peepholes run inside `GSUMachineScheduler`, so they apply at
+**O2 and Os only**. They reuse the scheduler's decoded instruction stream,
+selector/ALT state, entry and relocation fences and the bounded `deadFrom`
+liveness scan; there is no new analysis framework. O1 does not run the
+machine scheduler, and turning it on there would change every O1 payload
+that the O1 regressions pin byte for byte. O1 still emits the
+`IBT/IWT R0` / `MOVE Rn,R0` shape (60 sites in the nine benchmarks, before
+any liveness proof), so adding a minimal machine pass at O1 is a possible
+follow-up rather than part of this change.
+
+- **Direct materialization.** A value produced in R0 and then copied by
+  `WITH R0 / TO Rn` (`MOVE Rn,R0`) is produced in Rn directly when the
+  `deadFrom` scan proves R0 is overwritten before any read:
+  `IBT/IWT R0,#k` becomes `IBT/IWT Rn,#k` (2 bytes saved), `MOVE R0,Ra`
+  becomes `MOVE Rn,Ra` (2 bytes), and a one-byte result such as
+  `[FROM s] [ALT] ADD/SUB/AND/OR/XOR/MULT/shift/SWAP/LOB/HIB/SEX/LDW/LDB`
+  becomes `TO Rn / [FROM s] [ALT] op` (1 byte). MOVE, IBT and IWT write no
+  flag, and the retargeted operation computes the same value and NZCV, so the
+  flags are identical; only the dead R0 differs. A function return keeps R0
+  live (it is the result), as do branches, STOP and real entries. CMP, INC/DEC,
+  R14/R15 operands and R13-R15 destinations are excluded. A relocated literal
+  keeps its opcode offset: `ADDR16_IWT`/`ADDR16_RAM` patch only the operand
+  bytes, so only the register nibble changes. An entry at the literal is kept;
+  an entry at the copy, or inside a retargeted prefix group, blocks the rewrite.
+- **Dead static stores.** A `STW/STB` to relocated static RAM is removed when
+  a later store in the same straight-line window writes at least the same
+  bytes (same symbol and offset, followed through `IWT`, `MOVE`, `ADD/SUB #`
+  and `INC/DEC`). Machine bytes cannot tell a volatile store from a plain one,
+  so the code generator lists the `STW/STB` offsets it emits while lowering a
+  nonvolatile store, and only listed stores can kill or be killed. Numeric
+  (MMIO-like) and pointer-derived addresses are never candidates. Any load,
+  unlisted store, `SBK` (which reuses the address latch the removed store
+  would have set), bank change, PLOT/RPIX, CACHE, branch or fault guard, call,
+  return, STOP, LOOP, delay slot or entry ends the window, so a fault point or
+  callee can never observe the difference.
+
+The local IR store pass already removes overwritten stores to unescaped
+locals, and global double stores usually reach the backend as `STW` + `SBK`,
+which this pass deliberately keeps. Dead static stores therefore did not fire
+in the nine benchmarks or in the three demos below (their store counts are
+unchanged); the regression fixture `tests/fixtures/gsu_machine_peephole.dc`
+exercises them, together with the volatile, numeric, read-between, call and
+pointer cases that must keep both stores. All measured gains here come from
+direct materialization.
+
+Linux (GCC Release), Mesen 2.2.1 (`benchmarks/run-mesen.cmake`), before
+(`main` at 44dc0e2) → after:
+
+| O2 workload | CODE bytes | Executed opcodes | Fast-GSU cycles | Change |
+| --- | ---: | ---: | ---: | ---: |
+| `triangle_fill` | 216 → 214 | 26,651 → 26,649 | 58,772 → 58,770 | -0.00% |
+| `horizontal_span` | 127 → 123 | 329 → 325 | 1,142 → 1,130 | -1.05% |
+| `rom_palette_plot` | 156 → 150 | 3,160 → 2,772 | 5,031 → 4,633 | -7.91% |
+| `ram_palette_plot` | 190 → 185 | 2,427 → 2,295 | 4,244 → 3,944 | -7.07% |
+| `memcpy` | 282 → 274 | 3,376 → 3,368 | 5,218 → 5,098 | -2.30% |
+| `function_call` | 176 → 176 | 5,745 → 5,745 | 35,860 → 35,860 | +0.00% |
+| `switch_dense` | 313 → 310 | 1,047 → 1,020 | 6,645 → 6,510 | -2.03% |
+| `switch_sparse` | 318 → 316 | 1,036 → 1,018 | 6,685 → 6,595 | -1.35% |
+| `arithmetic` | 260 → 250 | 11,461 → 11,265 | 15,167 → 14,883 | -1.87% |
+
+| Os workload | CODE bytes | Executed opcodes | Fast-GSU cycles | Change |
+| --- | ---: | ---: | ---: | ---: |
+| `triangle_fill` | 160 → 158 | 80,867 → 80,865 | 130,718 → 130,716 | -0.00% |
+| `horizontal_span` | 87 → 83 | 568 → 564 | 3,920 → 3,900 | -0.51% |
+| `rom_palette_plot` | 116 → 110 | 4,028 → 3,640 | 6,427 → 5,939 | -7.59% |
+| `ram_palette_plot` | 149 → 144 | 3,167 → 3,035 | 5,240 → 5,096 | -2.75% |
+| `memcpy` | 238 → 226 | 4,876 → 5,626 | 28,460 → 32,210 | +13.18% |
+| `function_call` | 176 → 176 | 5,745 → 5,745 | 35,860 → 35,860 | +0.00% |
+| `switch_dense` | 313 → 310 | 1,047 → 1,020 | 6,645 → 6,510 | -2.03% |
+| `switch_sparse` | 318 → 316 | 1,036 → 1,018 | 6,685 → 6,595 | -1.35% |
+| `arithmetic` | 235 → 226 | 11,824 → 11,598 | 17,269 → 17,007 | -1.52% |
+
+O2 never grows or slows down. Os `memcpy` is the one regression. Its
+`copy_bytes` now comes from a different Os candidate: it reloads the source
+and destination parameters from the frame inside the loop instead of keeping
+them in registers, which is 12 bytes smaller and executes 750 more opcodes.
+That is consistent with Os's byte-first candidate selection once the
+peepholes shrink the reloading form more; the per-candidate sizes were not
+dumped to confirm it. O1 payloads are byte-identical before and after.
+
+The RAM-execution demos, same hosts and policies as the earlier tables:
+
+| Demo / policy | Payload bytes | GSU cycles | Change | Measured with |
+| --- | ---: | ---: | ---: | --- |
+| Gem chess, all 18 publications, O2 | 13,940 → 13,649 | 287,642,295 → 281,972,607 | -1.97% | Mesen `verify.lua` |
+| Gem chess, all 18 publications, Os | 13,440 → 13,165 | 333,926,208 → 323,074,195 | -3.25% | Mesen `verify.lua` |
+| Interactive wireframe, O2 | 5,456 → 5,347 | 196,698 → 193,726 | -1.51% | Mesen `benchmark.lua` |
+| Interactive filled, O2 | 5,456 → 5,347 | 347,215 → 341,596 | -1.62% | Mesen `benchmark.lua` |
+| Interactive wireframe, Os | 5,201 → 5,096 | 203,949 → 204,318 | +0.18% | Mesen `benchmark.lua` |
+| Interactive filled, Os | 5,201 → 5,096 | 402,806 → 396,188 | -1.64% | Mesen `benchmark.lua` |
+| Rotating triangle, O2 | 2,328 → 2,256 | 343,321.02 → 334,693.33 mean over 64 poses | -2.51% | Luna `--superfx-trace` |
+| Rotating triangle, Os | 2,158 → 2,086 | 387,619.03 → 380,531.83 mean over 64 poses | -1.83% | Luna `--superfx-trace` |
+
+Every gem chess publication improves (by 1.67% to 2.97% at O2 and 1.92% to
+3.63% at Os), and its complete Mesen verification and negative ROM pass
+before and after at both levels, as does the interactive shapes
+verification. The Os interactive wireframe pose is 369 cycles slower even
+though its code is 105 bytes smaller; the filled pose and every other demo
+row improve. Rotating-triangle framebuffer hashes from Luna match before and
+after at 13 frames between 40 and 400 at both levels; its Mesen
+verification still fails on this Linux Mesen build for both toolchains, as
+noted above. These are emulator measurements, not physical-hardware timings.
+
 ## What O1 does
 
 - Fold scalar constants through narrowing, sign extension, bool conversion

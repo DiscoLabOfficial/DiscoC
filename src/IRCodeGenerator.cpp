@@ -141,6 +141,8 @@ void IRCodeGenerator::emitStore(Register address, std::uint8_t value_reg, bool b
     if (byte) {
         emitByte(static_cast<std::uint8_t>(OpCode::ALT1));
     }
+    if (m_lowering_nonvolatile_store)
+        m_nonvolatile_store_offsets.insert(static_cast<std::uint32_t>(m_object_file.code_section.size()));
     emitByte(static_cast<std::uint8_t>(0x30 | address_reg));
 }
 
@@ -1003,6 +1005,14 @@ void IRCodeGenerator::emitStoreIndirect(const IRInstruction& instruction) {
     const auto value = instruction.operands[1];
     const auto& target = producer(address, instruction.source);
     const bool byte = usesByteStorage(instruction.type);
+    // Mark this lowering's STW/STB opcodes for the dead-store pass, never a
+    // volatile one. Restored on every return path.
+    struct StoreScope {
+        bool& flag;
+        bool saved;
+        ~StoreScope() { flag = saved; }
+    } store_scope{m_lowering_nonvolatile_store, m_lowering_nonvolatile_store};
+    m_lowering_nonvolatile_store = !instruction.memory_volatile;
     if (optimized() || m_checked_pointer_mode) {
         if (target.type.space == AddressSpace::ROM)
             fail("IR codegen: cannot store through a ROM address.", instruction.source);
@@ -2451,6 +2461,8 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
     m_address_proof = GSUAddressProof{};
     m_static_ram_proof_used = false;
     m_stack_proof.clear();
+    m_nonvolatile_store_offsets.clear();
+    m_lowering_nonvolatile_store = false;
     if (globallyOptimized() && m_config.static_stack_proof && m_config.target == TargetKind::GSU) m_stack_proof.plan(module);
     planRegisterArguments(module);
     m_static_frame_sizes.clear(); m_static_frame_slots.clear(); m_static_frame_owner.clear();
@@ -2703,7 +2715,12 @@ IRCodeGenerator::GeneratedCandidate IRCodeGenerator::generateInternal(const IRMo
         m_object_file.symbol_table.push_back({std::string(GSUAbi::ImmutablePoolPrefix) + function.name + "." +
             std::to_string(array.first.value), SymbolSection::DATA, offset});
     }
-    if (globallyOptimized()) GSUMachineScheduler::run(m_object_file);
+    if (globallyOptimized()) {
+        GSUMachineScheduler::Hints hints;
+        hints.nonvolatile_stores = std::move(m_nonvolatile_store_offsets);
+        m_nonvolatile_store_offsets.clear();
+        GSUMachineScheduler::run(m_object_file, hints);
+    }
     GeneratedCandidate result;
     result.object = std::move(m_object_file); result.issues = std::move(m_spill_issues);
     if (globallyOptimized()) {

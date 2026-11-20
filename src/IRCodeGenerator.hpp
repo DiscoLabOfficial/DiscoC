@@ -354,6 +354,11 @@ private:
     // emitted block only. Never evidence about a subsequently reloaded pointer.
     std::map<std::uint32_t, int> m_checked_addresses;
     IRValueId m_emitting_value;
+    // CODE offsets of STW/STB opcodes emitted while lowering a nonvolatile
+    // store in the current candidate (reset with m_object_file). Only these
+    // may be removed by the machine scheduler's dead-store pass.
+    std::set<std::uint32_t> m_nonvolatile_store_offsets;
+    bool m_lowering_nonvolatile_store = false;
     // A strictly adjacent immutable scalar/near-RAM-pointer snapshot in R0,
     // never a lexical variable or far pair. Its frame home stays authoritative;
     // emitted bytes, memory/volatile work, calls and CFG entries fence it.

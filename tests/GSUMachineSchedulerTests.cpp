@@ -646,9 +646,204 @@ void accumulatorResults() {
     }
 }
 
+// IBT/IWT R0 / MOVE Rn,R0 -> IBT/IWT Rn, and the other R0 producers ->
+// TO Rn / producer, only while R0 is provably dead afterwards.
+void directMoves() {
+    // Flags come from an earlier ADD (R0=$8000: N and V set) and must reach
+    // the probe unchanged: neither the literal nor MOVE writes NZCV.
+    const std::vector<std::uint8_t> flags{0xf1,0xff,0x7f, 0xa2,1, 0xb1,0x52};
+    for (std::uint8_t target = 1; target <= 12; ++target)
+        for (const auto& literal : std::vector<std::vector<std::uint8_t>>{{0xa0,5},{0xa0,0x80},{0xf0,0x34,0x12}}) {
+            auto bytes = flags;
+            const auto at = bytes.size();
+            bytes.insert(bytes.end(), literal.begin(), literal.end());
+            bytes.insert(bytes.end(), {0x20,static_cast<std::uint8_t>(0x10 | target), 0xa0,9});
+            appendFlagProbe(bytes);
+            auto o = object(bytes); const auto before = o;
+            require(GSUMachineScheduler::run(o).direct_literals == 1 && o.code_section.size() + 2 == before.code_section.size() &&
+                o.code_section[at] == (literal[0] | target), "A literal copied out of a dead R0 was not materialized directly");
+            equivalent(before, o, false);
+        }
+    // A relocated static-RAM address keeps its patch offset: only the
+    // register nibble of the opcode changes, never the linked operand.
+    // (The leading NOP gives the literal a known, clear ALT state.)
+    auto relocated = object({1, 0xf0,0,0, 0x20,0x15, 0xa0,9, 0,1});
+    relocated.symbol_table.push_back({"cell",SymbolSection::RAM,0x40});
+    relocated.relocation_table.push_back({"cell",SymbolSection::CODE,1,RelocationType::ADDR16_RAM});
+    auto saved = relocated;
+    require(GSUMachineScheduler::run(relocated).direct_literals == 1 && relocated.code_section[1] == 0xf5 &&
+        relocated.relocation_table[0].patch_offset == 1, "A relocated literal lost its relocation or register");
+    equivalent(saved, relocated, false);
+
+    // R0 still read, returned, live across a branch, entered between, ALT
+    // turning the literal into LMS, or an excluded R13/R14 destination.
+    const std::vector<std::vector<std::uint8_t>> kept = {
+        {0xa0,5, 0x20,0x16, 0x56, 0,1},
+        {0xa0,5, 0x20,0x16, 0x05,0x01, 1, 1, 0xa0,9, 0,1},
+        {0x3d,0xa0,2, 0x20,0x16, 0xa0,9, 0,1},
+        {0xa0,5, 0x20,0x1d, 0xa0,9, 0,1},
+        {0xa0,5, 0x20,0x1e, 0xa0,9, 0,1},
+        {0xa1,1, 0x15,0x51, 0x20,0x16, 0xa0,9, 0,1}, // TO R5: R0 never held the result.
+        {0xa1,1, 0x3f,0x61, 0x20,0x16, 0xa0,9, 0,1}, // CMP has no destination.
+        {0xa1,1, 0x5f, 0x20,0x16, 0xa0,9, 0,1},      // ADD R15 reads the moving PC.
+        {0xa1,1, 0xd0, 0x20,0x16, 0xa0,9, 0,1},      // INC R0 ignores TO.
+        {0xa3,7, 0x26,0x10, 0x20,0x16, 0xa0,9, 0,1}};// MOVE R6 back into R6.
+    for (const auto& bytes : kept) {
+        // The leading NOP makes the incoming ALT state known, so only the
+        // property under test can block the rewrite.
+        std::vector<std::uint8_t> padded{1};
+        padded.insert(padded.end(), bytes.begin(), bytes.end());
+        auto o = object(padded); const auto before = o;
+        const auto stats = GSUMachineScheduler::run(o);
+        require(stats.direct_literals == 0 && stats.direct_results == 0, "A live or unsupported R0 copy was rewritten");
+        equivalent(before, o);
+    }
+    for (const std::uint32_t entry : {3u, 4u}) {
+        auto o = object({1, 0xa0,5, 0x20,0x16, 0xa0,9, 0,1});
+        o.symbol_table.push_back({"entry",SymbolSection::CODE,entry});
+        require(GSUMachineScheduler::run(o).direct_literals == 0, "An R0 copy was rewritten across an entry");
+    }
+    // The literal itself may be an entry: its label keeps naming it.
+    auto labeled = object({1, 0xa0,5, 0x20,0x16, 0xa0,9, 0,1});
+    labeled.symbol_table.push_back({std::string("\x01") + "anchor",SymbolSection::CODE,1}); saved = labeled;
+    require(GSUMachineScheduler::run(labeled).direct_literals == 1 && labeled.symbol_table[0].offset == 1 &&
+        labeled.code_section[1] == 0xa6, "A labeled literal lost its label or was not rewritten");
+    // R0 is the return value, so a copy before JMP R11 stays.
+    auto returned = object({0xfb,0,0, 0xa0,5, 0x20,0x16, 0x9b,1, 0,1});
+    returned.symbol_table.push_back({"exit",SymbolSection::CODE,9});
+    returned.relocation_table.push_back({"exit",SymbolSection::CODE,0,RelocationType::ADDR16_IWT});
+    require(GSUMachineScheduler::run(returned).direct_literals == 0, "A copy of the returned R0 was rewritten");
+
+    // MOVE R0,Ra / MOVE Rn,R0 -> MOVE Rn,Ra.
+    auto chained = object({0xf3,0x34,0x12, 0x23,0x10, 0x20,0x16, 0xa0,9, 0,1}); saved = chained;
+    require(GSUMachineScheduler::run(chained).direct_results == 1 && chained.code_section.size() + 2 == saved.code_section.size() &&
+        chained.code_section[3] == 0x23 && chained.code_section[4] == 0x16, "A chained R0 copy was not collapsed");
+    equivalent(saved, chained);
+
+    // [FROM] [ALT] op / MOVE Rn,R0 -> TO Rn / [FROM] [ALT] op.
+    const std::vector<std::vector<std::uint8_t>> operations = {
+        {0x52},{0x3e,0x53},{0x3d,0x52},{0x62},{0x3e,0x63},{0x72},{0x3e,0x7f},{0xc2},{0x3d,0xc2},{0x82},{0x3f,0x83},
+        {0x03},{0x04},{0x4d},{0x4f},{0x95},{0x96},{0x3d,0x96},{0x97},{0x9e},{0xc0}};
+    for (const auto& operation : operations) for (const bool from : {false, true})
+        for (const auto value : {0x0000u,0x0001u,0x7fffu,0x8000u,0xffffu,0x1234u}) {
+            std::vector<std::uint8_t> bytes{0xf1,static_cast<std::uint8_t>(value),static_cast<std::uint8_t>(value >> 8),
+                0xf2,0xcd,0xab, 0xf0,0x55,0xaa};
+            if (from) bytes.push_back(0xb1);
+            bytes.insert(bytes.end(), operation.begin(), operation.end());
+            bytes.insert(bytes.end(), {0x20,0x17, 0xa0,9});
+            appendFlagProbe(bytes);
+            auto o = object(bytes); const auto before = o;
+            require(GSUMachineScheduler::run(o).direct_results == 1 && o.code_section.size() + 1 == before.code_section.size() &&
+                o.code_section[9] == 0x17, "A result copied out of a dead R0 was not produced in its destination");
+            equivalent(before, o, false);
+        }
+    for (const auto& load : std::vector<std::vector<std::uint8_t>>{{0x41},{0x3d,0x41}}) {
+        std::vector<std::uint8_t> bytes{0xf1,0x00,0x90};
+        bytes.insert(bytes.end(), load.begin(), load.end());
+        bytes.insert(bytes.end(), {0x20,0x18, 0xa0,9, 0,1});
+        auto o = object(bytes); const auto before = o;
+        require(GSUMachineScheduler::run(o).direct_results == 1 && o.code_section[3] == 0x18,
+            "A load copied out of a dead R0 was not loaded into its destination");
+        equivalent(before, o);
+    }
+    // An entry at the operation would skip the new TO prefix.
+    auto entered = object({0xa1,1, 0xb1,0x52, 0x20,0x17, 0xa0,9, 0,1});
+    entered.symbol_table.push_back({"entry",SymbolSection::CODE,3});
+    require(GSUMachineScheduler::run(entered).direct_results == 0, "A TO prefix was inserted after an entry");
+}
+
+// Builds STW/STB fixtures whose addresses come from relocated static RAM and
+// records which stores the code generator would have listed as nonvolatile.
+struct StoreFixture {
+    // A leading NOP gives the first literal a known, clear ALT state.
+    ObjectFile object = ::object({1});
+    GSUMachineScheduler::Hints hints;
+    StoreFixture() { object.symbol_table.push_back({"cell",SymbolSection::RAM,0x40}); }
+    StoreFixture& bytes(std::initializer_list<std::uint8_t> values) {
+        object.code_section.insert(object.code_section.end(), values); return *this;
+    }
+    StoreFixture& address(std::uint8_t reg) {
+        object.relocation_table.push_back({"cell",SymbolSection::CODE,
+            static_cast<std::uint32_t>(object.code_section.size()),RelocationType::ADDR16_RAM});
+        return bytes({static_cast<std::uint8_t>(0xf0 | reg),0,0});
+    }
+    // [WITH value] [ALT1] STW|STB (address); the opcode offset is the hint.
+    StoreFixture& store(std::uint8_t address_reg, std::uint8_t value, bool byte, bool nonvolatile) {
+        if (value) bytes({static_cast<std::uint8_t>(0x20 | value)});
+        if (byte) bytes({0x3d});
+        if (nonvolatile) hints.nonvolatile_stores.insert(static_cast<std::uint32_t>(object.code_section.size()));
+        return bytes({static_cast<std::uint8_t>(0x30 | address_reg)});
+    }
+    StoreFixture& end() { return bytes({0,1}); }
+};
+unsigned deadStores(StoreFixture fixture, std::size_t removed_bytes) {
+    const auto before = fixture.object;
+    const auto stats = GSUMachineScheduler::run(fixture.object, fixture.hints);
+    require(fixture.object.code_section.size() + removed_bytes == before.code_section.size(),
+        "Dead-store elimination removed an unexpected number of bytes");
+    equivalent(before, fixture.object);
+    return stats.dead_stores;
+}
+void deadStoreElimination() {
+    // Overwritten before any read: the first store (and its prefixes) goes.
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,true)
+        .address(2).bytes({0xa0,9}).store(2,0,false,true).end(), 2) == 1, "A static store overwritten unread was kept");
+    // A byte store is covered by a later word store at the same address...
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,true,true)
+        .address(2).bytes({0xa0,9}).store(2,0,false,true).end(), 3) == 1, "A byte store covered by a word store was kept");
+    // ...but a word store is not covered by a byte store.
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,true)
+        .address(2).bytes({0xa0,9}).store(2,0,true,true).end(), 0) == 0, "A partially overwritten word store was removed");
+    // Address arithmetic and copies are followed: cell+2 by INC and ADD #2.
+    require(deadStores(StoreFixture().address(1).bytes({0xd1,0xd1,0xa6,5}).store(1,6,false,true)
+        .address(0).bytes({0x3e,0x52, 0x20,0x13}).store(3,6,false,true).end(), 2) == 1,
+        "Equal computed static addresses were not recognized");
+    require(deadStores(StoreFixture().address(1).bytes({0xd1,0xa6,5}).store(1,6,false,true)
+        .address(2).bytes({0xa0,9}).store(2,0,false,true).end(), 0) == 0, "Stores to different addresses were merged");
+    // Another nonvolatile static store in between does not read memory.
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,true)
+        .address(2).bytes({0xd2,0xd2}).store(2,6,false,true).address(3).bytes({0xa0,9}).store(3,0,false,true).end(), 2) == 1,
+        "An unrelated static store blocked dead-store elimination");
+
+    // Volatile (unlisted) first or second store, an unlisted store in between,
+    // a read, SBK's reuse of the address latch, a guard branch, a call, an
+    // entry, or a numeric/pointer address: the first store stays.
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,false)
+        .address(2).bytes({0xa0,9}).store(2,0,false,true).end(), 0) == 0, "A volatile store was removed");
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,true)
+        .address(2).bytes({0xa0,9}).store(2,0,false,false).end(), 0) == 0, "A volatile store killed a store");
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,true)
+        .bytes({0xf4,0x00,0x90}).store(4,6,false,false).address(2).bytes({0xa0,9}).store(2,0,false,true).end(), 0) == 0,
+        "A store survived only past an unlisted store");
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,true)
+        .bytes({0x17,0x41}).address(2).bytes({0xa0,9}).store(2,0,false,true).end(), 0) == 0, "A store was removed before a load");
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,true)
+        .bytes({0xa0,9, 0x90}).address(2).store(2,6,false,true).end(), 0) == 0,
+        "A store whose address SBK reuses was removed");
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,true)
+        .bytes({0x05,0x01, 1, 1}).address(2).bytes({0xa0,9}).store(2,0,false,true).end(), 0) == 0,
+        "A store was removed across a branch");
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,true)
+        .bytes({0x94}).address(2).bytes({0xa0,9}).store(2,0,false,true).end(), 0) == 0, "A store was removed across LINK");
+    require(deadStores(StoreFixture().bytes({0xf1,0x20,0x01, 0xa6,5}).store(1,6,false,true)
+        .bytes({0xf2,0x20,0x01, 0xa0,9}).store(2,0,false,true).end(), 0) == 0, "A numeric (MMIO-like) store was removed");
+    // R5 is an incoming pointer: equal addresses, but not named static storage.
+    require(deadStores(StoreFixture().bytes({0xa6,5}).store(5,6,false,true)
+        .bytes({0xa0,9}).store(5,0,false,true).end(), 0) == 0, "A store through a pointer register was removed");
+    // WITH R5 / FROM R6 right before the store is MOVES R5,R6, not a prefix
+    // of STW (R1): removing it would lose R5 and the flags it sets.
+    require(deadStores(StoreFixture().address(1).bytes({0xa6,5, 0xa0,7, 0x25,0xb6}).store(1,0,false,true)
+        .address(2).store(2,6,false,true).end(), 0) == 0, "A MOVES before a dead store was removed with it");
+    auto entered = StoreFixture().address(1).bytes({0xa6,5}).store(1,6,false,true);
+    entered.object.symbol_table.push_back({"entry",SymbolSection::CODE,
+        static_cast<std::uint32_t>(entered.object.code_section.size())});
+    require(deadStores(entered.address(2).bytes({0xa0,9}).store(2,0,false,true).end(), 0) == 0,
+        "A store was removed across an entry");
+}
+
 int main() {
     try {
-        sharedFaultStubs(); jumpSlots(); copyPeepholes(); accumulatorResults();
+        sharedFaultStubs(); jumpSlots(); copyPeepholes(); accumulatorResults(); directMoves(); deadStoreElimination();
         conditionSlots(); targetPrefixSlots(); compactBranches(); shortJumps(); privatePixelSlots(); pipelinePlan(); nestedCacheDelaySlots(); cacheProvenance();
         auto bra = object({0xf0,0,0,0xd0,5,2,1,1,0,1}); auto before = bra;
         require(GSUMachineScheduler::run(bra).delay_slots == 1 && bra.code_section.size() == 9,

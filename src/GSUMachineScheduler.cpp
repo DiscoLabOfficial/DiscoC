@@ -646,7 +646,259 @@ bool deadFrom(const std::vector<Instruction>& code, std::size_t n, Register reg)
     return false;
 }
 
-GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
+namespace {
+// Register contents inside one straight-line window. `base` is a token:
+// 0 is the plain numeric address space (`offset` is then the number), each
+// ADDR16_RAM symbol has one token per name, and any other value gets a fresh
+// token that only its own copies share. Equal tokens and offsets therefore
+// prove equal 16-bit addresses; unequal ones prove nothing.
+struct SymbolicValue {
+    std::uint32_t base = 0;
+    std::uint16_t offset = 0;
+    bool static_ram = false; // `base` names relocated static RAM storage.
+};
+struct PendingStore { std::size_t index; SymbolicValue address; unsigned width; };
+
+bool storeOpcode(const Instruction& i) {
+    return i.bytes.size() == 1 && i.bytes[0] >= 0x30 && i.bytes[0] <= 0x3b && i.reachable_alt <= 1;
+}
+bool onePrefix(const Instruction& i, std::uint8_t first, std::uint8_t last) {
+    return i.bytes.size() == 1 && !i.delay_slot && !i.operand_fragment && i.bytes[0] >= first && i.bytes[0] <= last;
+}
+// Prefixes directly before `last` that only select operands/ALT for it:
+// at most one selector (FROM, or WITH for a store) followed by at most one
+// ALT, which is the order the code generator emits. Returns the first index
+// of the group, or Missing if the group's incoming selector state is not
+// plain. Accepting only one selector matters: WITH d / FROM s is a complete
+// MOVES (a register and flag write), never a prefix of what follows, and
+// requiring a plain state before the selector rejects that pending WITH.
+std::size_t prefixGroupStart(const std::vector<Instruction>& code, std::size_t last, bool allow_with) {
+    std::size_t start = last;
+    if (start > 0 && onePrefix(code[start - 1], 0x3d, 0x3f)) --start;
+    if (start > 0 && (onePrefix(code[start - 1], 0xb0, 0xbd) || (allow_with && onePrefix(code[start - 1], 0x20, 0x2d))))
+        --start;
+    return code[start].reachable_plain ? start : Missing;
+}
+
+// A nonvolatile store to static RAM is dead when a later nonvolatile store in
+// the same straight-line window writes at least the same bytes and nothing in
+// between can read memory or leave the window. Every load, SBK (which reuses
+// the address latch the first store set), bank change, PLOT/RPIX, CACHE,
+// branch or fault guard, call, return, STOP, LOOP, delay slot and control-flow
+// entry ends the window. Only stores the code generator listed as nonvolatile
+// may kill or be killed: machine bytes cannot distinguish a volatile access.
+// Numeric (MMIO-like) and pointer-derived addresses are never candidates,
+// and any other store in between ends the window too. Window state is O(1)
+// per instruction and at most MaxPendingStores candidates are tracked.
+void eliminateDeadStores(std::vector<Instruction>& code, const ObjectFile& object,
+                         const std::set<std::size_t>& entries, const std::set<std::size_t>& relocation_offsets,
+                         const GSUMachineScheduler::Hints& hints, GSUMachineScheduler::Statistics& stats) {
+    if (hints.nonvolatile_stores.empty()) return;
+    constexpr std::size_t MaxPendingStores = 16;
+    // Opcode offset -> static RAM symbol of its only relocation.
+    std::map<std::size_t, std::string> static_ram;
+    std::map<std::size_t, unsigned> relocation_count;
+    for (const auto& r : object.relocation_table) if (r.section_to_patch == SymbolSection::CODE) {
+        ++relocation_count[r.patch_offset];
+        if (r.type == RelocationType::ADDR16_RAM) static_ram[r.patch_offset] = r.target_symbol_name;
+    }
+    std::map<std::string, std::uint32_t> symbol_tokens;
+    std::uint32_t next_token = 1;
+    SymbolicValue registers[16];
+    std::vector<PendingStore> pending;
+    std::set<std::size_t> dead;
+    const auto fresh = [&]() { SymbolicValue v; v.base = next_token++; return v; };
+    const auto reset = [&]() { for (auto& r : registers) r = fresh(); pending.clear(); };
+    const auto adjust = [](SymbolicValue v, int delta) {
+        v.offset = static_cast<std::uint16_t>((v.offset + delta) & 0xffff); return v;
+    };
+    reset();
+    for (std::size_t n = 0; n < code.size(); ++n) {
+        const auto& i = code[n];
+        if (entries.count(i.old)) reset();
+        if (i.bytes.empty() || i.delay_slot || i.operand_fragment || i.reachable_alt > 3 ||
+            i.reachable_source > 15 || i.reachable_destination > 15) { reset(); continue; }
+        const auto op = i.bytes[0];
+        const unsigned alt = i.reachable_alt, source = i.reachable_source, destination = i.reachable_destination;
+        const bool after_with = n && code[n - 1].bytes.size() == 1 && code[n - 1].bytes[0] >= 0x20 && code[n - 1].bytes[0] <= 0x2f;
+        if (i.bytes.size() == 1 && (op == 1 || (op >= 0x20 && op <= 0x2f) || (op >= 0x3d && op <= 0x3f))) continue;
+        if (i.bytes.size() == 1 && ((op >= 0x10 && op <= 0x1f) || (op >= 0xb0 && op <= 0xbf))) {
+            if (!after_with) continue; // TO/FROM prefix only.
+            // WITH s / TO d is MOVE d,s; WITH d / FROM s is MOVES d,s.
+            const bool move = op <= 0x1f;
+            const unsigned to = move ? (op & 15u) : destination;
+            if (to == 15) { reset(); continue; }
+            registers[to] = registers[move ? source : (op & 15u)];
+            continue;
+        }
+        const bool literal = alt == 0 && ((i.bytes.size() == 2 && op >= 0xa0 && op <= 0xaf) ||
+                                          (i.bytes.size() == 3 && op >= 0xf0));
+        if (literal) {
+            const unsigned r = op & 15u;
+            if (r == 15) { reset(); continue; } // A PC literal is a jump.
+            bool relocated = false;
+            for (std::size_t b = 0; b < i.bytes.size(); ++b) relocated = relocated || relocation_offsets.count(i.old + b);
+            if (!relocated) {
+                SymbolicValue v;
+                v.offset = i.bytes.size() == 2
+                    ? static_cast<std::uint16_t>(static_cast<std::int16_t>(static_cast<std::int8_t>(i.bytes[1])))
+                    : static_cast<std::uint16_t>(i.bytes[1] | (i.bytes[2] << 8));
+                registers[r] = v;
+            } else {
+                const auto symbol = static_ram.find(i.old);
+                if (i.bytes.size() == 3 && symbol != static_ram.end() && relocation_count[i.old] == 1) {
+                    // The linker overwrites the operand with the symbol's
+                    // address, so no addend survives in the bytes.
+                    auto token = symbol_tokens.find(symbol->second);
+                    if (token == symbol_tokens.end()) token = symbol_tokens.emplace(symbol->second, next_token++).first;
+                    SymbolicValue v; v.base = token->second; v.static_ram = true;
+                    registers[r] = v;
+                } else registers[r] = fresh();
+            }
+            continue;
+        }
+        if (storeOpcode(i)) {
+            const auto address = registers[op & 15u];
+            const unsigned width = alt == 1 ? 1u : 2u;
+            if (!address.static_ram || !hints.nonvolatile_stores.count(static_cast<std::uint32_t>(i.old))) {
+                pending.clear(); // Volatile, numeric or pointer store: keep everything before it.
+                continue;
+            }
+            for (auto p = pending.begin(); p != pending.end();) {
+                if (p->address.base == address.base && p->address.offset == address.offset && p->width <= width) {
+                    dead.insert(p->index); p = pending.erase(p);
+                } else ++p;
+            }
+            pending.push_back({n, address, width});
+            if (pending.size() > MaxPendingStores) pending.erase(pending.begin());
+            continue;
+        }
+        if (registerOnly(i)) {
+            if (destination == 15) { reset(); continue; }
+            const bool add_immediate = alt == 2 && op >= 0x50 && op <= 0x5f;
+            const bool sub_immediate = alt == 2 && op >= 0x60 && op <= 0x6f;
+            if (add_immediate || sub_immediate) {
+                const int k = static_cast<int>(op & 15u);
+                registers[destination] = adjust(registers[source], add_immediate ? k : -k);
+            } else if (increment(i)) {
+                registers[op & 15u] = adjust(registers[op & 15u], op <= 0xdd ? 1 : -1);
+            } else {
+                const auto effect = registerEffect(code, n);
+                for (unsigned r = 0; r < 15; ++r)
+                    if (!effect.known || (effect.writes & (1u << r))) registers[r] = fresh();
+            }
+            continue;
+        }
+        reset(); // Memory read, transfer, bank/ROM/PLOT state or unknown.
+    }
+    // Erase from the back so earlier indices stay valid. Groups never
+    // overlap: each is one store and the prefixes directly before it.
+    for (auto s = dead.rbegin(); s != dead.rend(); ++s) {
+        const auto first = prefixGroupStart(code, *s, true);
+        if (first == Missing || !freeRange(code, first, *s + 1, entries) ||
+            !freeRange(code, first, *s + 1, relocation_offsets)) continue;
+        code.erase(code.begin() + static_cast<std::ptrdiff_t>(first), code.begin() + static_cast<std::ptrdiff_t>(*s + 1));
+        ++stats.dead_stores;
+    }
+}
+
+// One-byte operations that, executed with destination R0, write only that
+// destination and NZCV/carry state, and that a TO prefix retargets exactly.
+bool retargetableResult(const Instruction& i) {
+    if (i.bytes.size() != 1 || i.reachable_alt > 3 || i.reachable_source > 13) return false;
+    const auto op = i.bytes[0];
+    const unsigned alt = i.reachable_alt;
+    const bool binary = (op >= 0x50 && op <= 0x6f) || (op >= 0x71 && op <= 0x8f) || (op >= 0xc1 && op <= 0xcf);
+    if (binary) {
+        const bool compare = op >= 0x60 && op <= 0x6f && alt == 3;
+        const bool immediate = (alt & 2u) != 0 && !compare;
+        // R14/R15 operands would read the ROM pointer or the moved PC.
+        return !compare && (immediate || (op & 15u) <= 13);
+    }
+    if (alt == 0 && (op == 3 || op == 4 || op == 0x4d || op == 0x4f || op == 0x95 || op == 0x96 ||
+        op == 0x97 || op == 0x9e || op == 0xc0)) return true;
+    if (alt == 1 && op == 0x96) return true; // DIV2
+    // LDW/LDB (Rm): Rm is the address; the source selector is irrelevant.
+    return alt <= 1 && op >= 0x40 && op <= 0x4b && i.reachable_source == 0;
+}
+
+// A value materialized in R0 and then copied (WITH R0 / TO Rn) is produced in
+// Rn directly when R0 is dead afterwards:
+//   IBT/IWT R0,#k / MOVE Rn,R0         -> IBT/IWT Rn,#k
+//   MOVE R0,Ra / MOVE Rn,R0            -> MOVE Rn,Ra
+//   [FROM s] [ALT] op / MOVE Rn,R0     -> TO Rn / [FROM s] [ALT] op
+// MOVE, IBT and IWT change no flag, and the retargeted operation computes the
+// same value and NZCV, so flags are identical; only the dead R0 differs.
+// The literal keeps its opcode offset, so an ADDR16 relocation (which patches
+// only the operand bytes) stays valid. R13-R15 are excluded: R13 literals
+// mark pixel loops, R14 starts ROM reads and R15 is the PC.
+void retargetAccumulatorMoves(std::vector<Instruction>& code, const ObjectFile& object,
+                              const std::set<std::size_t>& entries, const std::set<std::size_t>& relocation_offsets,
+                              GSUMachineScheduler::Statistics& stats) {
+    std::map<std::size_t, std::vector<RelocationType>> relocations;
+    for (const auto& r : object.relocation_table)
+        if (r.section_to_patch == SymbolSection::CODE) relocations[r.patch_offset].push_back(r.type);
+    for (std::size_t w = 1; w + 1 < code.size(); ++w) {
+        const auto& with = code[w];
+        const auto& to = code[w + 1];
+        if (!oneByte(with, 0x20) || to.bytes.size() != 1 || to.operand_fragment ||
+            to.bytes[0] < 0x11 || to.bytes[0] > 0x1c) continue;
+        const auto target = static_cast<std::uint8_t>(to.bytes[0] & 15u);
+        if (!with.reachable_plain || with.delay_slot || to.delay_slot || !freeRange(code, w, w + 2, entries) ||
+            !freeRange(code, w, w + 2, relocation_offsets) || !deadFrom(code, w + 2, Register::R0)) continue;
+        auto& producer = code[w - 1];
+        if (producer.bytes.empty() || producer.delay_slot || producer.operand_fragment) continue;
+        const auto op = producer.bytes[0];
+        if (producer.reachable_alt == 0 && ((producer.bytes.size() == 2 && op == 0xa0) ||
+                                            (producer.bytes.size() == 3 && op == 0xf0))) {
+            bool linkable = true;
+            for (std::size_t b = 1; b < producer.bytes.size(); ++b)
+                linkable = linkable && !relocations.count(producer.old + b);
+            const auto relocation = relocations.find(producer.old);
+            if (relocation != relocations.end()) for (const auto type : relocation->second)
+                linkable = linkable && producer.bytes.size() == 3 &&
+                    (type == RelocationType::ADDR16_IWT || type == RelocationType::ADDR16_RAM);
+            if (!linkable) continue;
+            producer.bytes[0] = static_cast<std::uint8_t>(op | target);
+            code.erase(code.begin() + static_cast<std::ptrdiff_t>(w), code.begin() + static_cast<std::ptrdiff_t>(w + 2));
+            ++stats.direct_literals;
+            continue;
+        }
+        if (w >= 2 && oneByte(producer, 0x10)) {
+            const auto& copy = code[w - 2];
+            if (copy.bytes.size() != 1 || copy.bytes[0] < 0x21 || copy.bytes[0] > 0x2d || copy.operand_fragment ||
+                (copy.bytes[0] & 15u) == target || !copy.reachable_plain || copy.delay_slot ||
+                !freeRange(code, w - 1, w, entries) || !freeRange(code, w - 2, w, relocation_offsets)) continue;
+            producer.bytes[0] = static_cast<std::uint8_t>(0x10u | target);
+            code.erase(code.begin() + static_cast<std::ptrdiff_t>(w), code.begin() + static_cast<std::ptrdiff_t>(w + 2));
+            ++stats.direct_results;
+            continue;
+        }
+        if (!retargetableResult(producer) || producer.reachable_destination != 0) continue;
+        const auto first = prefixGroupStart(code, w - 1, false);
+        if (first == Missing || !freeRange(code, first, w, entries) || !freeRange(code, first, w, relocation_offsets))
+            continue;
+        // The TO byte moves in front of the group; it keeps its own offset,
+        // which nothing names or patches (checked above).
+        auto prefix = code[w + 1];
+        const auto& before = code[first];
+        prefix.plain = before.plain; prefix.reachable_plain = before.reachable_plain;
+        prefix.alt = before.alt; prefix.reachable_alt = before.reachable_alt;
+        prefix.source = before.source; prefix.reachable_source = before.reachable_source;
+        prefix.destination = before.destination; prefix.reachable_destination = before.reachable_destination;
+        prefix.reachable_entry = false;
+        for (auto k = first; k < w; ++k) {
+            code[k].plain = code[k].reachable_plain = false;
+            code[k].destination = code[k].reachable_destination = target;
+        }
+        code.erase(code.begin() + static_cast<std::ptrdiff_t>(w), code.begin() + static_cast<std::ptrdiff_t>(w + 2));
+        code.insert(code.begin() + static_cast<std::ptrdiff_t>(first), std::move(prefix));
+        ++stats.direct_results;
+    }
+}
+} // namespace
+
+GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object, const Hints& hints) {
     Statistics stats;
     // Layout/scheduling uses bounded per-byte maps. Bigger compiler objects are
     // left for the linker's existing one-program-bank diagnostic.
@@ -684,6 +936,9 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
             relocation_offsets.insert(r.patch_offset + b - 1);
         }
     }
+
+    // Runs first, on the decoded stream whose offsets the hints name.
+    eliminateDeadStores(code, object, entries, relocation_offsets, hints, stats);
 
     // MOVE Ra -> Rb (WITH a / TO b) whose destination the very next
     // instruction overwrites without reading it: a home copy of a value its
@@ -820,6 +1075,10 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object) {
         code.erase(code.begin() + static_cast<std::ptrdiff_t>(operation + 1), code.begin() + static_cast<std::ptrdiff_t>(operation + 3));
         ++stats.accumulator_results;
     }
+
+    // After the copy rewrites above, which already handle their own
+    // R0/home forms, before any slot or ROM-latency scheduling.
+    retargetAccumulatorMoves(code, object, entries, relocation_offsets, stats);
 
     // A private one-PLOT loop may put PLOT in LOOP's always-executed slot,
     // including its first/final iteration and the raw zero-count wrap. Keep

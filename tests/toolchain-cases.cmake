@@ -97,6 +97,7 @@ add_toolchain_regression(gsu_size_optimization_execution gsu_size_optimization)
 add_toolchain_regression(gsu_size_policy_execution gsu_size_policy)
 add_toolchain_regression(gsu_value_optimization_execution gsu_value_optimization)
 add_toolchain_regression(gsu_sbk gsu_sbk)
+add_toolchain_regression(gsu_machine_peephole gsu_machine_peephole)
 # Compile the current scene kernels, not an oracle-only or copied collector.
 # Keep this registry shared by CTest and the direct/prebuilt test runner.
 foreach(mode IN ITEMS raster raster_private paint)
