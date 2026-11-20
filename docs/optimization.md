@@ -587,6 +587,11 @@ follow-up rather than part of this change.
   keeps its opcode offset: `ADDR16_IWT`/`ADDR16_RAM` patch only the operand
   bytes, so only the register nibble changes. An entry at the literal is kept;
   an entry at the copy, or inside a retargeted prefix group, blocks the rewrite.
+  The decoder treats every control-flow entry as entered with unknown
+  ALT/selector state. Both passes accept a private branch target as clear
+  when no relocation names it and the instruction before it and every
+  incoming branch's delay slot reset the prefixes; stack-free leaves start
+  their body at such a target.
 - **Dead static stores.** A `STW/STB` to relocated static RAM is removed when
   a later store in the same straight-line window writes at least the same
   bytes (same symbol and offset, followed through `IWT`, `MOVE`, `ADD/SUB #`
@@ -609,7 +614,8 @@ pointer cases that must keep both stores. All measured gains here come from
 direct materialization.
 
 Linux (GCC Release), Mesen 2.2.1 (`benchmarks/run-mesen.cmake`), before
-(`main` at 44dc0e2) → after:
+(`main` at 084353e, which already passes arguments in registers and drops
+stack-free leaves' frames) → after:
 
 | O2 workload | CODE bytes | Executed opcodes | Fast-GSU cycles | Change |
 | --- | ---: | ---: | ---: | ---: |
@@ -617,10 +623,10 @@ Linux (GCC Release), Mesen 2.2.1 (`benchmarks/run-mesen.cmake`), before
 | `horizontal_span` | 127 → 123 | 329 → 325 | 1,142 → 1,130 | -1.05% |
 | `rom_palette_plot` | 156 → 150 | 3,160 → 2,772 | 5,031 → 4,633 | -7.91% |
 | `ram_palette_plot` | 190 → 185 | 2,427 → 2,295 | 4,244 → 3,944 | -7.07% |
-| `memcpy` | 282 → 274 | 3,376 → 3,368 | 5,218 → 5,098 | -2.30% |
-| `function_call` | 176 → 176 | 5,745 → 5,745 | 35,860 → 35,860 | +0.00% |
-| `switch_dense` | 313 → 310 | 1,047 → 1,020 | 6,645 → 6,510 | -2.03% |
-| `switch_sparse` | 318 → 316 | 1,036 → 1,018 | 6,685 → 6,595 | -1.35% |
+| `memcpy` | 236 → 232 | 3,313 → 3,309 | 4,772 → 4,832 | +1.26% |
+| `function_call` | 126 → 124 | 2,737 → 2,735 | 16,660 → 16,650 | -0.06% |
+| `switch_dense` | 265 → 262 | 676 → 665 | 4,380 → 4,325 | -1.26% |
+| `switch_sparse` | 270 → 268 | 665 → 663 | 4,420 → 4,410 | -0.23% |
 | `arithmetic` | 260 → 250 | 11,461 → 11,265 | 15,167 → 14,883 | -1.87% |
 
 | Os workload | CODE bytes | Executed opcodes | Fast-GSU cycles | Change |
@@ -629,40 +635,38 @@ Linux (GCC Release), Mesen 2.2.1 (`benchmarks/run-mesen.cmake`), before
 | `horizontal_span` | 87 → 83 | 568 → 564 | 3,920 → 3,900 | -0.51% |
 | `rom_palette_plot` | 116 → 110 | 4,028 → 3,640 | 6,427 → 5,939 | -7.59% |
 | `ram_palette_plot` | 149 → 144 | 3,167 → 3,035 | 5,240 → 5,096 | -2.75% |
-| `memcpy` | 238 → 226 | 4,876 → 5,626 | 28,460 → 32,210 | +13.18% |
-| `function_call` | 176 → 176 | 5,745 → 5,745 | 35,860 → 35,860 | +0.00% |
-| `switch_dense` | 313 → 310 | 1,047 → 1,020 | 6,645 → 6,510 | -2.03% |
-| `switch_sparse` | 318 → 316 | 1,036 → 1,018 | 6,685 → 6,595 | -1.35% |
-| `arithmetic` | 235 → 226 | 11,824 → 11,598 | 17,269 → 17,007 | -1.52% |
+| `memcpy` | 194 → 186 | 4,815 → 4,299 | 28,080 → 25,500 | -9.19% |
+| `function_call` | 126 → 124 | 2,737 → 2,735 | 16,660 → 16,650 | -0.06% |
+| `switch_dense` | 265 → 262 | 676 → 665 | 4,380 → 4,325 | -1.26% |
+| `switch_sparse` | 270 → 268 | 665 → 663 | 4,420 → 4,410 | -0.23% |
+| `arithmetic` | 235 → 224 | 11,824 → 11,534 | 17,269 → 16,855 | -2.40% |
 
-O2 never grows or slows down. Os `memcpy` is the one regression. Its
-`copy_bytes` now comes from a different Os candidate: it reloads the source
-and destination parameters from the frame inside the loop instead of keeping
-them in registers, which is 12 bytes smaller and executes 750 more opcodes.
-That is consistent with Os's byte-first candidate selection once the
-peepholes shrink the reloading form more; the per-candidate sizes were not
-dumped to confirm it. O1 payloads are byte-identical before and after.
+Every workload shrinks and executes the same or fewer opcodes at both
+levels; total cycles fall 0.88% at O2 and 1.71% at Os. The one slower row,
+O2 `memcpy`, changes only `main`'s setup (two literals now load directly,
+4 bytes fewer): `copy_bytes` is byte-identical but its hot loop now starts
+4 bytes earlier, so the 60 extra cycles are a cache-line layout effect, not
+more work. O1 payloads are byte-identical before and after.
 
-The RAM-execution demos, same hosts and policies as the earlier tables:
+The RAM-execution demos, same hosts and policies as the earlier tables,
+same before/after toolchains:
 
 | Demo / policy | Payload bytes | GSU cycles | Change | Measured with |
 | --- | ---: | ---: | ---: | --- |
-| Gem chess, all 18 publications, O2 | 13,940 → 13,649 | 287,642,295 → 281,972,607 | -1.97% | Mesen `verify.lua` |
-| Gem chess, all 18 publications, Os | 13,440 → 13,165 | 333,926,208 → 323,074,195 | -3.25% | Mesen `verify.lua` |
-| Interactive wireframe, O2 | 5,456 → 5,347 | 196,698 → 193,726 | -1.51% | Mesen `benchmark.lua` |
-| Interactive filled, O2 | 5,456 → 5,347 | 347,215 → 341,596 | -1.62% | Mesen `benchmark.lua` |
-| Interactive wireframe, Os | 5,201 → 5,096 | 203,949 → 204,318 | +0.18% | Mesen `benchmark.lua` |
-| Interactive filled, Os | 5,201 → 5,096 | 402,806 → 396,188 | -1.64% | Mesen `benchmark.lua` |
-| Rotating triangle, O2 | 2,328 → 2,256 | 343,321.02 → 334,693.33 mean over 64 poses | -2.51% | Luna `--superfx-trace` |
-| Rotating triangle, Os | 2,158 → 2,086 | 387,619.03 → 380,531.83 mean over 64 poses | -1.83% | Luna `--superfx-trace` |
+| Gem chess, all 18 publications, O2 | 13,940 → 13,647 | 287,642,295 → 281,972,895 | -1.97% | Mesen `verify.lua` |
+| Gem chess, all 18 publications, Os | 13,432 → 13,153 | 324,086,732 → 317,725,309 | -1.96% | Mesen `verify.lua` |
+| Interactive wireframe, O2 | 5,448 → 5,335 | 196,074 → 192,885 | -1.63% | Mesen `benchmark.lua` |
+| Interactive filled, O2 | 5,448 → 5,335 | 344,917 → 340,757 | -1.21% | Mesen `benchmark.lua` |
+| Interactive wireframe, Os | 5,193 → 5,084 | 203,603 → 202,598 | -0.49% | Mesen `benchmark.lua` |
+| Interactive filled, Os | 5,193 → 5,084 | 397,716 → 394,371 | -0.84% | Mesen `benchmark.lua` |
+| Rotating triangle, O2 | 2,262 → 2,190 | 341,488.48 → 332,941.02 mean over 64 poses | -2.50% | Luna `--superfx-trace` |
+| Rotating triangle, Os | 2,094 → 2,024 | 386,191.84 → 379,133.89 mean over 64 poses | -1.83% | Luna `--superfx-trace` |
 
-Every gem chess publication improves (by 1.67% to 2.97% at O2 and 1.92% to
-3.63% at Os), and its complete Mesen verification and negative ROM pass
+Every gem chess publication improves (by 1.67% to 2.97% at O2 and 1.80% to
+2.12% at Os), and its complete Mesen verification and negative ROM pass
 before and after at both levels, as does the interactive shapes
-verification. The Os interactive wireframe pose is 369 cycles slower even
-though its code is 105 bytes smaller; the filled pose and every other demo
-row improve. Rotating-triangle framebuffer hashes from Luna match before and
-after at 13 frames between 40 and 400 at both levels; its Mesen
+verification. Rotating-triangle framebuffer hashes from Luna match before
+and after at seven frames between 40 and 400 at both levels; its Mesen
 verification still fails on this Linux Mesen build for both toolchains, as
 noted above. These are emulator measurements, not physical-hardware timings.
 
