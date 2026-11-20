@@ -732,10 +732,18 @@ std::size_t prefixGroupStart(const std::vector<Instruction>& code, std::size_t l
 // Numeric (MMIO-like) and pointer-derived addresses are never candidates,
 // and any other store in between ends the window too. Window state is O(1)
 // per instruction and at most MaxPendingStores candidates are tracked.
+struct PeepholeBoundaries {
+    // Non-owning: run() keeps these offset sets alive through both passes.
+    const std::set<std::size_t>& entries;            // Every CODE symbol and branch target.
+    const std::set<std::size_t>& clear_entries;      // Entries proved to start with clear selectors.
+    const std::set<std::size_t>& relocation_offsets; // Bytes a relocation patches or pins.
+};
 void eliminateDeadStores(std::vector<Instruction>& code, const ObjectFile& object,
-                         const std::set<std::size_t>& entries, const std::set<std::size_t>& clear_entries,
-                         const std::set<std::size_t>& relocation_offsets,
+                         const PeepholeBoundaries& boundaries,
                          const GSUMachineScheduler::Hints& hints, GSUMachineScheduler::Statistics& stats) {
+    const auto& entries = boundaries.entries;
+    const auto& clear_entries = boundaries.clear_entries;
+    const auto& relocation_offsets = boundaries.relocation_offsets;
     if (hints.nonvolatile_stores.empty()) return;
     constexpr std::size_t MaxPendingStores = 16;
     // Opcode offset -> static RAM symbol of its only relocation.
@@ -883,8 +891,10 @@ bool retargetableResult(const Instruction& i) {
 // only the operand bytes) stays valid. R13-R15 are excluded: R13 literals
 // mark pixel loops, R14 starts ROM reads and R15 is the PC.
 void retargetAccumulatorMoves(std::vector<Instruction>& code, const ObjectFile& object,
-                              const std::set<std::size_t>& entries, const std::set<std::size_t>& clear_entries,
-                              const std::set<std::size_t>& relocation_offsets, GSUMachineScheduler::Statistics& stats) {
+                              const PeepholeBoundaries& boundaries, GSUMachineScheduler::Statistics& stats) {
+    const auto& entries = boundaries.entries;
+    const auto& clear_entries = boundaries.clear_entries;
+    const auto& relocation_offsets = boundaries.relocation_offsets;
     std::map<std::size_t, std::vector<RelocationType>> relocations;
     for (const auto& r : object.relocation_table)
         if (r.section_to_patch == SymbolSection::CODE) relocations[r.patch_offset].push_back(r.type);
@@ -992,7 +1002,8 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object, con
     // Computed once on the decoded stream; the rewrites below keep every
     // entry's offset and never touch the instruction before an entry.
     const auto clear_entries = clearEntries(code, object);
-    eliminateDeadStores(code, object, entries, clear_entries, relocation_offsets, hints, stats);
+    const PeepholeBoundaries peephole_boundaries{entries, clear_entries, relocation_offsets};
+    eliminateDeadStores(code, object, peephole_boundaries, hints, stats);
 
     // MOVE Ra -> Rb (WITH a / TO b) whose destination the very next
     // instruction overwrites without reading it: a home copy of a value its
@@ -1132,7 +1143,7 @@ GSUMachineScheduler::Statistics GSUMachineScheduler::run(ObjectFile& object, con
 
     // After the copy rewrites above, which already handle their own
     // R0/home forms, before any slot or ROM-latency scheduling.
-    retargetAccumulatorMoves(code, object, entries, clear_entries, relocation_offsets, stats);
+    retargetAccumulatorMoves(code, object, peephole_boundaries, stats);
 
     // A private one-PLOT loop may put PLOT in LOOP's always-executed slot,
     // including its first/final iteration and the raw zero-count wrap. Keep
