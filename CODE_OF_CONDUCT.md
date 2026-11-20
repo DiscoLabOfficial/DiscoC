@@ -68,11 +68,10 @@ best to collaborate. Not every conflict represents a code of conduct violation,
 and this Code of Conduct reinforces encouraged behaviors and norms that can
 help avoid conflicts and minimize harm.
 
-**Private reporting contact: pending.** DiscoC has not yet designated a private
-channel for conduct reports. Do not post sensitive reports or personal
-information in public issues or pull requests. This section will be updated
-when a private contact is designated; it does not currently provide a private
-reporting mechanism.
+**Private reporting contact: [security@discolab.dev](mailto:security@discolab.dev).**
+Send conduct reports to this address, which reaches the project maintainer
+privately. Do not post sensitive reports or personal information in public
+issues or pull requests.
 
 The project maintainer serves as the Community Moderator. Community Moderators
 take reports of violations seriously and will make every effort to respond in
@@ -158,8 +157,8 @@ stewarded by the Organization for Ethical Source and licensed under
 This adaptation is distributed under the same license.
 
 Project-specific changes identify the maintainer as the Community Moderator,
-leave the private reporting contact explicitly pending, and use consistent
-moderator terminology and reformatted enforcement headings.
+name security@discolab.dev as the private reporting contact, and use
+consistent moderator terminology and reformatted enforcement headings.
 This document's license does not replace DiscoC's software license.
 
 For common questions, see the
