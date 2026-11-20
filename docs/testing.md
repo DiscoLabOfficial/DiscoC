@@ -877,21 +877,46 @@ scope are in the [scene validation snapshot](../examples/snes/gem_chess/README.m
 The [0.3.0 record](releases/v0.3.0/validation.md) reports the fresh preparation
 checks separately.
 
-## Optional libFuzzer target
+## Optional libFuzzer targets
 
-The optional frontend fuzzer exercises the lexer, parser, textual assembler
-(GSU and SPC700),
-in-memory object-file reader, and bounded TOML manifest parser. It requires
-Clang with libFuzzer support:
+`-DDISCO_BUILD_FUZZERS=ON` builds two libFuzzer targets with AddressSanitizer
+and UndefinedBehaviorSanitizer. Each compiles the toolchain sources into the
+fuzzer itself, so libFuzzer gets coverage feedback from the code under test.
+They require Clang with libFuzzer support; use a separate build directory.
+
+- `disco_frontend_fuzzer` runs the lexer, parser, textual assembler (GSU and
+  SPC700), in-memory object-file reader and bounded TOML manifest parser.
+- `disco_compiler_fuzzer` takes source that parses and runs it through the
+  rest of `discc`, in the driver's order: `Analyzer`, warnings, the AST
+  `Optimizer`, IR lowering and `IRVerifier`, then the GSU code generator and
+  assembly listing at `-O0`, `-O1`, `-O2` and `-Os`, plus the `--check` /
+  `--emit-ir` global optimization of `-O2` and `-Os`. SPC700 runs through
+  analysis and IR verification. Inputs larger than 4096 bytes are skipped, and
+  units with imports stop after parsing because the fuzzer has no files to
+  import.
+
+`CompilerError` and `std::runtime_error` are the compiler's diagnostics and are
+expected. In `disco_compiler_fuzzer` any other escaping exception, such as
+`std::out_of_range`, and an `IRVerifier` rejection of IR lowered from analyzed
+source abort the run as defects.
 
 ```bash
-cmake -S . -B build-fuzz \
+cmake -S . -B build/fuzz -G Ninja \
   -DCMAKE_CXX_COMPILER=clang++ \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DDISCO_BUILD_FUZZERS=ON
-cmake --build build-fuzz --target disco_frontend_fuzzer
-mkdir -p corpus
-./build-fuzz/disco_frontend_fuzzer -max_len=4096 corpus
+  -DDISCO_BUILD_FUZZERS=ON -DBUILD_TESTING=OFF
+cmake --build build/fuzz --target disco_frontend_fuzzer disco_compiler_fuzzer
+mkdir -p build/fuzz-seeds build/fuzz-corpus build/fuzz-artifacts
+find examples tests/fixtures tests/language -name '*.dc' -size -4k \
+  -exec sh -c 'cp "$1" "build/fuzz-seeds/$(echo "$1" | tr / _)"' _ {} \;
+./build/fuzz/bin/disco_compiler_fuzzer -max_len=4096 -timeout=20 \
+  -rss_limit_mb=3072 -max_total_time=600 -artifact_prefix=build/fuzz-artifacts/ \
+  build/fuzz-corpus build/fuzz-seeds
 ```
+
+Add `-fork=<jobs> -ignore_crashes=1 -ignore_timeouts=1 -ignore_ooms=1` to keep
+a parallel campaign running past a finding; reproduce a saved input with
+`./build/fuzz/bin/disco_compiler_fuzzer build/fuzz-artifacts/crash-<hash>`. Seed the frontend fuzzer
+the same way from `.dc`, `.s`, `.asm`, `.dci` and `.toml` files.
 
 Malformed input is expected to be rejected. A crash, sanitizer report, hang, or unbounded resource use is a compiler defect and should become a minimized regression test under `tests/`.

@@ -149,10 +149,21 @@ if(DISCO_BUILD_FUZZERS)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         message(FATAL_ERROR "DISCO_BUILD_FUZZERS requires a Clang compiler with libFuzzer support.")
     endif()
-    add_executable(disco_frontend_fuzzer tests/FrontendFuzzer.cpp)
-    target_link_libraries(disco_frontend_fuzzer PRIVATE disco_frontend_core disco_assembler_core disco_project_core)
-    target_compile_options(disco_frontend_fuzzer PRIVATE -fsanitize=fuzzer,address,undefined)
-    target_link_options(disco_frontend_fuzzer PRIVATE -fsanitize=fuzzer,address,undefined)
+    # Compile the library sources into each fuzzer rather than linking the
+    # uninstrumented core archives: libFuzzer needs coverage feedback and the
+    # sanitizers need to see the code under test, not only the harness.
+    function(disco_add_fuzzer name)
+        add_executable(${name} ${ARGN})
+        target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(${name} PRIVATE disco_common_warnings disco_platform_options)
+        target_compile_options(${name} PRIVATE -fsanitize=fuzzer,address,undefined
+            -fno-sanitize-recover=undefined -fno-omit-frame-pointer)
+        target_link_options(${name} PRIVATE -fsanitize=fuzzer,address,undefined)
+    endfunction()
+    disco_add_fuzzer(disco_frontend_fuzzer tests/FrontendFuzzer.cpp
+        ${DISCO_SOURCES_frontend} ${DISCO_SOURCES_assembler} ${DISCO_SOURCES_object} ${DISCO_SOURCES_project})
+    disco_add_fuzzer(disco_compiler_fuzzer tests/CompilerFuzzer.cpp
+        ${DISCO_SOURCES_compiler} ${DISCO_SOURCES_frontend} ${DISCO_SOURCES_object} ${DISCO_SOURCES_project})
 endif()
 
 include(CTest)
