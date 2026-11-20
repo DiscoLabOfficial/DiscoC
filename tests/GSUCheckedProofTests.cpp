@@ -8,6 +8,7 @@
 #include "ABI.hpp"
 #include "AssemblyGenerator.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <set>
 #include <limits>
@@ -544,6 +545,92 @@ void registerArgumentExecution() {
             }
             require(a.reg(6) == 0 && b.reg(6) == 0 && a.reg(0) == b.reg(0) && a.word(0x700104) == b.word(0x700104),
                 "Register arguments changed a call's result");
+        }
+    }
+}
+
+// Code bytes of `name` up to the next CODE symbol that starts a function
+// (block labels and register entries inside it do not end the range).
+std::vector<std::uint8_t> functionCode(const ObjectFile& object, const std::string& name, const std::set<std::string>& functions) {
+    std::uint32_t begin = 0, end = static_cast<std::uint32_t>(object.code_section.size());
+    bool found = false;
+    for (const auto& symbol : object.symbol_table)
+        if (symbol.section == SymbolSection::CODE && symbol.name == name) { begin = symbol.offset; found = true; }
+    require(found, "Calling-convention fixture function has no CODE symbol");
+    for (const auto& symbol : object.symbol_table)
+        if (symbol.section == SymbolSection::CODE && functions.count(symbol.name) && symbol.offset > begin)
+            end = std::min(end, symbol.offset);
+    return {object.code_section.begin() + begin, object.code_section.begin() + end};
+}
+
+// Public functions with one-word parameters get a register entry that
+// in-module calls use, while the public label keeps the stack convention for
+// other objects. A leaf that never touches the stack saves no R11 and has no
+// stack guard. `pick` passes the leaf prefilter but its pointer comparison
+// pushes, so it must fall back to a guarded frame. Results and the preserved
+// R9/R10 match O0. Stack callers from other objects are linked and run by
+// run_checked_proofs_regression.cmake.
+void publicRegisterEntryExecution() {
+    const std::string source =
+        "word leaf(word a, word b); internal word pick(word* p, word* q); word outer(word a); word deref(word* p, word n);"
+        "word main() { word x = *(volatile word*)0x100; word y = *(volatile word*)0x102;"
+        " word s = leaf(x, y) + leaf(y, 7) + outer(x); word t[2]; t[0] = x; t[1] = y;"
+        " s = s + pick(&t[0], &t[1]) + pick(&t[1], &t[1]) + deref(&t[1], x); *(volatile word*)0x104 = s; return s; }"
+        "word leaf(word a, word b) { if (a > b) return a - b; return b + a * 2; }"
+        "internal word pick(word* p, word* q) { if (p == q) return *p; return *q + 1; }"
+        "word outer(word a) { return leaf(a, 3) + leaf(3, a); }"
+        "word deref(word* p, word n) { return *p + leaf(n, 1); }";
+    const std::set<std::string> functions{"main", "leaf", "outer", "deref", "\x01" "pick"};
+    const auto baseline = compileStackProof(source, OptimizationLevel::Baseline, false);
+    require(baseline.symbol_table.end() == std::find_if(baseline.symbol_table.begin(), baseline.symbol_table.end(),
+        [](const SymbolEntry& symbol) { return symbol.name.compare(0, 15, GSUAbi::RegisterCallPrefix) == 0; }),
+        "O0 emitted a register entry");
+    for (const auto level : {OptimizationLevel::O2, OptimizationLevel::Size}) {
+        const auto optimized = compileStackProof(source, level, false);
+        const auto entry = GSUAbi::registerCallSymbol("leaf", 2);
+        std::uint32_t public_offset = 0, entry_offset = 0;
+        for (const auto& symbol : optimized.symbol_table) {
+            if (symbol.name == "leaf") public_offset = symbol.offset;
+            if (symbol.name == entry) entry_offset = symbol.offset;
+        }
+        require(entry_offset > public_offset, "Public leaf lost its register entry after the stack-argument loads");
+        for (const auto& r : optimized.relocation_table)
+            require(r.target_symbol_name != "leaf", "An in-module call used the stack-argument label");
+        // The leaf has no IWT operands, so any $3A byte is a STW (R10) push.
+        const auto leaf = functionCode(optimized, "leaf", functions);
+        require(std::find(leaf.begin(), leaf.end(), 0x3a) == leaf.end(), "A stack-free leaf saved R11");
+        const auto guards = [&](const std::string& name) {
+            std::uint32_t begin = 0;
+            for (const auto& symbol : optimized.symbol_table) if (symbol.name == name) begin = symbol.offset;
+            const auto end = begin + functionCode(optimized, name, functions).size();
+            std::size_t count = 0;
+            for (const auto& r : optimized.relocation_table)
+                if (r.target_symbol_name.compare(0, std::string(GSUAbi::StackLimitPrefix).size(), GSUAbi::StackLimitPrefix) == 0 &&
+                    r.patch_offset >= begin && r.patch_offset < end) ++count;
+            return count;
+        };
+        require(guards("leaf") == 0, "A stack-free leaf kept a stack guard");
+        // A checked public label performs only the argument checks (SP
+        // alignment, then the argument ceiling) before its loads; the
+        // register entry's own stack guard covers both entries.
+        std::uint32_t deref_offset = 0;
+        for (const auto& symbol : optimized.symbol_table) if (symbol.name == "deref") deref_offset = symbol.offset;
+        require(!std::any_of(optimized.relocation_table.begin(), optimized.relocation_table.end(),
+            [&](const RelocationEntry& r) {
+                return r.patch_offset == deref_offset &&
+                    r.target_symbol_name.compare(0, std::string(GSUAbi::StackLimitPrefix).size(), GSUAbi::StackLimitPrefix) == 0;
+            }), "A checked public label duplicated its register entry's stack guard");
+        require(guards("deref") >= 1, "A checked public register entry lost its own stack guard");
+        require(guards("\x01" "pick") > 0, "A leaf that pushes lost its stack guard");
+        const std::pair<std::uint16_t, std::uint16_t> inputs[] = {{0, 0}, {1, 2}, {9, 4}, {300, 7}, {0xfff0, 5}, {5, 0xfff0}};
+        for (const auto& input : inputs) {
+            DiscoGSU::Machine a(executable(baseline), 0x8000, 0x1000), b(executable(optimized), 0x8000, 0x1000);
+            for (auto* machine : {&a, &b}) {
+                seedWord(*machine, 0x700100, input.first); seedWord(*machine, 0x700102, input.second); machine->run();
+            }
+            require(a.reg(6) == 0 && b.reg(6) == 0 && a.reg(0) == b.reg(0) && a.word(0x700104) == b.word(0x700104),
+                "A register entry or stack-free leaf changed a call's result");
+            require(a.reg(9) == b.reg(9) && a.reg(10) == b.reg(10), "A register entry changed the preserved frame/stack state");
         }
     }
 }
@@ -1166,7 +1253,7 @@ int main() {
     try {
         IRCodeGeneratorTestAccess::stackCreditFences();
         IRCodeGeneratorTestAccess::pointerIndexCopies();
-        frameRanges(); staticObjectRanges(); staticObjectCodegen(); staticRomObjectRanges(); staticRomObjectCodegen(); singleSiteInlineExecution(); registerArgumentExecution(); staticFrameExecution(); framelessExecution(); shortRamExecution(); staticStackProofCodegen(); pointerBoundaries(); wrappedAndCyclicValues(); inductionIntervals(); boundedCastsAndConditions();
+        frameRanges(); staticObjectRanges(); staticObjectCodegen(); staticRomObjectRanges(); staticRomObjectCodegen(); singleSiteInlineExecution(); registerArgumentExecution(); publicRegisterEntryExecution(); staticFrameExecution(); framelessExecution(); shortRamExecution(); staticStackProofCodegen(); pointerBoundaries(); wrappedAndCyclicValues(); inductionIntervals(); boundedCastsAndConditions();
         stackCredit(); verifiedSource(); verifiedClearLoop(); stackCreditControlFlowExecution(); constantOffsetExecution(); pointerComponentExecution(); pointerSnapshotExecution(); pointerParameterLoads(); multiplyProofsAndExecution();
         std::cout << "GSU checked-address and stack-credit proofs passed\n"; return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

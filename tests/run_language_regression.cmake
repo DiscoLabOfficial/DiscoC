@@ -211,13 +211,14 @@ void main() {
     run_expected_failure_contains("no room for the requested stack frame" "${DISCLD}" "${TEST_DIR}/globals.o"
         --init-runtime --stack-pointer ${insufficient_sp} -o "${TEST_DIR}/globals-stack-guard.bin")
     # An individual frame can fit even though recursive call depth exhausts
-    # the stack. Keep an execution regression for the runtime R6=2 guard.
+    # the stack. Keep an execution regression for the runtime R6=2 guard; the
+    # depth exceeds the 64-byte stack even at O2's two-word register frames.
     file(WRITE "${TEST_DIR}/recursive-guard.dc" [=[
 word recurse(word depth) {
     if (depth == 0) { return 0; }
     return recurse(depth - 1) + 1;
 }
-void main() { *(word*)0x100 = recurse(16); }
+void main() { *(word*)0x100 = recurse(64); }
 ]=])
     check_round_trip(recursive-guard "${TEST_DIR}/recursive-guard.dc" --init-runtime --stack-pointer 0x0040)
     foreach(suffix IN ITEMS "" "-asm")

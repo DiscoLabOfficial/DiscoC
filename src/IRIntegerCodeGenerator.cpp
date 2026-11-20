@@ -388,6 +388,7 @@ void IRCodeGenerator::emitSharedDivision(const IRInstruction& instruction) {
     const std::string label = std::string(1, '\x01') + "__disco_os_divmod_" + (is_unsigned ? "u" : "s");
     m_division_helpers.insert(is_unsigned);
     m_spill_cache.clear(); m_last_ram_word_address = IRValueId{};
+    ++m_stack_touches; // LINK writes R11.
     emitByte(0x94);
     const auto patch = m_object_file.code_section.size();
     emitWordLiteral(Register::R15_PC, 0); addRelocation(label, patch, RelocationType::ADDR16_IWT); emitByte(1);

@@ -34,6 +34,9 @@ public:
 private:
     friend struct IRCodeGeneratorTestAccess;
     struct NeedsLongBranch {};
+    // A stack-free leaf touched the stack after all; the pass is re-emitted
+    // with that function excluded (m_stackful_leaves only grows).
+    struct NeedsStackFrame {};
     struct BranchFixup {
         std::size_t patch_offset = 0;
         IRBlockId target;
@@ -222,6 +225,9 @@ private:
                          std::size_t smallest = 0) const;
     ObjectFile finishCandidate(GeneratedCandidate candidate) const;
     GeneratedCandidate generateInternal(const IRModule& module);
+    GeneratedCandidate generateInternalPass(const IRModule& module);
+    bool stacklessLeafCandidate(const IRFunction& function, bool frameless) const;
+    void emitPublicRegisterEntry(const IRFunction& function);
     GeneratedCandidate generateOptimized(const IRModule& module, OptimizationLevel policy,
         IRCompactionPolicy compaction = IRCompactionPolicy::Enabled, bool pool_enabled = true,
         const CandidateReference* legacy = nullptr);
@@ -331,6 +337,13 @@ private:
     std::map<std::uint32_t, std::uint8_t> m_cursor_updates;
     std::set<std::uint32_t> m_cursor_elided_values, m_ephemeral_values;
     std::map<std::string, std::size_t> m_register_arguments; // link symbol -> register parameters
+    // Public functions of this module with a register entry (link symbol ->
+    // GSUAbi::registerCallSymbol). Their public label loads the stack
+    // arguments into the register-argument registers and falls through.
+    std::map<std::string, std::string> m_public_register_entries;
+    // External callees whose prototype admits a register call: link symbol ->
+    // parameter count. Their callers reference the register entry instead.
+    std::map<std::string, std::size_t> m_external_register_calls;
     // Functions whose locals/spills live in a compiled (static) frame, the
     // current owner and its frame size, emitted frame sizes and used slots.
     std::set<std::string> m_static_frame_functions;
@@ -340,6 +353,13 @@ private:
     std::set<std::pair<std::string, int>> m_static_frame_slots;
     // Current function never addresses FP: it neither saves nor sets R9.
     bool m_frameless = false;
+    // Current function is a leaf that never touches the stack: no R11 save,
+    // hence no stack guard either. Stack operations and LINKs emitted while
+    // it is set are counted; any count excludes the function and retries.
+    bool m_stackless = false;
+    std::size_t m_stack_touches = 0;
+    std::set<std::string> m_stackful_leaves;
+    bool m_stackless_retry = false;
     // Short RAM (CompilerConfig::short_ram_bytes): word slots of admitted
     // static frames live in the LMS/SMS window. The current function's FP
     // offsets there; owner -> frame slot -> window offset; owner -> window

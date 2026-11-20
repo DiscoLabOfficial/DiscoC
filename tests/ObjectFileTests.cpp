@@ -268,6 +268,68 @@ int main() {
         short_invalid = shorted;
         short_invalid.code_section[3] = 0x3f;
         expectWriteFailure(short_invalid, directory / "alt3-short-relocation.o");
+
+        // GSU register entries (defined or referenced) are the version-12
+        // feature: older readers refuse them and version 12 requires one.
+        ObjectFile registered;
+        registered.code_section = {0x94, 0xff, 0x00, 0x00, 0x01, 0x9b, 0x01};
+        registered.symbol_table.push_back({"add", SymbolSection::CODE, 5});
+        registered.symbol_table.push_back({GSUAbi::registerCallSymbol("add", 2), SymbolSection::CODE, 5});
+        registered.relocation_table.push_back({GSUAbi::registerCallSymbol("step", 1), SymbolSection::CODE, 1,
+            RelocationType::ADDR16_JAL});
+        const auto registered_path = directory / "register-entry.o";
+        registered.write(registered_path.string());
+        std::ifstream registered_input(registered_path, std::ios::binary);
+        auto registered_bytes = std::vector<std::uint8_t>(std::istreambuf_iterator<char>(registered_input), {});
+        registered_input.close();
+        if (registered_bytes.size() < 6 || registered_bytes[5] != ObjectFile::RegisterCallFormatVersion ||
+            !ObjectFile::readBytes(registered_bytes).usesRegisterCalls())
+            throw std::runtime_error("register entries did not round-trip as format version 12");
+        if (proved.usesRegisterCalls() || shorted.usesRegisterCalls()) throw std::runtime_error("object without register entries reports one");
+        for (const auto older : {ObjectFile::SPC700RelocationFormatVersion, ObjectFile::ShortRamFormatVersion,
+                                 ObjectFile::BaselineFormatVersion}) {
+            auto downgraded = registered_bytes;
+            downgraded[5] = older;
+            expectMemoryFailure(downgraded);
+        }
+        auto plain_bytes = registered_bytes;
+        {
+            auto plain = registered;
+            plain.symbol_table.pop_back();
+            plain.relocation_table.clear();
+            const auto plain_path = directory / "register-plain.o";
+            plain.write(plain_path.string());
+            std::ifstream plain_input(plain_path, std::ios::binary);
+            plain_bytes = std::vector<std::uint8_t>(std::istreambuf_iterator<char>(plain_input), {});
+        }
+        plain_bytes[5] = ObjectFile::RegisterCallFormatVersion;
+        expectMemoryFailure(plain_bytes);
+        // The reassembled spelling of a call (IWT relocation) is accepted;
+        // a data or RAM use of a register entry is not.
+        auto register_variant = registered;
+        register_variant.relocation_table.back().type = RelocationType::ADDR16_IWT;
+        register_variant.write((directory / "register-iwt.o").string());
+        register_variant = registered;
+        register_variant.relocation_table.back().type = RelocationType::ADDR16_RAM;
+        expectWriteFailure(register_variant, directory / "register-ram.o");
+        register_variant = registered;
+        register_variant.data_section = {0, 0};
+        register_variant.symbol_table.back().section = SymbolSection::DATA;
+        register_variant.symbol_table.back().offset = 0;
+        expectWriteFailure(register_variant, directory / "register-data.o");
+        register_variant = registered;
+        register_variant.config.target = TargetKind::SPC700;
+        register_variant.relocation_table.clear();
+        expectWriteFailure(register_variant, directory / "register-spc.o");
+        std::string parsed_name;
+        std::size_t parsed_count = 0;
+        for (const auto* malformed : {"__disco_regcall0$f", "__disco_regcall5$f", "__disco_regcall2$", "__disco_regcall2f",
+                                      "__disco_regcall", "add"})
+            if (GSUAbi::parseRegisterCallSymbol(malformed, parsed_name, parsed_count))
+                throw std::runtime_error(std::string("malformed register entry name was accepted: ") + malformed);
+        if (!GSUAbi::parseRegisterCallSymbol(GSUAbi::registerCallSymbol("a.b", 4), parsed_name, parsed_count) ||
+            parsed_name != "a.b" || parsed_count != 4)
+            throw std::runtime_error("register entry name did not round-trip");
         short_invalid = shorted;
         short_invalid.relocation_table.back().section_to_patch = SymbolSection::DATA;
         short_invalid.data_section = short_invalid.code_section;
