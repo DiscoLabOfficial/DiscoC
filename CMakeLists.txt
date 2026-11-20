@@ -256,7 +256,7 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
             set_tests_properties(${name} PROPERTIES
                 LABELS "backend;gsu;graphics;gem-chess;optimization;correctness" TIMEOUT 1800)
         endif()
-        if(case_name MATCHES "^gsu_(contributor_correctness|optimization|local_optimization|global_optimization|value_optimization|sccp|checked_proofs|size_optimization|selection_optimization|sbk)$" OR ARGV2 MATCHES "^[12]$")
+        if(case_name MATCHES "^gsu_(contributor_correctness|optimization|local_optimization|global_optimization|value_optimization|sccp|checked_proofs|size_optimization|selection_optimization|sbk|machine_peephole)$" OR ARGV2 MATCHES "^[12]$")
             set_property(TEST ${name} APPEND PROPERTY LABELS "gsu;optimization;correctness")
         endif()
     endfunction()

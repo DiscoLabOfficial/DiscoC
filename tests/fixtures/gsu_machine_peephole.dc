@@ -1,0 +1,25 @@
+// Machine-level dead-store fixture. Only `twice` has stores that are dead at
+// the machine level; every other function must keep both of its stores.
+word g;
+byte b;
+word h[4];
+volatile byte vb;
+
+// Static nonvolatile storage overwritten before any read: one store each.
+void twice() { h[1] = 3; h[1] = 4; b = 1; b = 2; }
+// Volatile and MMIO-like (numeric) addresses keep every store.
+void volatile_twice() { vb = 1; vb = 2; *(volatile word*)0x100 = 5; *(volatile word*)0x100 = 6; }
+void absolute_twice() { *(word*)0x104 = 7; *(word*)0x104 = 8; }
+// A read through a possibly aliasing pointer observes the first store.
+word read_between(word* p) { h[2] = 1; word t = *p; h[2] = 2; return t; }
+// The callee may read the first store.
+void call_between() { h[3] = 1; twice(); h[3] = 2; }
+// Pointer-derived addresses are never candidates.
+void through(word* p) { *p = 9; *p = 10; }
+
+word main() {
+    twice(); volatile_twice(); absolute_twice();
+    word r = read_between(&h[2]);
+    call_between(); through(&g);
+    return r + h[1] + b + h[3] + g; // 1 + 4 + 2 + 2 + 10
+}
