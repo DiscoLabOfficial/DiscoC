@@ -94,10 +94,13 @@ public:
     // unless they carry a proof marker: version 8 for
     // GSUAbi::StaticRamProofSymbol, version 9 for a GSUAbi::StaticStackBoundPrefix
     // marker, version 10 for a short RAM section, SHORT_RAM symbols or
-    // ADDR8_SHORT_RAM relocations, version 11 for SPC700 relocations. A linker
-    // that cannot enforce a marker, place short RAM or apply a relocation type
-    // must refuse the object rather than ignore it.
-    static constexpr std::uint8_t CurrentFormatVersion = 11;
+    // ADDR8_SHORT_RAM relocations, version 11 for SPC700 relocations, version
+    // 12 for a defined or referenced GSU register entry (GSUAbi::
+    // RegisterCallPrefix). A linker that cannot enforce a marker, place short
+    // RAM, apply a relocation type or supply a register-entry adapter must
+    // refuse the object rather than ignore it.
+    static constexpr std::uint8_t CurrentFormatVersion = 12;
+    static constexpr std::uint8_t RegisterCallFormatVersion = 12;
     static constexpr std::uint8_t SPC700RelocationFormatVersion = 11;
     static constexpr std::uint8_t ShortRamFormatVersion = 10;
     static constexpr std::uint8_t StaticStackFormatVersion = 9;
@@ -109,6 +112,7 @@ public:
     std::uint32_t staticStackBound() const;
     bool usesShortRam() const;
     bool usesSPC700Relocations() const;
+    bool usesRegisterCalls() const;
     static constexpr std::uint32_t MaxSectionBytes = 64u * 1024u * 1024u;
     static constexpr std::uint32_t MaxObjectBytes = 128u * 1024u * 1024u;
     static constexpr std::uint32_t MaxStringBytes = 4096u;
