@@ -4,9 +4,11 @@ Bug reports, independent testing, documentation improvements, and code
 contributions are welcome. DiscoC is experimental compiler infrastructure:
 correctness, explicit semantics, and reproducible evidence come before speed.
 
-Please follow the [Code of Conduct](CODE_OF_CONDUCT.md). Its private reporting
-contact is pending; do not put sensitive conduct reports or personal
-information in public issues or pull requests.
+Please follow the [Code of Conduct](CODE_OF_CONDUCT.md). Send conduct reports
+privately to [security@discolab.dev](mailto:security@discolab.dev); do not put
+sensitive conduct reports or personal information in public issues or pull
+requests. Report security vulnerabilities privately as described in the
+[security policy](SECURITY.md), not in public issues.
 
 ## Report a Bug or Suggest a Change
 
