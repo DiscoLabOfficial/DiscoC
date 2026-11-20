@@ -187,8 +187,9 @@ physical-hardware validation.
 
 Thanks to everyone reporting bugs, testing programs, and improving the project.
 See the [contributor history](https://github.com/DiscoLabOfficial/DiscoC/graphs/contributors),
-[contribution guide](CONTRIBUTING.md), and [Code of Conduct](CODE_OF_CONDUCT.md).
-The private conduct-reporting contact is currently pending.
+[contribution guide](CONTRIBUTING.md), [Code of Conduct](CODE_OF_CONDUCT.md), and
+[security policy](SECURITY.md). Send conduct reports privately to
+[security@discolab.dev](mailto:security@discolab.dev).
 
 ## License
 
