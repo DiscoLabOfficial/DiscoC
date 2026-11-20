@@ -212,6 +212,12 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_executable(disco_gsu_execution_tests ${DISCO_SOURCES_disco_gsu_execution_tests})
     target_link_libraries(disco_gsu_execution_tests PRIVATE disco_common_warnings disco_platform_options)
 
+    # Shares only the SPC700 opcode map with the toolchain; no compiler,
+    # assembler or linker library is linked into the execution model.
+    add_executable(disco_spc700_execution_tests ${DISCO_SOURCES_disco_spc700_execution_tests})
+    target_include_directories(disco_spc700_execution_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(disco_spc700_execution_tests PRIVATE disco_common_warnings disco_platform_options)
+
     # Keep the generator/oracle independent of all compiler/linker libraries.
     add_executable(disco_gsu_differential_tests ${DISCO_SOURCES_disco_gsu_differential_tests})
     target_link_libraries(disco_gsu_differential_tests PRIVATE disco_common_warnings disco_platform_options)
@@ -237,6 +243,7 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
                 -DDISCLD=$<TARGET_FILE:discld>
                 -DGSU_RUNNER=$<TARGET_FILE:disco_gsu_execution_tests>
                 -DGSU_MAPPING_TESTER=$<TARGET_FILE:disco_gsu_mapping_tests>
+                -DSPC700_RUNNER=$<TARGET_FILE:disco_spc700_execution_tests>
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_toolchain_regression.cmake
         )
         if(case_name MATCHES "^language_conformance_")
@@ -297,6 +304,8 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_test(NAME project_manifest COMMAND disco_project_manifest_tests)
     add_test(NAME module_loader COMMAND disco_module_loader_tests)
     add_test(NAME gsu_execution_model COMMAND disco_gsu_execution_tests --self-test)
+    add_test(NAME spc700_execution_model COMMAND disco_spc700_execution_tests --self-test)
+    set_tests_properties(spc700_execution_model PROPERTIES LABELS "spc700;execution;unit")
     add_test(NAME gsu_differential_oracle COMMAND disco_gsu_differential_tests --self-test)
     set_tests_properties(gsu_differential_oracle PROPERTIES LABELS "gsu;differential;unit" TIMEOUT 30)
     foreach(level IN ITEMS 0 1 2 s)
@@ -336,6 +345,24 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
             -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/spc700_wla_oracle
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_spc700_wla_oracle.cmake)
         set_tests_properties(spc700_wla_oracle PROPERTIES LABELS "assembler;spc700;oracle" TIMEOUT 300)
+    endif()
+    # Optional differential run of the SPC700 model against the Luna emulator
+    # (kept outside the repository in Luna_Emulator/). Not registered when
+    # Luna or the WLA-DX 65816 toolchain is missing.
+    find_program(DISCO_LUNA NAMES luna PATHS ${CMAKE_CURRENT_SOURCE_DIR}/Luna_Emulator)
+    find_program(DISCO_WLA_65816 NAMES wla-65816)
+    if(DISCO_LUNA AND DISCO_WLA_65816 AND DISCO_WLALINK)
+        add_test(NAME spc700_luna_differential COMMAND ${CMAKE_COMMAND}
+            -DRUNNER=$<TARGET_FILE:disco_spc700_execution_tests>
+            -DDISCAS=$<TARGET_FILE:discas>
+            -DDISCLD=$<TARGET_FILE:discld>
+            -DWLA_65816=${DISCO_WLA_65816}
+            -DWLALINK=${DISCO_WLALINK}
+            -DLUNA=${DISCO_LUNA}
+            -DROOT_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/spc700_luna_differential
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_spc700_luna_differential.cmake)
+        set_tests_properties(spc700_luna_differential PROPERTIES LABELS "spc700;execution;oracle" TIMEOUT 900)
     endif()
     set_tests_properties(language_contract PROPERTIES LABELS "language;unit")
     set_tests_properties(ir_verifier PROPERTIES LABELS "ir;unit")

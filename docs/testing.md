@@ -163,6 +163,28 @@ round-trips the linked listing, and rejects out-of-range direct-page,
 files with `tmpfile()`, so it needs a writable system temporary directory.
 These are encoding and link tests, not SPC700 execution coverage.
 
+`spc700_execution_model` self-checks `disco_spc700_execution_tests`, an
+instruction-level SPC-700 model in `tests/SPC700InstructionModel.hpp`. Like the
+GSU model it is a regression oracle, not an APU emulator: no timing, no running
+timers and no S-DSP, and anything unsupported fails closed (fetches outside the
+payload, reads of the IPL ROM area while it is mapped, `$F0`/write-only
+registers, `SLEEP`/`STOP`). The IPL ROM itself is not included; a jump to `$FFC0`
+ends a run, and each run starts with the IPL hand-off state (SP `$EF`,
+`$0001-$00EF` cleared, `$0000/$0001` = start address). The runner takes
+`<payload> <origin>` plus `--entry`, `--fill`, `--ram`, `--input-port`,
+`--limit`, `--runs`, `--dump-aram` and the expectations `--byte`, `--word`,
+`--register a|x|y|sp|psw|ya` and `--port`. `--emit-torture <seed> <first>
+<count>` prints a generated program that executes one instruction per case and
+records registers, flags and scratch memory.
+
+When Luna (`Luna_Emulator/luna`), `wla-65816` and `wlalink` are available,
+`spc700_luna_differential` uploads five torture programs (600 cases covering
+every opcode except control transfers, PUSH/POP, `MOV SP,X` and `SLEEP`/`STOP`,
+plus random ones) through the APU IPL with the
+host in `tests/spc700_host/upload.asm`, runs them in Luna and in the model, and
+compares the result tables byte for byte. It needs a writable system temporary
+directory for WLA (`ctest -L oracle`).
+
 `gsu_runtime_loading` links multi-file programs at `$70:6000`, `$70:0000`, and
 `$71:6000`, verifies hand-encoded bootstrap bytes, and starts the instruction
 model with deliberately incorrect RAMBR/R10 state. It checks both data banks,
