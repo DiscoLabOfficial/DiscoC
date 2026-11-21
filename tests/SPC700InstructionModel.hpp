@@ -65,12 +65,13 @@ public:
         pc_ = entry;
         ipl_mapped_ = true;
         returned_ = false;
+        stopped_ = false;
         out_[0] = 0xCC;
         out_[1] = 0xBB;
     }
 
-    // Runs until the program returns to the IPL. Throws on any unsupported
-    // operation or when `limit` instructions execute first.
+    // Runs until the program returns to the IPL or executes STOP. Throws on
+    // any unsupported operation or when `limit` instructions execute first.
     void run(std::uint64_t limit = 10000000) {
         if (limit == 0 || limit > 100000000) throw std::invalid_argument("SPC700 instruction limit must be in 1..100000000");
         for (std::uint64_t step = 0; step < limit; ++step) {
@@ -83,11 +84,15 @@ public:
             }
             execute();
             ++metrics_.instructions;
+            if (stopped_) return;
         }
         fail("execution exceeded the instruction limit");
     }
 
     bool returnedToIpl() const { return returned_; }
+    // True after STOP: the runtime's fault channel (port 0 = $FA, port 1 =
+    // fault code) halts the processor until the host resets the APU.
+    bool stopped() const { return stopped_; }
     std::uint8_t a() const { return a_; }
     std::uint8_t x() const { return x_; }
     std::uint8_t y() const { return y_; }
@@ -125,6 +130,7 @@ private:
     std::uint8_t dsp_address_ = 0;
     bool ipl_mapped_ = true;
     bool returned_ = false;
+    bool stopped_ = false;
     ExecutionMetrics metrics_;
 
     [[noreturn]] void fail(const std::string& message) const {
@@ -418,7 +424,12 @@ private:
         }
         if (mnemonic == "ret") { ++metrics_.returns; popPc(); return; }
         if (mnemonic == "reti") { ++metrics_.returns; psw_ = pop(); popPc(); return; }
-        if (mnemonic == "sleep" || mnemonic == "stop") fail(mnemonic + " halts the processor and is not modeled");
+        if (mnemonic == "stop") {
+            pc_ = decoded.next;
+            stopped_ = true;
+            return;
+        }
+        if (mnemonic == "sleep") fail("sleep waits for an interrupt and is not modeled");
 
         pc_ = decoded.next;
 

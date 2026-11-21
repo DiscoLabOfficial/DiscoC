@@ -354,6 +354,10 @@ R6 remains a volatile scratch register during
 execution, not a persistent error flag. These checks validate the GSU-visible
 address domain, not actual cartridge capacity, object lifetime, or array bounds.
 
+On SPC700 the same categories are reported through the fault channel instead
+of R6: the program writes the code to APU port 1 (`$F5`), then `$FA` to port 0
+(`$F4`), and executes `STOP`; see [SPC700 target](spc700-target.md).
+
 There is no `near` keyword: near reach is the default. Layout queries such as
 `sizeof` are specified in section 11.
 

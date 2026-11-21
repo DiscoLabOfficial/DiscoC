@@ -172,7 +172,14 @@ void selfTest() {
     expectFailure(program({0xE5, 0xD0, 0xFF}), "while the IPL ROM is mapped");
     expectFailure(program({0x8F, 0x00, 0xF0}), "unsupported register $00F0");
     expectFailure(program({0xE4, 0xF1}), "write-only or unsupported register $00F1");
-    expectFailure({0xEF}, "sleep halts the processor");
+    expectFailure({0xEF}, "sleep waits for an interrupt");
+    {   // Fault channel: code on port 1, $FA on port 0, then STOP halts.
+        Machine m({0x8F, 0x06, 0xF5, 0x8F, 0xFA, 0xF4, 0xFF, 0x00}, 0x0200);
+        m.start(0x0200);
+        m.run(100);
+        require(m.stopped() && !m.returnedToIpl() && m.outputPort(0) == 0xFA && m.outputPort(1) == 0x06 &&
+            m.pc() == 0x0207, "STOP fault channel");
+    }
     expectFailure({0x2F, 0xFE}, "exceeded the instruction limit", 100);
     {   // Unmapping the IPL turns $FFC0 into ordinary RAM: jumping there no
         // longer returns, and fetching outside the payload fails closed.
@@ -353,6 +360,9 @@ int runGeneric(const std::vector<std::string>& args) {
     std::vector<std::pair<std::uint16_t, std::uint8_t>> seeds;
     std::vector<std::pair<unsigned, std::uint8_t>> inputs;
     std::vector<std::function<void(const Machine&)>> checks;
+    // A run must end the way the test expects: by default it returns to the
+    // IPL; --fault N expects the runtime fault channel instead.
+    bool expect_fault = false;
     const auto need = [&](std::size_t& index, std::size_t count) {
         if (index + count >= args.size()) throw std::runtime_error(args[index] + " needs " + std::to_string(count) + " value(s)");
     };
@@ -398,6 +408,19 @@ int runGeneric(const std::vector<std::string>& args) {
                 require(actual == expected, "register " + name + ": expected " + hex(expected) + ", got " + hex(actual));
             });
             index += 2;
+        } else if (option == "--fault") {
+            need(index, 1);
+            const auto code = parseNumber(args[++index], 0xFF);
+            expect_fault = true;
+            checks.push_back([=](const Machine& m) {
+                require(m.stopped() && m.outputPort(0) == 0xFA,
+                    "expected fault " + std::to_string(code) + ", but the program " +
+                    (m.returnedToIpl() ? "returned to the IPL" : "did not stop through the fault channel"));
+                require(m.outputPort(1) == code, "fault code: expected " + std::to_string(code) + ", got " +
+                    std::to_string(m.outputPort(1)));
+            });
+        } else if (option == "--returned-to-ipl") {
+            checks.push_back([](const Machine& m) { require(m.returnedToIpl(), "program did not return to the IPL"); });
         } else if (option == "--port") {
             need(index, 2);
             const auto port = parseNumber(args[index + 1], 3);
@@ -420,6 +443,9 @@ int runGeneric(const std::vector<std::string>& args) {
         machine.start(entry);
         for (const auto& input : inputs) machine.setInputPort(input.first, input.second);
         machine.run(limit);
+        if (!expect_fault && !machine.returnedToIpl())
+            throw std::runtime_error("program stopped with fault code " + std::to_string(machine.outputPort(1)) +
+                                     " (port 0 = " + hex(machine.outputPort(0)) + ")");
         for (const auto& check : checks) check(machine);
     }
     if (!dump.empty()) {
@@ -449,7 +475,7 @@ int main(int argc, char* argv[]) {
         }
         if (args.empty()) throw std::runtime_error(
             "usage: disco_spc700_execution_tests --self-test | --emit-torture <seed> <first> <count> | "
-            "<payload> <origin> [options] <expectations>");
+            "<payload> <origin> [options] <expectations> (--fault N expects the fault channel)");
         return runGeneric(args);
     } catch (const std::exception& error) {
         std::cerr << "SPC700 execution test failed: " << error.what() << '\n';

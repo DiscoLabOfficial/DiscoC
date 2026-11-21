@@ -121,6 +121,18 @@ through the IPL protocol, runs it twice and records both results.
 Without `--init-runtime`, static RAM needs `--host-initialized-globals`, and
 the host owns all initialization.
 
+## Fault channel
+
+Run-time checks report failures with the codes of the language
+specification's fault table (1 misaligned, 2 invalid address or stack, 3
+address overflow, 4 far-to-near mismatch, 5 shift count, 6 division by zero).
+A failing check writes the code to port 1 (`$F5`), then `$FA` to port 0
+(`$F4`), and executes `STOP`. The host sees `$FA` on `$2140` where a finished
+program shows the IPL's `$AA`, reads the code from `$2141`, and must reset the
+APU before running anything again: frames are not unwound and `main` has not
+completed. `tests/spc700_host/upload.asm` records such a stop as status `$02`
+with the code. The constants live in `SPC700Target::Fault`.
+
 ## Command-line configuration
 
 The target is selected on the command line:

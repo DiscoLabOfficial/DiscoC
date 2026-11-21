@@ -95,6 +95,23 @@ struct Runtime {
     static constexpr std::uint8_t ControlIplMapped = 0x80;
 };
 
+// Fault channel for generated run-time checks, the SPC700 counterpart of the
+// GSU's R6 fault code: the program writes the code to port 1, then the marker
+// to port 0, and executes STOP. The host sees $FA where a finished program
+// would show the IPL's $AA, reads the code and must reset the APU to run
+// again. Codes match the language specification's fault table.
+struct Fault {
+    static constexpr std::uint16_t CodePort = 0x00F5;
+    static constexpr std::uint16_t MarkerPort = 0x00F4;
+    static constexpr std::uint8_t Marker = 0xFA;
+    static constexpr std::uint8_t Misaligned = 1;
+    static constexpr std::uint8_t InvalidAddress = 2;  // Null, out of range, or stack overflow.
+    static constexpr std::uint8_t AddressOverflow = 3; // Member/offset leaves the object's address range.
+    static constexpr std::uint8_t PointerKind = 4;     // Far-to-near mismatch (far is unavailable on SPC700).
+    static constexpr std::uint8_t ShiftCount = 5;
+    static constexpr std::uint8_t DivideByZero = 6;
+};
+
 // Address ranges no linked SPC700 code, data or static RAM may occupy.
 struct ReservedRegion {
     std::uint16_t begin;

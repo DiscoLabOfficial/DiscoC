@@ -7,16 +7,20 @@
 ; payload.bin must be next to this file or on the include path.
 ;
 ; Mailbox in WRAM (read by the emulator after the run):
-;   $7E0000 status: $01 = both runs returned to the IPL
+;   $7E0000 status: $01 = both runs returned to the IPL,
+;                   $02 = run 1 stopped through the fault channel
 ;   $7E0002 result of run 1 ($2142/$2143 after the IPL handshake)
 ;   $7E0004 result of run 2
+;   $7E0006 fault code ($2141) when status is $02
 ;
 ; IPL protocol: the IPL announces $AA/$BB on ports 0/1. A block starts with
 ; the address on ports 2/3, a nonzero byte on port 1 and $CC on port 0; each
 ; data byte is written to port 1 with its index on port 0 and is echoed on
 ; port 0. A zero port 1 with a new port 0 value starts execution at the
 ; address on ports 2/3. A program returning to the IPL makes it announce
-; $AA/$BB again, which is the completion signal used here.
+; $AA/$BB again, which is the completion signal used here. A program that
+; fails a run-time check writes its fault code to port 1 and $FA to port 0,
+; then executes STOP; the host records it and does not run again.
 
 .MEMORYMAP
   DEFAULTSLOT 0
@@ -64,6 +68,7 @@
 .DEFINE TEST_STATUS $7E0000
 .DEFINE TEST_RESULT1 $7E0002
 .DEFINE TEST_RESULT2 $7E0004
+.DEFINE TEST_FAULT $7E0006
 
 .BANK 0 SLOT 0
 .ORG 0
@@ -120,16 +125,19 @@ upload_loop:
   cpx #payload_end-payload
   bne upload_loop
 
-  ; Start: entry address, zero port 1, index + 2 on port 0 (never $AA, so
-  ; the completion handshake cannot be confused with the start echo).
+  ; Start: entry address, zero port 1, index + 2 on port 0 (never $AA or
+  ; $FA, so neither signal can be confused with the start echo).
   txa
   inc a                ; last index + 2
   beq bump_start
   cmp #$AA
+  beq bump_start
+  cmp #$FA
   bne +
 bump_start:
   inc a
 + jsr start_and_wait
+  bcs faulted
   rep #$20
   .ACCU 16
   lda APUIO2
@@ -141,6 +149,7 @@ bump_start:
   ; jumps straight to the entry address.
   lda #$CC
   jsr start_and_wait
+  bcs faulted
   rep #$20
   .ACCU 16
   lda APUIO2
@@ -153,8 +162,15 @@ bump_start:
 done:
   bra done
 
+faulted:
+  lda APUIO1
+  sta.l TEST_FAULT
+  lda #$02
+  sta.l TEST_STATUS
+  bra done
+
 ; A = port 0 command value. Starts SPC_ENTRY and waits until the program
-; has returned to the IPL.
+; has returned to the IPL (carry clear) or stopped with a fault (carry set).
 start_and_wait:
   pha
   rep #$20
@@ -172,7 +188,17 @@ start_and_wait:
   ; before the program returns: a restarted IPL that still saw $CC there
   ; would take it as a new command and run the program again.
   stz APUIO0
-  jsr wait_ipl_ready
+- lda APUIO0
+  cmp #$FA
+  beq +
+  cmp #$AA
+  bne -
+  lda APUIO1
+  cmp #$BB
+  bne -
+  clc
+  rts
++ sec
   rts
 
 wait_ipl_ready:
