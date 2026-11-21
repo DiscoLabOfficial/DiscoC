@@ -78,3 +78,17 @@ file(SIZE "${TEST_DIR}/frames.bin" payload_bytes)
 math(EXPR small_top "(0x0200 + ${payload_bytes} + 400 + 1) / 2 * 2")
 run_command("${DISCLD}" "${TEST_DIR}/frames.o" --init-runtime --stack-pointer "${small_top}" -o "${TEST_DIR}/frames-small.bin")
 run_command("${SPC700_RUNNER}" "${TEST_DIR}/frames-small.bin" 0x0200 --fault 2)
+
+# Over-aligned locals: the object base is rounded up inside its reserved
+# padding, while a pointer slot to the type stays word aligned. main returns
+# a failure mask, so 0 on poisoned RAM at every level and on the GSU.
+set(overaligned "${ROOT_DIR}/tests/fixtures/spc700/codegen_overaligned.dc")
+foreach(level IN ITEMS 0 1 2 s)
+    run_command("${DISCC}" --target spc700 "-O${level}" "${overaligned}" -o "${TEST_DIR}/overaligned-O${level}.o")
+    run_command("${DISCLD}" "${TEST_DIR}/overaligned-O${level}.o" --init-runtime -o "${TEST_DIR}/overaligned-O${level}.bin")
+    run_command("${SPC700_RUNNER}" "${TEST_DIR}/overaligned-O${level}.bin" 0x0200 --fill 0xEE --runs 2 --register ya 0)
+endforeach()
+run_command("${DISCC}" "${overaligned}" -o "${TEST_DIR}/overaligned-gsu.o")
+run_command("${DISCLD}" "${TEST_DIR}/overaligned-gsu.o" --init-runtime --ram-bank 0 --stack-pointer 0x3000
+    -o "${TEST_DIR}/overaligned-gsu.bin")
+run_command("${GSU_RUNNER}" "${TEST_DIR}/overaligned-gsu.bin" 0x008000 --register 0 0 --register 6 0)
