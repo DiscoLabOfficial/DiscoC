@@ -241,11 +241,11 @@ target's placement settings. Common runtime/output configuration remains shared.
 GSU address windows, alignment, relocation spans, stack/payload overlaps, and
 bank boundaries are checked by the existing compiler/linker rules.
 
-`spc700` currently supports project `--check` and one-source IR inspection only;
-project emission fails before creating outputs because there is no SPC700 code
-generator yet. `discld` implements the SPC700 runtime and placement contract
-([SPC700 target](spc700-target.md)) for assembled objects; manifest settings
-for its stack and RAM placement arrive with code generation.
+`spc700` currently supports project `--check` and one-source IR inspection;
+project emission fails before creating outputs. Compile single sources with
+`discc --target spc700` and link them with `discld` and its SPC700 runtime and
+placement options ([SPC700 target](spc700-target.md)); manifest settings for
+the SPC700 stack and RAM placement, and project builds, are later work.
 
 ## TOML support and limits
 

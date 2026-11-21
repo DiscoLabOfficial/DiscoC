@@ -100,9 +100,12 @@ rules rather than silently adopt C semantics.
 - [x] SPC700 ABI and runtime contract: software stack with frame pointer,
   reserved direct page, flat static RAM placement, `--init-runtime` startup
   returning to the IPL, and an instruction-level execution model.
+- [x] Baseline SPC700 compiler backend (unoptimized IR, frame slots, checked
+  pointers and arithmetic, fault channel), validated by the shared
+  differential programs against the integer oracle.
 
 GSU binaries are fixed-origin payloads, not complete SNES ROMs or arbitrarily
-relocatable routines. SPC700 assembly and linking work; SPC700 compiler code generation is not implemented. See
+relocatable routines. SPC700 assembly, linking and baseline code generation work. See
 [GSU loading](docs/gsu-loading.md) and the
 [SPC700 foundation](docs/spc700-target.md) for the current boundaries.
 
@@ -173,12 +176,15 @@ GSU-specific banks or invent manifest settings ahead of implementation.
 
 ### 3. IR lowering and executable language coverage
 
-- [ ] Lower byte/word/bool values, RAM loads/stores, comparisons, branches,
+- [x] Lower byte/word/bool values, RAM loads/stores, comparisons, branches,
   direct calls, and returns from the shared verified IR.
-- [ ] Preserve signedness, modular arithmetic, short-circuit evaluation, and
+- [x] Preserve signedness, modular arithmetic, short-circuit evaluation, and
   observable volatile access on an 8-bit backend.
-- [ ] Extend operators, pointers, globals, arrays, and structures in tested
-  increments; maintain an explicit supported-lowering matrix.
+- [x] Extend operators, pointers, globals, arrays, and structures in tested
+  increments; maintain an explicit supported-lowering matrix
+  ([SPC700 code generation](docs/spc700-target.md#code-generation)).
+- [ ] Compile optimized IR (O1/O2/Os) for SPC700 and allocate values to
+  direct-page registers instead of frame slots, with measurements.
 - [ ] Validate portable core library modules through execution, not just
   frontend acceptance.
 

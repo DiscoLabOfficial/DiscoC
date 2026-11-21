@@ -200,6 +200,19 @@ output each time. With Luna available, `spc700_luna_runtime` uploads the same
 payload through the IPL, starts it twice and checks both results and the static
 RAM on the emulator.
 
+`spc700_differential_O0` compiles the 32 generated differential programs of
+`gsu_differential_*` for SPC700 (the observation window moves from `$0100`,
+the SPC700 hardware stack page, to `$C000`), links them with
+`--init-runtime` and runs them in the SPC700 model. Results, fault codes, the
+final window contents and per-byte volatile read/write counts must match the
+independent integer oracle; a GSU word access counts once, an SPC700 word
+access once per byte. Direct objects, `--emit-asm` reassembly and the linked
+listing must produce the same payload. `spc700_codegen` checks a structs,
+arrays, rom/string and globals program against the GSU result, pointer faults
+1–3, hardware and software stack guards, the SPC700 object target and all
+optimization levels. Run more seeds with
+`cmake -DSEED=<n> -DDISCC=... -DDISCAS=... -DDISCLD=... -DDIFFERENTIAL_RUNNER=<disco_spc700_differential_tests> -DOUTPUT_DIR=<dir> -P tests/run_spc700_differential.cmake`.
+
 `gsu_runtime_loading` links multi-file programs at `$70:6000`, `$70:0000`, and
 `$71:6000`, verifies hand-encoded bootstrap bytes, and starts the instruction
 model with deliberately incorrect RAMBR/R10 state. It checks both data banks,
@@ -904,7 +917,9 @@ They require Clang with libFuzzer support; use a separate build directory.
   `Optimizer`, IR lowering and `IRVerifier`, then the GSU code generator and
   assembly listing at `-O0`, `-O1`, `-O2` and `-Os`, plus the `--check` /
   `--emit-ir` global optimization of `-O2` and `-Os`. SPC700 runs through
-  analysis and IR verification. Inputs larger than 4096 bytes are skipped, and
+  analysis, IR verification, the SPC700 code generator and its assembly
+  export; an internal compiler error there (including generated text the
+  SPC700 assembler rejects) is a defect. Inputs larger than 4096 bytes are skipped, and
   units with imports stop after parsing because the fuzzer has no files to
   import.
 
