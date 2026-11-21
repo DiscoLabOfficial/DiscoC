@@ -1110,11 +1110,20 @@ void IRCodeGenerator::emitStoreIndirect(const IRInstruction& instruction) {
         return;
     }
 
-    if (instruction.operation == "declare") {
+    // The declaration fast path parks the value in a register while the
+    // address is materialized. Unchecked code reaches it only with an Address
+    // chain (a pointer offset or any other pointer value selects checked
+    // mode). A root address outside plotting leaves the R1 scratch intact.
+    // Member displacement uses the scratch itself, and the plotting scratch
+    // R3 is also the frame and alignment temporary, so those park in R6:
+    // Address lowering only writes R0, R1 and R3.
+    if (instruction.operation == "declare" && target.opcode == IROpcode::Address) {
+        const bool root_scratch = !m_isInPlottingContext && target.operation.empty();
+        const auto holder = root_scratch ? scratchRegister() : static_cast<std::uint8_t>(Register::R6_LMULT_HI);
         materialize(value);
-        emitMove(static_cast<Register>(scratchRegister()), 0);
+        emitMove(static_cast<Register>(holder), 0);
         materialize(address);
-        emitStore(Register::R0, scratchRegister(), byte);
+        emitStore(Register::R0, holder, byte);
         return;
     }
 
