@@ -1,6 +1,6 @@
 // libFuzzer target for the compiler pipeline after parsing: semantic analysis,
-// AST optimization, IR lowering and verification, IR global optimization and
-// GSU code generation at every optimization level.
+// AST optimization, IR lowering and verification, IR global optimization, GSU
+// code generation at every optimization level and SPC700 code generation.
 //
 // Oracle: CompilerError and std::runtime_error are the compiler's diagnostics
 // for malformed or unsupported source and are expected. Any other exception
@@ -20,6 +20,7 @@
 #include "Optimizer.hpp"
 #include "Parser.hpp"
 #include "Placement.hpp"
+#include "SPC700CodeGenerator.hpp"
 #include "TargetConfig.hpp"
 
 #include <cstddef>
@@ -140,6 +141,21 @@ void generate(const AnalyzedUnit& unit, CompilerConfig config, OptimizationLevel
     }
 }
 
+// The SPC700 backend assembles its own text: an assembler rejection there is
+// a backend defect, reported as an internal compiler error.
+void generateSPC700(const AnalyzedUnit& unit, const CompilerConfig& config) {
+    try {
+        SPC700CodeGenerator generator(unit.analyzer->getAllLocalSymbols(), unit.analyzer->getFunctionSymbols(),
+            unit.data, config);
+        const auto object = generator.generate(unit.ir);
+        (void)AssemblyGenerator(object).generate();
+    } catch (const CompilerError& error) {
+        if (error.getMessage().find("Internal Compiler Error") != std::string::npos)
+            reportDefect("SPC700 code generation", error.what());
+    } catch (const std::runtime_error&) {
+    }
+}
+
 CompilerConfig configFor(TargetKind target) {
     CompilerConfig config;
     config.target = target;
@@ -161,7 +177,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
             generate(*unit, gsu, level);
     }
 
-    // SPC700 has a target model and IR lowering but no code generator yet.
-    (void)analyze(source, configFor(TargetKind::SPC700));
+    const auto spc700 = configFor(TargetKind::SPC700);
+    if (const auto unit = analyze(source, spc700)) generateSPC700(*unit, spc700);
     return 0;
 }

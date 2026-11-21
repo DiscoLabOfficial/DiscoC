@@ -46,7 +46,7 @@ public:
     // `fill` initializes the rest of RAM so tests notice reads of state the
     // program never wrote.
     Machine(const std::vector<std::uint8_t>& payload, std::uint16_t origin, std::uint8_t fill = 0)
-        : ram_(0x10000, fill), origin_(origin), size_(payload.size()) {
+        : ram_(0x10000, fill), reads_(0x10000, 0), writes_(0x10000, 0), origin_(origin), size_(payload.size()) {
         if (payload.empty() || payload.size() > 0x10000u - origin)
             throw std::runtime_error("SPC700 payload does not fit in the 64 KiB address space");
         for (std::size_t index = 0; index < payload.size(); ++index) ram_[origin + index] = payload[index];
@@ -107,6 +107,10 @@ public:
     void setInputPort(unsigned port, std::uint8_t value) { in_.at(port) = value; }
     std::uint8_t outputPort(unsigned port) const { return out_.at(port); }
     std::uint8_t dspRegister(std::uint8_t index) const { return dsp_.at(index & 0x7F); }
+    // Data reads and writes per address (instruction fetches are not counted),
+    // accumulated over every run of this machine.
+    std::uint32_t reads(std::uint16_t address) const { return reads_[address]; }
+    std::uint32_t writes(std::uint16_t address) const { return writes_[address]; }
     const ExecutionMetrics& metrics() const { return metrics_; }
     const std::vector<std::uint8_t>& memory() const { return ram_; }
 
@@ -121,6 +125,7 @@ private:
     // Heap-allocated: tests create many machines, and 64 KiB each would
     // exhaust small default thread stacks (1 MiB on Windows).
     std::vector<std::uint8_t> ram_;
+    std::vector<std::uint32_t> reads_, writes_;
     std::array<std::uint8_t, 128> dsp_{};
     std::array<std::uint8_t, 4> in_{}, out_{};
     std::uint16_t origin_;
@@ -151,12 +156,14 @@ private:
 
     std::uint8_t read(std::uint16_t address) {
         ++metrics_.loads;
+        ++reads_[address];
         if (address >= 0xF0 && address <= 0xFF) return readIo(address);
         if (ipl_mapped_ && address >= IplEntry) fail("read of $" + hex(address) + " while the IPL ROM is mapped");
         return ram_[address];
     }
     void write(std::uint16_t address, std::uint8_t value) {
         ++metrics_.stores;
+        ++writes_[address];
         if (address >= 0xF0 && address <= 0xFF) {
             writeIo(address, value);
             return;

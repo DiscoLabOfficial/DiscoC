@@ -1,0 +1,37 @@
+// SPC700 code generation fixture: packed structs, arrays of structs, pointer
+// arrays, rom tables, strings, initialized and zeroed globals, bool and signed
+// byte conversions. The same program runs on GSU and SPC700 and must return
+// the same value on both (316).
+@packed struct Pixel { u8 x; u8 y; u8 shade; };
+struct State { struct Pixel points[2]; word count; };
+struct Pair { word a; byte b; };
+
+rom const word table[] = {10, 20, 30, 40};
+rom const byte text[] = "PLAYER";
+export struct Pair global_pair = {7, 3};
+internal word calls = 0;
+ram byte message[] = "READY";
+
+void update(struct State* state) { state->points[1].shade = (u8)15; state->count++; }
+word bump() { calls++; return calls; }
+
+word main() {
+    struct State states[2] = {{{{1, 2, 3}, {4, 5, 6}}, 2}, {}};
+    update(&states[0]);
+    struct Pair one = {7, 3};
+    word* pointers[2] = {&one.a, null};
+    *pointers[0] += 100;
+    word total = (word)states[0].points[1].shade + states[0].count + one.a - 107 + (word)states[1].count;
+    for (word i = 0; i < 4; i++) { total += table[i]; }
+    total += (word)text[1];
+    message[0] = 'r';
+    total += (word)message[0];
+    total += global_pair.a + (word)global_pair.b;
+    bump();
+    total += bump();
+    bool flag = total > 300;
+    total += (word)flag;
+    byte negative = (byte)(0 - 5);
+    total += (word)negative;
+    return total;
+}
