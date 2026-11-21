@@ -127,6 +127,13 @@ The assembler supports the instruction forms currently emitted by `AssemblyGener
 
 The accepted operand forms are intentionally constrained. For example, indirect memory operands use `(rN)`, registers use `r0` through `r15`, and immediate arithmetic values are limited to the ranges defined by the GSU encoding.
 
+Arithmetic and logic instructions follow `casfx.inc`. `#n` uses ALT2 for
+`add`, `sub`, `mult`, `and` and `or`, and ALT3 for `adc`, `umult`, `bic` and
+`xor`; `sbc` and `cmp` have no immediate form. `and`, `bic`, `or` and `xor`
+accept `#1`-`#15` and `r1`-`r15`, the others `#0`-`#15` and `r0`-`r15`. The
+convenience forms `op rD, x` and `op rD, rD, x` emit `with rD` (nothing for
+R0) followed by exactly the encoding of `op x`.
+
 ## Relocations
 
 When an instruction references a symbol that is not a numeric literal, `discas` leaves an address placeholder and records a relocation in the object file. Examples include:

@@ -459,75 +459,61 @@ private:
         return 2;
     }
 
+    // One row per ALU mnemonic, from casfx.inc and the GSU manual: the operand
+    // n (register Rn or immediate #n) is encoded as `base + n`.
+    struct ArithmeticForm {
+        const char* mnemonic;
+        uint8_t base;
+        uint8_t register_prefix;  // 0 = none, else ALT1 ($3D) or ALT3 ($3F)
+        uint8_t immediate_prefix; // ALT2 ($3E) or ALT3 ($3F); 0 = no #n form
+        int minimum;              // AND/BIC/OR/XOR have no R0 or #0 form
+    };
+
+    static const ArithmeticForm* arithmeticForm(const std::string& op) {
+        static const ArithmeticForm forms[] = {
+            {"add", 0x50, 0x00, 0x3e, 0}, {"adc", 0x50, 0x3d, 0x3f, 0},
+            {"sub", 0x60, 0x00, 0x3e, 0}, {"sbc", 0x60, 0x3d, 0x00, 0},
+            {"cmp", 0x60, 0x3f, 0x00, 0},
+            {"mult", 0x80, 0x00, 0x3e, 0}, {"umult", 0x80, 0x3d, 0x3f, 0},
+            {"and", 0x70, 0x00, 0x3e, 1}, {"bic", 0x70, 0x3d, 0x3f, 1},
+            {"or", 0xc0, 0x00, 0x3e, 1}, {"xor", 0xc0, 0x3d, 0x3f, 1},
+        };
+        for (const auto& form : forms)
+            if (op == form.mnemonic) return &form;
+        return nullptr;
+    }
+
+    // Emits the operation itself for operand `text` (Rn or #n); every syntax
+    // (`op x`, `op rD, x`, `op rD, rD, x`) shares this single encoding.
+    static std::size_t encodeArithmeticOperand(const ArithmeticForm& form, const std::string& text,
+                                               const ParsedLine& line, std::vector<uint8_t>* out) {
+        std::int64_t value = 0;
+        if (parseNumber(text, value)) {
+            if (!form.immediate_prefix) fail("this arithmetic operation has no immediate form.", line.line_number);
+            if (value < form.minimum || value > 15) fail("immediate arithmetic value is out of range.", line.line_number);
+            emitByte(out, form.immediate_prefix);
+            emitByte(out, static_cast<uint8_t>(form.base + value));
+            return 2;
+        }
+        const int reg = requireRegister(text, line);
+        if (reg < form.minimum) fail("register R0 is not valid for this operation.", line.line_number);
+        if (form.register_prefix) emitByte(out, form.register_prefix);
+        emitByte(out, static_cast<uint8_t>(form.base + reg));
+        return form.register_prefix ? 2 : 1;
+    }
+
     static std::size_t encodeArithmetic(const ParsedLine& line, std::vector<uint8_t>* out) {
-        const auto& op = line.operation;
-        uint8_t base = 0;
-        bool immediate_alt1 = false;
-        bool immediate_alt3 = false;
-        bool register_alt1 = false;
-        bool register_alt3 = false;
-        if (op == "add" || op == "adc") { base = 0x50; register_alt1 = op == "adc"; immediate_alt3 = op == "adc"; }
-        else if (op == "sub" || op == "sbc") { base = 0x60; register_alt1 = op == "sbc"; }
-        else if (op == "mult" || op == "umult") { base = 0x80; register_alt1 = op == "umult"; immediate_alt3 = op == "umult"; }
-        else if (op == "cmp") { base = 0x60; register_alt3 = true; }
-        else if (op == "and" || op == "or") { base = op == "and" ? 0x71 : 0xc1; immediate_alt1 = false; }
-        else if (op == "bic" || op == "xor") { base = op == "bic" ? 0x71 : 0xc1; register_alt1 = true; immediate_alt1 = true; }
-        else return 0;
-
-        if (line.operands.size() == 1) {
-            std::int64_t value = 0;
-            if (parseNumber(line.operands[0], value)) {
-                if (op == "cmp" || op == "sbc") fail("this arithmetic operation has no immediate form.", line.line_number);
-                if (value < (op == "and" || op == "or" || op == "bic" || op == "xor" ? 1 : 0) || value > 15) fail("immediate arithmetic value is out of range.", line.line_number);
-                if (immediate_alt1) emitByte(out, 0x3d);
-                else if (immediate_alt3) emitByte(out, 0x3f);
-                else emitByte(out, 0x3e);
-                emitByte(out, static_cast<uint8_t>(base + value - ((op == "and" || op == "or" || op == "bic" || op == "xor") ? 1 : 0)));
-                return 2;
-            }
-            const int reg = requireRegister(line.operands[0], line);
-            if (reg == 0 && (op == "and" || op == "or" || op == "bic" || op == "xor")) fail("register R0 is not valid for this operation.", line.line_number);
-            if (register_alt1) emitByte(out, 0x3d);
-            if (register_alt3) emitByte(out, 0x3f);
-            emitByte(out, static_cast<uint8_t>(base + (op == "and" || op == "or" || op == "bic" || op == "xor" ? reg - 1 : reg)));
-            return 1 + (register_alt1 ? 1 : 0) + (register_alt3 ? 1 : 0);
-        }
-
-        if (line.operands.size() == 2) {
-            const int dest = requireRegister(line.operands[0], line);
-            std::int64_t parsed_immediate = 0;
-            if (parseNumber(line.operands[1], parsed_immediate)) {
-                if (dest != 0) emitByte(out, static_cast<uint8_t>(0x20 + dest));
-                if (parsed_immediate < 0 || parsed_immediate > 15 || op == "cmp") fail("invalid two-operand immediate arithmetic form.", line.line_number);
-                emitByte(out, 0x3e);
-                emitByte(out, static_cast<uint8_t>(base + parsed_immediate));
-                return 2 + (dest != 0 ? 1 : 0);
-            }
-            const int source = requireRegister(line.operands[1], line);
-            if (dest != 0) emitByte(out, static_cast<uint8_t>(0x20 + dest));
-            if (register_alt1) emitByte(out, 0x3d);
-            if (register_alt3) emitByte(out, 0x3f);
-            emitByte(out, static_cast<uint8_t>(base + (op == "and" || op == "or" || op == "bic" || op == "xor" ? source - 1 : source)));
-            return 1 + (dest != 0 ? 1 : 0) + (register_alt1 ? 1 : 0) + (register_alt3 ? 1 : 0);
-        }
-
-        requireOperands(line, 3);
+        const auto* form = arithmeticForm(line.operation);
+        if (!form) return 0;
+        if (line.operands.size() == 1) return encodeArithmeticOperand(*form, line.operands[0], line, out);
+        // `op rD, x` and `op rD, rD, x` select rD as source and destination
+        // with WITH (omitted for R0, the default) before the operation.
+        if (line.operands.size() != 2) requireOperands(line, 3);
         const int dest = requireRegister(line.operands[0], line);
-        const int left = requireRegister(line.operands[1], line);
-        if (dest != left) fail("three-operand arithmetic requires destination and left operand to match.", line.line_number);
+        if (line.operands.size() == 3 && requireRegister(line.operands[1], line) != dest)
+            fail("three-operand arithmetic requires destination and left operand to match.", line.line_number);
         if (dest != 0) emitByte(out, static_cast<uint8_t>(0x20 + dest));
-        std::int64_t immediate = 0;
-        if (parseNumber(line.operands[2], immediate)) {
-            if (op == "cmp" || op == "sbc" || immediate < 0 || immediate > 15) fail("immediate arithmetic value is out of range.", line.line_number);
-            emitByte(out, 0x3e);
-            emitByte(out, static_cast<uint8_t>(base + immediate));
-            return 2 + (dest != 0 ? 1 : 0);
-        }
-        const int source = requireRegister(line.operands[2], line);
-        if (register_alt1) emitByte(out, 0x3d);
-        if (register_alt3) emitByte(out, 0x3f);
-        emitByte(out, static_cast<uint8_t>(base + (op == "and" || op == "or" || op == "bic" || op == "xor" ? source - 1 : source)));
-        return 1 + (dest != 0 ? 1 : 0) + (register_alt1 ? 1 : 0) + (register_alt3 ? 1 : 0);
+        return (dest != 0 ? 1u : 0u) + encodeArithmeticOperand(*form, line.operands.back(), line, out);
     }
 };
 
