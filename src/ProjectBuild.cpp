@@ -104,9 +104,10 @@ int buildProject(const std::vector<std::string>& arguments) {
             else if (optionTakesValue(compile[index], Consumer::Compiler)) ++index;
         }
         if (require_no_spills && target != TargetKind::GSU)
-            throw std::runtime_error("Target 'spc700' does not support --require-no-spills: no code-generation backend is available.");
+            throw std::runtime_error("Target 'spc700' does not support --require-no-spills: the SPC700 backend has no register allocator yet.");
         if (!check && target != TargetKind::GSU)
-            throw std::runtime_error("Target 'spc700' has a target model but no code-generation backend yet; use build --check.");
+            throw std::runtime_error("Project builds for 'spc700' are not available yet; use build --check, or compile "
+                                     "with discc --target spc700 and link with discld.");
         CompilerConfig module_config; module_config.target = target;
         ModuleLoader modules; modules.prepare(sources, module_config, import_paths);
         for (const auto& dependency : modules.implementationOrder()) {

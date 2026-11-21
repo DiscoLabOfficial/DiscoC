@@ -13,6 +13,7 @@
 #include "AssemblyGenerator.hpp"
 #include "ASTPrinter.hpp"
 #include "IRCodeGenerator.hpp"
+#include "SPC700CodeGenerator.hpp"
 #include "IRGlobalOptimizer.hpp"
 #include "ABI.hpp"
 
@@ -138,7 +139,7 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
         if (config.short_ram_bytes && !config.static_stack_proof)
             throw std::runtime_error("--short-ram places static-frame slots and requires --static-stack-proof.");
         if (config.require_no_spills && config.target != TargetKind::GSU)
-            throw std::runtime_error("Target 'spc700' does not support --require-no-spills: no code-generation backend is available.");
+            throw std::runtime_error("Target 'spc700' does not support --require-no-spills: the SPC700 backend has no register allocator yet.");
         applyPlacement(config, placement);
         ModuleLoader loader;
         if (!modules) {
@@ -201,8 +202,6 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
             std::cout << dumpIR(ir); return 0;
         }
         if (check) return 0;
-        if (config.target != TargetKind::GSU)
-            throw CompilerError(std::string("Target '") + targetName(config.target) + "' has a target model but no code-generation backend yet.", 1, 1);
         if (output.empty()) {
             const auto dot = input.find_last_of('.');
             output = (dot == std::string::npos ? input : input.substr(0, dot)) + (emit_asm ? ".s" : ".o");
@@ -210,6 +209,22 @@ int runCompiler(std::vector<std::string> arguments, ModuleLoader* modules) {
         for (const auto& source : loaded.source_paths)
             if (DiscoProject::samePath(source, output)) throw std::runtime_error("Output path must not overwrite an input source/interface.");
         if (manifest) DiscoProject::protectManifest(*manifest, {output});
+        if (config.target == TargetKind::SPC700) {
+            // The SPC700 backend emits assembly text; the object is that text
+            // assembled, so both outputs describe the same bytes.
+            SPC700CodeGenerator generator(analyzer.getAllLocalSymbols(), analyzer.getFunctionSymbols(), data, config);
+            if (emit_asm) {
+                const auto text = generator.generateAssembly(ir);
+                std::ofstream file(output);
+                if (!file) throw std::runtime_error("Failed to open assembly output: " + output);
+                file << text; file.flush();
+                if (!file) throw std::runtime_error("Failed to write assembly output: " + output);
+            } else generator.generate(ir).write(output);
+            std::cout << "Successfully generated " << output << '\n';
+            return 0;
+        }
+        if (config.target != TargetKind::GSU)
+            throw CompilerError(std::string("Target '") + targetName(config.target) + "' has no code-generation backend.", 1, 1);
         IRCodeGenerator generator(analyzer.getAllLocalSymbols(), analyzer.getFunctionSymbols(), data, config);
         auto object = generator.generate(ir);
         if (emit_asm) {

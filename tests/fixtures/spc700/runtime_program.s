@@ -3,8 +3,8 @@
 ;
 ; Frames follow docs/spc700-target.md: with L bytes of locals, FP+0..1 hold
 ; the caller's FP, FP+2..FP+L+1 the locals and FP+L+2.. the arguments (first
-; argument lowest). Callers push arguments last to first and pop them after
-; the call. Values live across calls stay in the frame; $04-$0B are scratch.
+; argument lowest). Callers push arguments last to first, one word slot each
+; (a byte argument uses the slot's low byte), and pop them after the call. Values live across calls stay in the frame; $04-$0B are scratch.
 .setcpu "SPC700"
 .export main
 .segment "CODE"
@@ -29,9 +29,11 @@ main_alloc:
 
     mov a,#8                ; acc = fact(8) = $9D80
     decw $00
+    decw $00
     mov y,#0
     mov [$00]+y,a
     call !fact
+    incw $00
     incw $00
     movw $04,ya
     mov y,#2
@@ -43,9 +45,11 @@ main_alloc:
 
     mov a,#7                ; acc += f(7) = 22
     decw $00
+    decw $00
     mov y,#0
     mov [$00]+y,a
     call !f
+    incw $00
     incw $00
     call !acc_add
 
@@ -66,6 +70,7 @@ main_alloc:
     ; acc = add_word(acc, 5): push b, then the word a (low byte first).
     mov a,#5
     decw $00
+    decw $00
     mov y,#0
     mov [$00]+y,a
     mov y,#2
@@ -83,6 +88,7 @@ main_alloc:
     mov a,$05
     mov [$00]+y,a
     call !add_word
+    incw $00
     incw $00
     incw $00
     incw $00
@@ -130,9 +136,11 @@ f_alloc:
     mov y,#2
     mov a,[$02]+y           ; x
     decw $00
+    decw $00
     mov y,#0
     mov [$00]+y,a
     call !g
+    incw $00
     incw $00
     movw $04,ya
     incw $04
@@ -193,6 +201,7 @@ fact_alloc:
     jmp !epilogue
 fact_recurse:
     dec a
+    decw $00
     decw $00
     mov y,#0
     mov [$00]+y,a

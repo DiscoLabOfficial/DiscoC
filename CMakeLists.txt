@@ -134,7 +134,7 @@ endforeach()
 target_link_libraries(disco_linker_core PUBLIC disco_object_core disco_project_core)
 target_link_libraries(disco_frontend_core PUBLIC disco_project_core)
 
-target_link_libraries(disco_compiler_core PUBLIC disco_frontend_core disco_object_core)
+target_link_libraries(disco_compiler_core PUBLIC disco_frontend_core disco_object_core disco_assembler_core)
 target_link_libraries(disco_assembler_core PUBLIC disco_object_core)
 
 add_executable(discc src/discc.cpp src/CompilerDriver.cpp src/ProjectBuild.cpp)
@@ -163,7 +163,8 @@ if(DISCO_BUILD_FUZZERS)
     disco_add_fuzzer(disco_frontend_fuzzer tests/FrontendFuzzer.cpp
         ${DISCO_SOURCES_frontend} ${DISCO_SOURCES_assembler} ${DISCO_SOURCES_object} ${DISCO_SOURCES_project})
     disco_add_fuzzer(disco_compiler_fuzzer tests/CompilerFuzzer.cpp
-        ${DISCO_SOURCES_compiler} ${DISCO_SOURCES_frontend} ${DISCO_SOURCES_object} ${DISCO_SOURCES_project})
+        ${DISCO_SOURCES_compiler} ${DISCO_SOURCES_assembler} ${DISCO_SOURCES_frontend} ${DISCO_SOURCES_object}
+        ${DISCO_SOURCES_project})
 endif()
 
 include(CTest)
@@ -228,6 +229,9 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_executable(disco_spc700_execution_tests ${DISCO_SOURCES_disco_spc700_execution_tests})
     target_include_directories(disco_spc700_execution_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(disco_spc700_execution_tests PRIVATE disco_common_warnings disco_platform_options)
+    add_executable(disco_spc700_differential_tests ${DISCO_SOURCES_disco_spc700_differential_tests})
+    target_include_directories(disco_spc700_differential_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(disco_spc700_differential_tests PRIVATE disco_common_warnings disco_platform_options)
 
     # Keep the generator/oracle independent of all compiler/linker libraries.
     add_executable(disco_gsu_differential_tests ${DISCO_SOURCES_disco_gsu_differential_tests})
@@ -318,6 +322,14 @@ if(BUILD_TESTING AND NOT DISCO_DOS_BUILD)
     add_test(NAME spc700_execution_model COMMAND disco_spc700_execution_tests --self-test)
     set_tests_properties(spc700_execution_model PROPERTIES LABELS "spc700;execution;unit")
     add_test(NAME gsu_differential_oracle COMMAND disco_gsu_differential_tests --self-test)
+    add_test(NAME spc700_differential_oracle COMMAND disco_spc700_differential_tests --self-test)
+    set_tests_properties(spc700_differential_oracle PROPERTIES LABELS "spc700;differential;unit" TIMEOUT 30)
+    add_test(NAME spc700_differential_O0 COMMAND ${CMAKE_COMMAND}
+        -DDISCC=$<TARGET_FILE:discc> -DDISCAS=$<TARGET_FILE:discas> -DDISCLD=$<TARGET_FILE:discld>
+        -DDIFFERENTIAL_RUNNER=$<TARGET_FILE:disco_spc700_differential_tests> -DOPTIMIZATION=0
+        -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-output/spc700-differential-O0
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_spc700_differential.cmake)
+    set_tests_properties(spc700_differential_O0 PROPERTIES LABELS "spc700;differential;correctness" TIMEOUT 900)
     set_tests_properties(gsu_differential_oracle PROPERTIES LABELS "gsu;differential;unit" TIMEOUT 30)
     foreach(level IN ITEMS 0 1 2 s)
         # Sanitized Debug builds must not share one timeout across 32 programs.
