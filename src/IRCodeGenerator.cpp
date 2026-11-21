@@ -462,8 +462,8 @@ void IRCodeGenerator::emitAddress(const IRInstruction& instruction) {
                     emitImmediateArithmetic(OpCode::SUB_R, std::abs(symbol->second.stackOffset), instruction.source);
                 }
             }
-            if (symbol->second.type.alignment > 2) {
-                const auto alignment = symbol->second.type.alignment;
+            if (frameAlignment(symbol->second.type) > 2) {
+                const auto alignment = frameAlignment(symbol->second.type);
                 emitImmediateArithmetic(OpCode::ADD_R, alignment - 1, instruction.source);
                 emitRegisterLiteral(3, static_cast<std::uint16_t>(~(alignment - 1)));
                 emitByte(0x73); // AND R3 rounds this allocation's padded base upward.
