@@ -35,3 +35,13 @@ spc700_step("${LUNA}" state host.sfc --until-frame 120 --no-render
     --assert 7E:0000=01 --assert 7E:0002=CF9D --assert 7E:0004=CF9D
     --assert-aram 4000=0100112200331840
     --out luna.json)
+
+# Fault channel: a program that stops with code 6 must be reported as a fault
+# (status $02, code $06) and not be started a second time.
+file(WRITE "${TEST_DIR}/fault.s" ".setcpu \"SPC700\"\n.segment \"CODE\"\n    mov $F5,#$06\n    mov $F4,#$FA\n    stop\n")
+spc700_step("${DISCAS}" fault.s -o fault.o)
+spc700_step("${DISCLD}" fault.o -o payload.bin)
+spc700_step("${WLA_65816}" -D SPC_ORIGIN=$0200 -D SPC_ENTRY=$0200 -o host.o upload.asm)
+spc700_step("${WLALINK}" -r link.txt host.sfc)
+spc700_step("${LUNA}" state host.sfc --until-frame 60 --no-render
+    --assert 7E:0000=02 --assert 7E:0006=06 --out fault.json)

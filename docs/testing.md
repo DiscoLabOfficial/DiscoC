@@ -173,7 +173,9 @@ ends a run, and each run starts with the IPL hand-off state (SP `$EF`,
 `$0001-$00EF` cleared, `$0000/$0001` = start address). The runner takes
 `<payload> <origin>` plus `--entry`, `--fill`, `--ram`, `--input-port`,
 `--limit`, `--runs`, `--dump-aram` and the expectations `--byte`, `--word`,
-`--register a|x|y|sp|psw|ya` and `--port`. `--emit-torture <seed> <first>
+`--register a|x|y|sp|psw|ya`, `--port` and `--fault N`. A run must return to
+the IPL unless `--fault N` expects the fault channel (`STOP` with `$FA` on port
+0 and the code on port 1). `--emit-torture <seed> <first>
 <count>` prints a generated program that executes one instruction per case and
 records registers, flags and scratch memory.
 
