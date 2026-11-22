@@ -716,7 +716,7 @@ void Analyzer::visit(VarDeclStmt& stmt) {
         (stmt.type.base != BaseType::BOOL && stmt.type.base != BaseType::BYTE && stmt.type.base != BaseType::WORD)))
         throw CompilerError("constexpr requires a scalar integer initializer.", stmt.token);
     if (stmt.is_constexpr) size_to_allocate = 0;
-    const int extra_alignment = stmt.is_constexpr ? 0 : std::max(2, typeAlignment(stmt.type)) - 2;
+    const int extra_alignment = stmt.is_constexpr ? 0 : frameAlignment(stmt.type) - 2;
     size_to_allocate += extra_alignment;
     if (size_to_allocate > 65528 || m_next_local_stack_offset < -65528 + size_to_allocate)
         throw CompilerError("Local stack frame exceeds the 16-bit GSU address space.", stmt.token);
