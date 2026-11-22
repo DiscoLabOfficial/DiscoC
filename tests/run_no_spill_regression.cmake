@@ -146,7 +146,7 @@ foreach(level IN ITEMS 0 1 2 s)
         if(NOT mode STREQUAL "object")
             set(options "${mode}")
         endif()
-        no_spill_failure("spc700.*--require-no-spills.*backend" ${flags} --target spc700
+        no_spill_failure("spc700.*--require-no-spills.*SPC700 backend" ${flags} --target spc700
             --require-no-spills ${options} "${TEST_DIR}/simple.dc")
     endforeach()
     no_spill_command(${flags} --emit-ast "${TEST_DIR}/simple.dc")
@@ -188,7 +188,7 @@ foreach(level IN ITEMS 0 1 2 s)
             ${flags} --require-no-spills --output-dir "${prefix}/strict-project")
         no_spill_equal("${prefix}/ordinary-project/payload.bin" "${prefix}/strict-project/payload.bin")
     endforeach()
-    no_spill_failure("spc700.*--require-no-spills.*backend" build --config "${project}/discoc.toml"
+    no_spill_failure("spc700.*--require-no-spills.*SPC700 backend" build --config "${project}/discoc.toml"
         ${flags} --target spc700 --require-no-spills --check)
 endforeach()
 

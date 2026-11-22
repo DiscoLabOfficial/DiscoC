@@ -24,6 +24,11 @@ foreach(test IN ITEMS disco_object_tests disco_ir_verifier_tests
 endforeach()
 run_checked("${BIN_DIR}/disco_gsu_execution_tests${EXE_SUFFIX}" --self-test)
 run_checked("${BIN_DIR}/disco_spc700_execution_tests${EXE_SUFFIX}" --self-test)
+run_checked("${BIN_DIR}/disco_spc700_differential_tests${EXE_SUFFIX}" --self-test)
+run_checked("${CMAKE_COMMAND}" "-DDISCC=${BIN_DIR}/discc${EXE_SUFFIX}" "-DDISCAS=${BIN_DIR}/discas${EXE_SUFFIX}"
+    "-DDISCLD=${BIN_DIR}/discld${EXE_SUFFIX}"
+    "-DDIFFERENTIAL_RUNNER=${BIN_DIR}/disco_spc700_differential_tests${EXE_SUFFIX}"
+    "-DOUTPUT_DIR=${BIN_DIR}/test-output/spc700-differential" -P "${ROOT_DIR}/tests/run_spc700_differential.cmake")
 run_checked("${BIN_DIR}/disco_gsu_differential_tests${EXE_SUFFIX}" --self-test)
 run_checked("${CMAKE_COMMAND}"
     "-DDISCC=${BIN_DIR}/discc${EXE_SUFFIX}" "-DDISCAS=${BIN_DIR}/discas${EXE_SUFFIX}"

@@ -1,10 +1,10 @@
 # SPC-700 Target
 
-DiscoC currently emits GSU code. This document records the SPC-700 target
-model, its ABI and runtime contract. The SPC700 assembler, relocations, linker
-placement, runtime startup and assembly export are implemented (see
-[discas](assembler.md)) and execute in the instruction-level test model;
-compiler code generation remains disabled until the lowering stage exists.
+This document records the SPC-700 target model, its ABI, runtime contract
+and code generation. The SPC700 assembler, relocations, linker placement,
+runtime startup, assembly export and a baseline compiler backend are
+implemented (see [discas](assembler.md) and [Code generation](#code-generation))
+and execute in the instruction-level test model.
 
 ## Architectural model
 
@@ -70,8 +70,9 @@ writes its output when it does.
 * Arguments and locals live on the software stack. The caller pushes the
   arguments from last to first (`decw $00` and stores through `[$00]+Y`), so
   the first argument ends at the lowest address, and pops them after the call
-  returns. Stack slots are packed: a word argument occupies two consecutive
-  bytes, low byte first, with no alignment padding.
+  returns. Each argument occupies one little-endian word slot; a byte or bool
+  argument uses the slot's low byte. Frames have an even size, so FP and every
+  word local or argument stay word-aligned.
 * `Y` in `[$02]+Y` is an unsigned index, so a frame is laid out upward from
   FP. A callee with `L` bytes of locals subtracts `L + 2` from SSP, stores the
   caller's FP at SSP and sets FP = SSP:
@@ -83,13 +84,15 @@ writes its output when it does.
   | `FP+L+2..` | arguments, first argument first |
 
   The epilogue sets SSP = FP, reloads the caller's FP from there and adds
-  `L + 2` to SSP. Saved FP, locals and arguments together span at most 256
-  bytes.
+  `L + 2` to SSP. `[$02]+Y` reaches FP+255; generated code addresses larger
+  frames (up to 32 KiB) through a pointer computed from FP.
 * `A`, `X`, `Y`, `PSW` and `$0004-$001F` are clobbered by a call; a value live
   across a call belongs in the caller's frame. SSP and FP are preserved.
   `PSW.P` is clear at every call boundary (direct page = page 0).
 * `CALL`/`RET` use the hardware stack; nothing else may be left on it across
-  a call.
+  a call. Generated prologues fail with code 2 when the hardware SP is below
+  `$20`, so call depth is bounded (about 110 nested calls) instead of letting
+  return addresses wrap around page 1.
 * `__disco_stack_limit_N`, referenced through an absolute (`!sym`) or
   immediate byte (`#<sym`, `#>sym`) relocation, resolves to the lowest
   software-stack address plus N. The linker rejects a limit above the stack
@@ -142,37 +145,56 @@ discc --target spc700 program.dc -o program.o
 ```
 
 `discc --target spc700 --check program.dc` checks common language semantics and
-verified IR without machine emission. `--emit-ir` also remains available.
-Graphics, instruction-cache, hardware-loop and far-data capabilities are
-explicitly unavailable on this target and rejected by the analyzer/verifier. Normal object and assembly emission currently reports that the
-SPC-700 backend is not implemented yet; this prevents the GSU backend from
-being used accidentally.
+verified IR without machine emission; `--emit-ir` prints the IR. Graphics,
+instruction-cache, hardware-loop and far-data capabilities are explicitly
+unavailable on this target and rejected by the analyzer/verifier. Object and
+`--emit-asm` output come from the SPC700 backend; it never falls back to GSU
+code. Link the object with `discld --init-runtime` (or a host-provided entry)
+as described above.
 
-## Initial language subset
+## Code generation
 
-The first SPC-700 code-generation milestone should support:
+The backend (`src/SPC700CodeGenerator.*`, `src/SPC700IntegerLowering.cpp`)
+lowers the verified IR to SPC-700 assembly text and assembles it in-process,
+so `discc -o` and `discc --emit-asm` followed by `discas` produce the same
+bytes. Every IR value lives in its own frame slot; `A`, `X`, `Y` and the
+scratch bytes `$04-$1F` are used only within one IR instruction. Optimization
+levels are accepted, but every level currently compiles the unoptimized IR;
+register allocation and IR optimization for SPC700 are later work.
 
-* `byte` and `word` integers;
-* 16-bit pointers;
-* named functions and direct calls;
-* `return`, `if`, `while`, and basic comparisons;
-* ordinary RAM loads and stores;
-* explicit `volatile` hardware access using the language/IR qualifiers.
+Supported lowering:
 
-The shared frontend now supports const/volatile qualifiers, bool, strict
-integer conversions, modular arithmetic, bitwise/shifts, short-circuit logic,
-constant expressions/enums, layout queries, aggregate initialization, byte
-strings, real for/continue control flow and .dci module interfaces.
-Transparent aliases (`u8`/`i8`/`u16`/`i16` and user-defined `type` declarations)
-and `@cfg(spc700)` declarations/imports share the same frontend. Portable
-fixed-point and memory core modules pass these frontend/IR checks; there is no
-SPC700 machine library or DSP implementation yet. GSU graphics interfaces use
-target assertions and must not be substituted on this processor.
-IR inspection can represent common constructs; this does not supply SPC-700 machine
-lowering. A future backend must preserve observable accesses, including
-`$F0-$FF` register accesses, and follow the ABI and runtime above.
+| IR / language feature | SPC700 lowering |
+| --- | --- |
+| `byte`, `word`, `bool`, signed and unsigned | frame slots of 1 or 2 bytes; values are extended by their own type |
+| `+ - & \| ^`, unary `- ~ !` | 16-bit `ADDW`/`SUBW`/byte logic, truncated to the result width |
+| `*` | three `MUL`s, low 16 bits |
+| `/ %` | shared 16-step restoring division helpers (signed: truncation toward zero, `-32768 / -1 = -32768`); fault 6 on zero |
+| `<< >>` | checked count (fault 5 outside 0..15), then shift loops; signed `>>` is arithmetic |
+| comparisons | `CMPW` (unsigned) or `SUBW` with N⊕V (signed), signedness from the left operand |
+| casts, bool normalization | extension, truncation, nonzero → 1 |
+| locals, parameters, `&&`/`\|\|` temporaries | frame addresses; over-aligned locals rounded up at run time |
+| globals, `const`, `rom` data, strings | `RAM`/`DATA` sections with `#<sym`/`#>sym` addresses; `rom` data lives in DATA |
+| pointers, `->`, `[]`, structs, arrays | checked like GSU: misaligned 1, null or beyond 64 KiB 2, offset or member overflow 3 |
+| volatile accesses | one access per byte, in program order, low byte first |
+| direct calls, returns, `switch` | ABI above; `switch` is a compare chain |
+| stack overflow | hardware and software stack guards in every prologue (fault 2) |
 
-The first milestone should defer structs, arrays, `rom const`, GSU plotting
-operations, 24-bit `far` pointers, floating-point types, dynamic allocation,
-and target-specific DSP abstractions until the core calling convention is
-validated.
+Not lowered yet, with a diagnostic instead of GSU code: SSA phi nodes and the
+other O2-only IR forms (fused division pairs, bit extraction, local array
+pools, scaled pointer recurrences), which the baseline never receives because
+it compiles the unoptimized IR. `far` pointers and GSU graphics, cache and
+hardware loops are capabilities this target does not have.
+
+## Language coverage
+
+The SPC700 backend compiles the shared language: byte/word/bool integers with
+strict conversions and modular arithmetic, bitwise operators and checked
+shifts, short-circuit logic, constant expressions and enums, layout queries,
+structs and arrays in memory with aggregate initialization, byte strings,
+`rom` and `const` data, for/continue/switch control flow, `.dci` module
+interfaces, type aliases and `@cfg(spc700)` declarations. Portable core modules
+pass the frontend and IR checks; there is no SPC700 machine library or DSP
+implementation yet. GSU graphics interfaces use target assertions and must
+not be substituted on this processor. 24-bit `far` pointers, floating-point
+types, dynamic allocation and DSP abstractions remain out of scope.

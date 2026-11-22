@@ -807,13 +807,22 @@ elseif(CASE STREQUAL "spc700_target")
     if(ir_result OR NOT ir_output MATCHES "function main")
         message(FATAL_ERROR "SPC700 target should remain inspectable through IR\nstdout:\n${ir_output}\nstderr:\n${ir_error}")
     endif()
-    run_expected_failure_contains("no code-generation backend" "${DISCC}" --target spc700 "${source}" -o "${TEST_DIR}/spc700.o")
+    # Object emission produces an SPC700 object (target byte 1), never GSU code.
+    run_command("${DISCC}" --target spc700 "${source}" -o "${TEST_DIR}/spc700.o")
+    file(READ "${TEST_DIR}/spc700.o" spc700_object HEX LIMIT 7)
+    string(SUBSTRING "${spc700_object}" 12 2 spc700_target_byte)
+    if(NOT spc700_target_byte STREQUAL "01")
+        message(FATAL_ERROR "SPC700 compilation produced a non-SPC700 object")
+    endif()
 
 elseif(CASE STREQUAL "spc700_link")
     include("${ROOT_DIR}/tests/run_spc700_assembler_regression.cmake")
 
 elseif(CASE STREQUAL "spc700_runtime")
     include("${ROOT_DIR}/tests/run_spc700_runtime_regression.cmake")
+
+elseif(CASE STREQUAL "spc700_codegen")
+    include("${ROOT_DIR}/tests/run_spc700_codegen_regression.cmake")
 
 else()
     message(FATAL_ERROR "Unknown regression case: ${CASE}")

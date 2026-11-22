@@ -28,9 +28,10 @@ Libraries are not automatically dead-stripped: linking an implementation also
 includes its unused functions. Combined code/data must fit the linker's single
 program-bank limit.
 
-The core sources pass common-language/IR checks with `--target spc700 --check`.
-SPC700 compiler code generation remains unavailable; these checks are not evidence of
-an executable SPC700 library.
+The core sources pass common-language/IR checks with `--target spc700 --check`
+and compile with the baseline SPC700 backend; executing them on SPC700 is not
+yet part of the test suite, so these checks are not evidence of an executable
+SPC700 library.
 
 ## Signed fixed-point
 

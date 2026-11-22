@@ -50,10 +50,13 @@ struct DataLayout {
 //   FP+2..FP+L+1     L bytes of locals
 //   FP+L+2..         arguments, first argument at the lowest address
 //
-// The caller pushes arguments last to first (stack slots are packed, words
-// little-endian) and pops them after the call. Prologue: SSP -= L + 2, store
-// the caller's FP at SSP, FP = SSP. Epilogue: SSP = FP, reload the caller's
-// FP, SSP += L + 2. One frame, arguments included, spans at most 256 bytes.
+// The caller pushes arguments last to first, one little-endian word slot
+// each (a byte argument uses the slot's low byte), and pops them after the
+// call. Frames have an even size, so FP stays even and word locals and
+// arguments stay word-aligned for pointer checks. Prologue: SSP -= L + 2,
+// store the caller's FP at SSP, FP = SSP. Epilogue: SSP = FP, reload the
+// caller's FP, SSP += L + 2. [FP]+Y reaches 256 bytes; generated code
+// addresses larger frames through a computed pointer.
 struct Abi {
     static constexpr Register ByteReturnRegister = Register::A;
     static constexpr std::uint8_t SavedFrameBytes = 2; // FP+0..1 hold the caller's FP.
@@ -64,8 +67,7 @@ struct Abi {
     // software stack pointer and frame pointer are preserved. PSW.P is clear
     // at every call boundary, so the direct page is page 0. Values live
     // across a call belong in the caller's frame, not in scratch bytes.
-    // Alignment of byte and word objects in static data; software-stack
-    // slots are packed.
+    // Alignment of byte and word objects; each argument occupies a word slot.
     static constexpr std::uint32_t ScalarArgumentAlignment = 1;
     static constexpr std::uint32_t WordArgumentAlignment = 2;
 
@@ -75,6 +77,12 @@ struct Abi {
     static constexpr std::uint8_t ScratchBegin = 0x04;         // caller-saved
     static constexpr std::uint8_t ScratchEnd = 0x1F;           // inclusive
     static constexpr std::uint16_t CompilerDirectPageEnd = 0x0020; // exclusive
+
+    // Generated prologues fault (code 2) when the hardware stack pointer is
+    // below this value: CALL return addresses must never wrap around page 1.
+    // The margin covers the nested calls of shared helpers (division) made
+    // after the check. It bounds call depth to about 110 nested calls.
+    static constexpr std::uint8_t HardwareStackReserve = 0x20;
 
     // The software stack starts empty at its top, which must not exceed the
     // IPL ROM base, and may grow down to the end of the linked image.
