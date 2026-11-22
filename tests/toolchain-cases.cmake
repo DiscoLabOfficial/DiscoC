@@ -37,6 +37,7 @@ add_toolchain_regression(language_qualifiers language_qualifiers)
 add_toolchain_regression(language_numeric language_numeric)
 add_toolchain_regression(language_operators language_operators)
 add_toolchain_regression(language_aggregates language_aggregates)
+add_toolchain_regression(language_overaligned_locals language_overaligned_locals)
 add_toolchain_regression(language_globals language_globals)
 add_toolchain_regression(language_linkage language_linkage)
 add_toolchain_regression(language_plot language_plot)
@@ -110,7 +111,7 @@ foreach(case IN ITEMS gsu_call_execution switch_abi gsu_contributor_correctness 
                       pointer_far_abi pointer_nested pointer_arithmetic pointer_rom
                       pointer_guards pointer_multifile pointer_alignment
                       language_qualifiers language_numeric language_operators
-                      language_globals language_linkage language_extensions_execution
+                      language_overaligned_locals language_globals language_linkage language_extensions_execution
                       language_control_execution language_arrays_execution
                       language_modules_execution language_fixed_point language_memory_library
                       graphics_state graphics_colors graphics_bitmaps graphics_triangle graphics_rotation graphics_scaling graphics_interactive)

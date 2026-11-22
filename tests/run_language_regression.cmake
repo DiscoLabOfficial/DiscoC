@@ -328,4 +328,62 @@ void main() {
     *(word*)0x104 = (word)!*status;
 }
 ]=] --ram-byte 0x700120 128 --word 0x700100 1 --word 0x700102 1 --word 0x700104 0 --reads 0x700120 1 --register 6 0)
+elseif(CASE STREQUAL "language_overaligned_locals")
+    # An @align(8) local and an array of them: initialization, address taken,
+    # member access and a pointer slot to the over-aligned type. Every result
+    # folds into one failure mask (bit 2n: single object, bit 2n+1: array) so
+    # a wrong frame layout cannot pass by matching one stray word. A pointer
+    # slot keeps word alignment; only the object itself is rounded upward.
+    language_fixture(overaligned [=[
+@packed struct Pixel { u8 x; u8 y; u8 shade; };
+@align(8) struct State { struct Pixel points[2]; word count; };
+struct Pair { word first; byte middle; word last; };
+
+void update(struct State* state) { state->points[1].shade = (u8)15; state->count++; }
+word misaligned(struct State* state) { return (word)((u16)state & 7); }
+word inspect(struct State* state) { return (word)state->points[0].y + (word)state->points[1].shade; }
+
+// No pointer arithmetic or indexing here: the declaration stores take the
+// unchecked baseline path, which must not clobber the stored value.
+word single(word salt) {
+    word before = 100 + salt;
+    struct State one = {{{1, 2, 3}, {4, 5, 6}}, 2};
+    struct Pair pair = {7, 8, 9};
+    word after = 200 + salt;
+    update(&one);
+    return one.count + inspect(&one) + misaligned(&one) * 1000 +
+        pair.first + (word)pair.middle + pair.last + (before - salt) + (after - salt);
+}
+
+word many(word salt) {
+    word before = 300 + salt;
+    struct State states[2] = {{{{1, 2, 3}, {4, 5, 6}}, 2}, {{{7, 8, 9}, {10, 11, 12}}, 4}};
+    struct State* second = &states[1];
+    word after = 400 + salt;
+    update(&states[0]);
+    update(second);
+    return (word)states[0].points[1].shade + states[0].count + (word)states[1].points[0].x + states[1].count +
+        (word)second->points[1].x + (misaligned(&states[0]) + misaligned(second)) * 1000 + (before - salt) + (after - salt);
+}
+
+word check(word salt) {
+    word failures = 0;
+    if (single(salt) != 344) failures |= 1;
+    if (many(salt) != 740) failures |= 2;
+    return failures;
+}
+// Each wrapper shifts the callee frames by one more word, so the run-time
+// rounding meets every frame-pointer residue modulo eight.
+word pad1(word salt) { volatile word pad[1]; pad[0] = salt; return check(pad[0]); }
+word pad2(word salt) { volatile word pad[2]; pad[1] = salt; return check(pad[1]); }
+word pad3(word salt) { volatile word pad[3]; pad[2] = salt; return check(pad[2]); }
+
+word main() { return check(0) | (pad1(1) << 2) | (pad2(2) << 4) | (pad3(3) << 6); }
+]=] --register 0 0 --register 6 0)
+    if(OPTIMIZATION MATCHES "^[2s]$")
+        # Static frames keep the FP-relative padding at a link-time base.
+        run_command("${DISCC}" --static-stack-proof "${TEST_DIR}/overaligned.dc" -o "${TEST_DIR}/overaligned-static.o")
+        run_command("${DISCLD}" "${TEST_DIR}/overaligned-static.o" --init-runtime -o "${TEST_DIR}/overaligned-static.bin")
+        run_command("${GSU_RUNNER}" "${TEST_DIR}/overaligned-static.bin" 0x008000 --register 0 0 --register 6 0)
+    endif()
 endif()
