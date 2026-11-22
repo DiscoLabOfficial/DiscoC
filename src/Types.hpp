@@ -71,6 +71,16 @@ inline int storageAlignment(const Type& type) {
     return 2;
 }
 
+// Alignment of a stack-frame object (local or parameter slot) of this type.
+// `Type::alignment` names the alignment of the base struct, so a pointer to an
+// over-aligned struct keeps it; the pointer slot itself is only word aligned.
+// The Analyzer's padding reservation, the storage optimizer and every
+// backend's run-time base rounding must agree on this one value.
+inline int frameAlignment(const Type& type) {
+    const int alignment = storageAlignment(type);
+    return alignment > 2 ? alignment : 2;
+}
+
 inline bool isFarPointer(const Type& type) {
     return type.pointer_level > 0 && (type.pointer_reach.empty()
         ? type.is_far : type.pointer_reach.back());

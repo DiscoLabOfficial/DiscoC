@@ -91,7 +91,7 @@ std::int64_t evaluate(const IRFunction& function, const Analyzer::LocalSymbolTab
                     else {
                         const auto& local = locals.at(instruction.symbol_id);
                         result = 0x8000 + local.stackOffset;
-                        if (local.type.alignment > 2) result = (result + local.type.alignment - 1) & -local.type.alignment;
+                        if (frameAlignment(local.type) > 2) result = (result + frameAlignment(local.type) - 1) & -frameAlignment(local.type);
                     }
                     break;
                 case IROpcode::PointerOffset:
