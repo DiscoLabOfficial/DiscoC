@@ -145,11 +145,11 @@ void verifyStorageInterference(const IRFunction& function) {
     for (auto a = function.storage_layout.begin(); a != function.storage_layout.end(); ++a) {
         if (a->second.stackOffset >= 0) continue;
         const auto size_a = ((a->second.type.sizeInBytes * std::max(1, a->second.type.array_size) + 1) / 2) * 2 +
-            std::max(std::max(2, a->second.type.alignment), storageAlignment(a->second.type)) - 2;
+            frameAlignment(a->second.type) - 2;
         for (auto b = std::next(a); b != function.storage_layout.end(); ++b) {
             if (b->second.stackOffset >= 0) continue;
             const auto size_b = ((b->second.type.sizeInBytes * std::max(1, b->second.type.array_size) + 1) / 2) * 2 +
-                std::max(std::max(2, b->second.type.alignment), storageAlignment(b->second.type)) - 2;
+                frameAlignment(b->second.type) - 2;
             if (a->second.stackOffset < b->second.stackOffset + size_b && b->second.stackOffset < a->second.stackOffset + size_a)
                 overlapping.emplace(a->first, b->first);
         }
@@ -357,8 +357,12 @@ void IRVerifier::verifyFunction(const IRFunction& function) {
             const auto& symbol = local.second;
             verifyPointerType(symbol.type, storage_source, MaxPointerDepth);
             const auto bytes = object_bytes(symbol.type);
-            const auto alignment = std::max(std::max(2, symbol.type.alignment), storageAlignment(symbol.type));
+            // The declared base alignment is also carried by pointers to it, so
+            // validate it on its own; the frame reservation uses frameAlignment.
+            const auto declared = symbol.type.alignment;
+            const auto alignment = frameAlignment(symbol.type);
             if (!local.first.isValid() || local.first != symbol.id || !symbol.stackOffset ||
+                declared < 0 || declared > 128 || (declared & (declared - 1)) ||
                 symbol.stackOffset % 2 || alignment > 128 || (alignment & (alignment - 1)) ||
                 function.immutable_local_arrays.count(local.first))
                 fail("IR verifier: invalid local storage identity or alignment.", storage_source);

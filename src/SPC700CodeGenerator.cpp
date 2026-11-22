@@ -448,7 +448,9 @@ void SPC700CodeGenerator::emitAddress(const IRInstruction& instruction) {
             if (found == table.end()) internal("local symbol is not in the current function", instruction.source);
             const auto stack = found->second.stackOffset;
             offset = stack < 0 ? localOffset(stack) : parameterOffset(stack);
-            alignment = found->second.type.alignment;
+            // A pointer slot keeps word alignment even when its pointee is an
+            // over-aligned struct; only the object itself is padded.
+            alignment = frameAlignment(found->second.type);
         }
         // T2 = FP + offset (offsets are below 32 KiB).
         emit("mov a,$02");

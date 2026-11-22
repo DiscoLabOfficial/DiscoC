@@ -27,7 +27,7 @@ oracle. The same case registry is used by the direct GCC/Clang test runner.
 | 3: widths, bool, near/far, alignment | `types/`, `pointers/`, `far/`, `layout/` | `language_numeric`, `pointer_*`, `ir_verifier` |
 | 4: ROM/RAM, const, volatile | `qualifiers/`, `volatile/`, `globals/` | `language_qualifiers`, `language_aggregates`, `graphics_colors` |
 | 5: conversions, wrapping, shifts, division, evaluation order | `conversions/`, `updates/`, `volatile/` | `language_numeric`, `language_operators`, `language_control_execution` |
-| 6: arrays, structs, layouts, aggregate restrictions | `arrays/`, `structs/`, `layout/` | `language_aggregates`, `language_arrays_execution`, `pointer_nested` |
+| 6: arrays, structs, layouts, aggregate restrictions | `arrays/`, `structs/`, `layout/` | `language_aggregates`, `language_overaligned_locals`, `language_arrays_execution`, `pointer_nested` |
 | 7, 8: scopes, functions, linkage, RAM startup, ROM storage | `types/`, `globals/`, `imports/`, `strings/` | `shadowing`, `multifile`, `language_globals`, `language_linkage` |
 | 9: loops, continue, switch/fallthrough | `control-flow/`, `updates/` | `language_control_execution`, `switch_abi`, `ir_and_cfg` |
 | 10: plot cursor, pixel/color/read/flush, capabilities | `plot/`, `bitmap/`, `attributes/` | `graphics_state`, `graphics_colors`, `graphics_bitmaps`, `graphics_diagnostics`, `ir_verifier` |

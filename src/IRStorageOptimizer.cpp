@@ -23,7 +23,7 @@ int extent(const Type& type) {
 }
 int reservation(const Type& type) {
     const auto bytes = extent(type);
-    const auto alignment = std::max(std::max(2, type.alignment), storageAlignment(type));
+    const auto alignment = frameAlignment(type);
     if (!bytes || alignment > 128 || (alignment & (alignment - 1))) return 0;
     // Match emitAddress's upward rounding from an even FP-relative base.
     return ((bytes + 1) / 2) * 2 + alignment - 2;
